@@ -30,6 +30,10 @@ ADR 记录**为什么这样决定**，而不是**系统是什么样**。
 | [0005](0005-tenancy-model.md) | 多租户隔离：共享库 + tenant 列 + RLS | Accepted |
 | [0006](0006-model-data-egress.md) | 允许项目数据发送至外部托管模型 | Accepted |
 | [0007](0007-typescript-server-stack.md) | 服务端采用 TypeScript | Accepted |
+| [0008](0008-modular-monolith.md) | 模块化单体，按限界上下文分模块 | Accepted |
+| [0009](0009-custom-ontology-metamodel.md) | 自定义本体元模型，保留 RDF 导出能力 | Accepted |
+| [0010](0010-graph-on-postgres.md) | 图查询用 PG 递归 CTE，不引入独立图库 | Accepted |
+| [0011](0011-dogfooding-first.md) | 先内部自用，M3 后再对外 | Accepted |
 
 ## 新增
 

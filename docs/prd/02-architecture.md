@@ -175,12 +175,13 @@ Audit Log（全量、不可篡改）
 | 租户隔离 | 共享库 + `tenant` 列 + RLS | ✅ 已定 | 见 [ADR-0005](../adr/0005-tenancy-model.md) |
 | 事件总线 | PG outbox + poller（v1） | ✅ 已定 | 规模化后评估 Kafka/NATS（Q-A5） |
 | 向量 | pgvector（起步） → 独立向量库 | ⬜ 待评估 | 与 Knowledge 规模挂钩 |
-| 图查询 | PG 递归 CTE（v1） | ✅ 已定 | 留适配层，规模化后切独立图库 |
+| 图查询 | PG 递归 CTE（v1） | ✅ 已定 | 见 [ADR-0010](../adr/0010-graph-on-postgres.md)；留适配层，规模化后切独立图库 |
 | 工作流 | 自研状态机 + 规则 DSL | ✅ 已定 | 见 [08](08-workflow-engine.md) |
 | Agent | 自研 Runtime + MCP 工具协议 | ✅ 已定 | 见 [05](05-agent-runtime.md) |
 | **Agent 执行位置** | **独立 worker 进程**（不在 API 进程内） | ✅ 已定 | Node 单线程事件循环的硬性要求，见下 §7 |
 | 依赖方向校验 | dependency-cruiser（CI 强制） | ✅ 已定 | 落实 FR-ARCH-001 |
-| 部署形态 | 模块化单体（按 BC 分模块） | ⬜ 待定（Q-A4） | 倾向单体优先，按需拆分 |
+| 部署形态 | 模块化单体（按 BC 分模块） | ✅ 已定 | 见 [ADR-0008](../adr/0008-modular-monolith.md)；运行时分 api / poller / agent-worker 三种进程角色 |
+| 本体表达 | 自定义元模型（保留 RDF 可导出性） | ✅ 已定 | 见 [ADR-0009](../adr/0009-custom-ontology-metamodel.md) |
 
 > 后续选型定稿同样必须落 ADR：`docs/adr/`。
 

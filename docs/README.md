@@ -35,7 +35,11 @@ docs/
 │   ├── 0004-go-server-stack.md          (Superseded → 0007)
 │   ├── 0005-tenancy-model.md
 │   ├── 0006-model-data-egress.md
-│   └── 0007-typescript-server-stack.md
+│   ├── 0007-typescript-server-stack.md
+│   ├── 0008-modular-monolith.md
+│   ├── 0009-custom-ontology-metamodel.md
+│   ├── 0010-graph-on-postgres.md
+│   └── 0011-dogfooding-first.md
 └── templates/                领域对象模板
     ├── requirement.md
     ├── story.md

@@ -61,11 +61,17 @@ PG outbox · 递归 CTE 图查询
 | 7 个限界上下文的核心聚合 | FR-DOM-001~008 |
 | Workflow Engine：状态机 + guard + capability + SLA | FR-WF-001~004 |
 | 自动化规则引擎（when/if/then） | FR-WF-005, 008, 009 |
-| Web UI：需求/迭代/任务/看板基础视图 | — |
+| **Web UI：需求/迭代/任务/看板基础视图** | — |
+| Outbox poller（消费事件、触发自动化） | FR-WF-005/006 |
 | Dashboard 基础指标（Project + Team） | FR-DASH-001/002/005/006/010 |
+| 按限界上下文重组模块 + BC 间依赖规则 | FR-ARCH-001, [ADR-0008](../adr/0008-modular-monolith.md) |
+
+> **UI 在 M1 是必需项而非可选项**：[ADR-0011](../adr/0011-dogfooding-first.md) 决定先内部自用，
+> 团队每天要用，只有 API 是用不起来的。
 
 **出口标准**
-- 一个真实项目从 Requirement 到 Release 全流程在系统内跑通
+- **ProjectOS 自身的一个真实迭代**在系统内从 Requirement 跑到 Release（[ADR-0011](../adr/0011-dogfooding-first.md)）
+- 团队"绕开系统用别的工具"的次数被记录；绕开的地方即产品缺陷
 - 全链路可追溯覆盖率 ≥ 90%
 
 ---
@@ -77,16 +83,19 @@ PG outbox · 递归 CTE 图查询
 | 交付 | 关联需求 |
 | --- | --- |
 | Connector 统一契约与运行时 | FR-CON-001~005 |
-| GitHub Connector（PR/Commit/Review/CI） | FR-CON-006 |
-| Jira Connector（双向同步 + 并行运行） | FR-CON-007 |
+| **GitHub Connector（PR/Commit/Review/CI）** | FR-CON-006 |
 | MCP Connector | FR-CON-008 |
+| ~~Jira Connector（双向同步）~~ → 移出 M2 | FR-CON-007 |
 | 自动关系建立规则 | FR-ONT-008 |
 | 外部事件触发自动化 | FR-WF-006 |
 | 凭据管理与数据分级脱敏 | FR-CON-011/012 |
 
+> **Jira Connector 移出 M2**：[ADR-0011](../adr/0011-dogfooding-first.md) 决定先内部自用，
+> 而我们自己不用 Jira。双向同步改为按试点客户需求触发（M3 后）。
+> 腾出的工作量投入 GitHub Connector 与自动关系建立——那是我们每天会用到的。
+
 **出口标准**
-- PR 合并自动推进 Task，无需人工操作
-- Jira 双向同步 7 天无数据丢失与回环
+- 我们自己的 PR 合并后自动推进 Task，无需人工操作
 - Requirement → Commit → PR → Release 关系 100% 自动建立
 
 ---
@@ -127,11 +136,14 @@ PG outbox · 递归 CTE 图查询
 | 独立图/向量存储演进 | FR-RES-015, FR-ONT-011 |
 | 自定义 Agent 与租户本体扩展 | FR-AGT-016, FR-ONT-009 |
 | 混合语义检索问答（带出处） | FR-RES-009, FR-ONT-011 |
+| Jira Connector（按试点客户需求） | FR-CON-007 |
+| 引入 2–3 个外部试点团队 | [ADR-0011](../adr/0011-dogfooding-first.md) 过拟合缓解 |
 
 **出口标准**
 - Automation Rate ≥ 35%（北极星目标）
 - 单交付项 Agent 成本季度环比下降 ≥ 15%
 - 支撑 ≥ 10 个团队并行使用
+- 源自自身工作流的假设已逐条在试点团队上检验（[ADR-0011](../adr/0011-dogfooding-first.md)）
 
 ---
 

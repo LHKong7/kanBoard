@@ -14,8 +14,8 @@
 
 | # | 问题 | 影响 | 建议倾向 | 需在何时定 |
 | --- | --- | --- | --- | --- |
-| Q-P1 | 首个落地场景选哪个：内部研发团队自用，还是直接对外商业化？ | 决定 M1 的功能取舍与迁移优先级 | 先内部自用（dogfooding），M3 后再对外 | M0 结束前 |
-| Q-P2 | 是否必须支持 Jira 完整迁移，还是只做单向导入？ | 影响 Connector 工作量（双向同步成本高） | 提供双向同步，但仅覆盖核心字段 | M2 启动前 |
+| ~~Q-P1~~ | ~~首个落地场景~~ | — | ✅ **已决：先内部自用，M3 后引入试点团队** → [ADR-0011](../adr/0011-dogfooding-first.md) | Resolved 2026-08-03 |
+| Q-P2 | 是否必须支持 Jira 完整迁移，还是只做单向导入？ | 影响 Connector 工作量 | 优先级已因 ADR-0011 下降（我们自己不用 Jira）；改为按试点客户需求触发 | M3 后 |
 | Q-P3 | 需求评审是否强制走系统内审批流？ | 影响用户接受度 | 可配置，默认开启但可按项目关闭 | M1 |
 | Q-P4 | Agent 产出默认是否进入"人工审阅队列"？ | 影响 Automation Rate 的定义与体感 | 默认进入队列；成熟能力逐项放开 | M3 启动前 |
 | Q-P5 | 定价模型：按席位 / 按 Agent Run / 按 Token？ | 影响成本归因与配额设计 | 席位 + Agent 用量混合 | M4 |
@@ -25,9 +25,9 @@
 | # | 问题 | 影响 | 建议倾向 | 需在何时定 |
 | --- | --- | --- | --- | --- |
 | ~~Q-A1~~ | ~~服务端语言与框架~~ | — | ✅ **已决：TypeScript / Node 22 LTS** → [ADR-0007](../adr/0007-typescript-server-stack.md)（取代 [ADR-0004](../adr/0004-go-server-stack.md) 的 Go 方案） | Resolved 2026-08-03 |
-| Q-A2 | v1 是否引入独立图数据库？ | 复杂度 vs 查询性能 | 不引入，用 PG 递归 CTE + 物化路径，留适配层 | M0 |
-| Q-A3 | 本体是否采用 RDF/OWL 标准，还是自定义元模型？ | 生态互通 vs 实现复杂度 | 自定义元模型，但保留导出为 RDF 的能力 | M0 |
-| Q-A4 | 单体优先还是微服务优先？ | 早期迭代速度 | 模块化单体（按 BC 分模块），后期按需拆分 | M0 |
+| ~~Q-A2~~ | ~~v1 是否引入独立图数据库~~ | — | ✅ **已决：不引入，PG 递归 CTE + RelationRepository 适配层** → [ADR-0010](../adr/0010-graph-on-postgres.md) | Resolved 2026-08-03 |
+| ~~Q-A3~~ | ~~RDF/OWL 还是自定义元模型~~ | — | ✅ **已决：自定义元模型，保留 RDF 可导出性作为设计约束** → [ADR-0009](../adr/0009-custom-ontology-metamodel.md) | Resolved 2026-08-03 |
+| ~~Q-A4~~ | ~~单体优先还是微服务优先~~ | — | ✅ **已决：模块化单体 + 多进程角色，附拆分触发条件** → [ADR-0008](../adr/0008-modular-monolith.md) | Resolved 2026-08-03 |
 | Q-A5 | 事件总线选型（PG outbox / Kafka / NATS） | 运维成本 | v1 用 PG outbox + poller，M4 前评估 Kafka | M1 |
 | ~~Q-A6~~ | ~~多租户隔离策略~~ | — | ✅ **已决：共享库 + tenant 列 + RLS，v1 单租户运行** → [ADR-0005](../adr/0005-tenancy-model.md) | Resolved 2026-08-03 |
 
@@ -73,6 +73,10 @@
 | Q-A6 多租户隔离策略 | ✅ Resolved | [ADR-0005](../adr/0005-tenancy-model.md) |
 | Q-S1 模型数据出境 | ✅ Resolved | [ADR-0006](../adr/0006-model-data-egress.md) |
 | Q-I6 Automation Rate 口径 | ✅ Resolved | [11-dashboard §2](11-dashboard.md) |
+| Q-A4 部署形态 | ✅ Resolved | [ADR-0008](../adr/0008-modular-monolith.md) |
+| Q-A3 本体元模型 | ✅ Resolved | [ADR-0009](../adr/0009-custom-ontology-metamodel.md) |
+| Q-A2 图存储 | ✅ Resolved | [ADR-0010](../adr/0010-graph-on-postgres.md) |
+| Q-P1 首个落地场景 | ✅ Resolved | [ADR-0011](../adr/0011-dogfooding-first.md) |
 | 其余 | ⬜ Open | — |
 
 ---
@@ -90,11 +94,20 @@
 | ✅ Q-I6 | Automation Rate 口径 | L0–L3 分级；L3 = 零编辑 + 7 天未推翻 |
 | ✅ Q-S1 | confidential 数据出境 | 允许，受控 |
 
+**M0 阶段应决策的问题已全部决完**（2026-08-03 第二批：Q-A2 / Q-A3 / Q-A4 / Q-P1）。
+
+| # | 问题 | 结论 |
+| --- | --- | --- |
+| ✅ Q-A2 | 是否引入独立图库 | 不引入，PG 递归 CTE + 适配层 |
+| ✅ Q-A3 | 本体元模型 | 自定义，保留 RDF 可导出性 |
+| ✅ Q-A4 | 部署形态 | 模块化单体 + 多进程角色 |
+| ✅ Q-P1 | 首个落地场景 | 先内部自用 |
+
 ### 下一批需要决策的问题
 
 | # | 问题 | 何时需要 |
 | --- | --- | --- |
-| Q-A4 | 模块化单体 vs 微服务 | M0 启动前（倾向：模块化单体） |
-| Q-A3 | 自定义元模型 vs RDF/OWL | M0（倾向：自定义 + 可导出 RDF） |
-| Q-P1 | 先内部自用还是直接商业化 | M0 结束前（影响 M2 迁移优先级） |
-| Q-D3 | 本体破坏性变更的回填方案 | M1 |
+| Q-D3 | 本体破坏性变更的数据回填方案 | M1 |
+| Q-A5 | 事件总线选型（M4 前评估 Kafka） | M1 |
+| Q-P3 | 需求评审是否强制走审批流 | M1 |
+| Q-I1 / Q-I2 / Q-I3 / Q-I5 | Agent 编排、协作方式、Memory 边界、重试策略 | M3 启动前 |
