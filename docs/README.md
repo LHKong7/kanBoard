@@ -7,6 +7,8 @@
 ```
 docs/
 ├── README.md                 本文件：文档索引
+├── development.md            开发指南（环境、命令、分层约定）
+├── m0-status.md              M0 进度、出口标准核对、已知欠账
 ├── prd/                      产品需求文档（PRD v1.0）
 │   ├── 00-overview.md        愿景 / 定位 / 理念 / 用户
 │   ├── 01-principles.md      设计原则

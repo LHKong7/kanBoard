@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_ADMIN_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # 类型检查。ADR-0007 接下的债之一：TS 的类型在运行期不存在，
+      # 编译期这道关必须是零容忍的。
+      - name: Typecheck (strict)
+        run: pnpm typecheck
+
+      # 分层依赖方向（FR-ARCH-001）。
+      # 这条替代了 Go 方案里的静态分析，是架构不被侵蚀的唯一强制手段。
+      - name: Enforce layer boundaries
+        run: pnpm lint:layers
+
+      # 测试。集成测试以非超级用户连接，
+      # 因此租户隔离（ADR-0005）是真的在 RLS 下被验证的。
+      - name: Test
+        run: pnpm test
