@@ -31,11 +31,20 @@ export type PageResult<T> = {
   nextCursor: string | null
 }
 
+/**
+ * 遍历规格。
+ *
+ * 方向被折进两个类型列表，而不是单独的 direction 字段：
+ * 逆关系的解析需要本体知识（服务层有，仓储层没有），
+ * 折算完再传下来，基础设施层就只需要照着走图。
+ */
 export type TraverseSpec = {
   start: string
-  follow: readonly string[]
+  /** 沿出边走时匹配的关系类型 */
+  followOut: readonly string[]
+  /** 沿入边走时匹配的关系类型 */
+  followIn: readonly string[]
   maxDepth: number
-  direction: 'out' | 'in' | 'both'
 }
 
 export type TraverseHit = {

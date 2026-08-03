@@ -121,9 +121,9 @@ export class PgRelationRepository implements RelationRepository {
    * （blockedBy 会绕回来），不能假设它是 DAG。
    */
   async traverse(spec: TraverseSpec): Promise<TraverseHit[]> {
-    const types = spec.follow as string[]
-    const outward = spec.direction === 'out' || spec.direction === 'both'
-    const inward = spec.direction === 'in' || spec.direction === 'both'
+    // 空列表天然匹配不到任何边，因此不再需要 outward/inward 布尔开关
+    const outTypes = spec.followOut as string[]
+    const inTypes = spec.followIn as string[]
 
     const rows = await sql<{
       id: string
@@ -154,10 +154,9 @@ export class PgRelationRepository implements RelationRepository {
           SELECT rel.to_id AS id, tgt.type AS type, rel.type AS rel_type
           FROM relations rel
           JOIN resources tgt ON tgt.id = rel.to_id AND tgt.tenant = ${this.#tenant}
-          WHERE ${outward}
-            AND rel.tenant = ${this.#tenant}
+          WHERE rel.tenant = ${this.#tenant}
             AND rel.from_id = w.id
-            AND rel.type = ANY(${types})
+            AND rel.type = ANY(${outTypes})
             AND tgt.deleted_at IS NULL
             AND rel.confirmed IS DISTINCT FROM false
 
@@ -166,10 +165,9 @@ export class PgRelationRepository implements RelationRepository {
           SELECT rel.from_id AS id, src.type AS type, rel.type AS rel_type
           FROM relations rel
           JOIN resources src ON src.id = rel.from_id AND src.tenant = ${this.#tenant}
-          WHERE ${inward}
-            AND rel.tenant = ${this.#tenant}
+          WHERE rel.tenant = ${this.#tenant}
             AND rel.to_id = w.id
-            AND rel.type = ANY(${types})
+            AND rel.type = ANY(${inTypes})
             AND src.deleted_at IS NULL
             AND rel.confirmed IS DISTINCT FROM false
         ) nxt ON true

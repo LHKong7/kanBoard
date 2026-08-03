@@ -25,7 +25,8 @@ Idea → Objective → Requirement → Architecture → Implementation
 | --- | --- |
 | [docs/README.md](docs/README.md) | 文档索引与阅读顺序 |
 | [docs/development.md](docs/development.md) | **开发指南**：环境、命令、分层约定 |
-| [docs/m0-status.md](docs/m0-status.md) | **M0 进度**：已交付、出口标准核对、已知欠账 |
+| [docs/m0-status.md](docs/m0-status.md) | **M0 进度**：地基层，已交付与欠账 |
+| [docs/m1-status.md](docs/m1-status.md) | **M1 进度**：工作流引擎、自动化、poller |
 | [docs/prd/00-overview.md](docs/prd/00-overview.md) | 产品愿景、定位、核心理念、目标用户 |
 | [docs/prd/01-principles.md](docs/prd/01-principles.md) | 四大设计原则 |
 | [docs/prd/02-architecture.md](docs/prd/02-architecture.md) | 总体架构与七层分层 |
@@ -58,7 +59,7 @@ Idea → Objective → Requirement → Architecture → Implementation
 | 项 | 值 |
 | --- | --- |
 | PRD 版本 | v1.0 |
-| 阶段 | M0 · Foundation 实现中 |
+| 阶段 | M1 · Domain & Workflow 实现中 |
 | 技术栈 | TypeScript / Node 22 · Fastify · Zod · PostgreSQL 16（[ADR-0007](docs/adr/0007-typescript-server-stack.md)） |
-| 测试 | 84 项通过（集成测试在真实 RLS 下运行） |
-| 进度 | 见 [M0 状态](docs/m0-status.md) |
+| 测试 | 127 项通过（集成测试在真实 RLS 下运行） |
+| 进度 | 见 [M1 状态](docs/m1-status.md) |

@@ -24,21 +24,37 @@ module.exports = {
       severity: 'error',
       comment: 'platform 是纯工具层，不得依赖任何业务层',
       from: { path: '^src/platform' },
-      to: { path: '^src/(ontology|identity|domain|infrastructure|api)' },
+      to: { path: '^src/(ontology|identity|workflow|domain|infrastructure|api)' },
     },
     {
       name: 'ontology-stays-pure',
       severity: 'error',
       comment: '本体层只描述"世界上有什么"，不该知道谁在用它',
       from: { path: '^src/ontology' },
-      to: { path: '^src/(identity|domain|infrastructure|api)' },
+      to: { path: '^src/(identity|workflow|domain|infrastructure|api)' },
+    },
+    {
+      name: 'workflow-stays-pure',
+      severity: 'error',
+      comment:
+        '工作流引擎只回答"这个迁移合不合法"，不该知道资源怎么存、请求从哪来。' +
+        '守卫求值所需的数据由调用方装配后传入',
+      from: {
+        path: '^src/workflow',
+        // 显式豁免：automation.ts 只引入 DomainEventType 这个**类型**，
+        // 用来声明规则响应哪个事件，不构成对领域逻辑的运行时依赖。
+        // 更干净的做法是把事件类型下沉到 platform，M1 按 BC 重组时处理。
+        // 豁免写成一条有名字、有理由的例外，而不是把整条规则放松掉。
+        pathNot: '^src/workflow/automation\\.ts$',
+      },
+      to: { path: '^src/(domain|infrastructure|api)' },
     },
     {
       name: 'identity-stays-pure',
       severity: 'error',
       comment: 'PDP 必须是纯函数式的：输入 (主体, 动作, 资源, 上下文)，输出决策。依赖领域层会让它无法被单独测试',
       from: { path: '^src/identity' },
-      to: { path: '^src/(domain|infrastructure|api)' },
+      to: { path: '^src/(workflow|domain|infrastructure|api)' },
     },
     {
       name: 'domain-does-not-know-about-adapters',
@@ -72,7 +88,7 @@ module.exports = {
       name: 'ontology-and-identity-are-framework-free',
       severity: 'error',
       comment: 'zod 是本体层生成校验器用的，允许；数据库与 HTTP 框架不允许',
-      from: { path: '^src/(ontology|identity)' },
+      from: { path: '^src/(ontology|identity|workflow)' },
       to: {
         dependencyTypes: ['npm'],
         path: '(^|/)node_modules/(fastify|kysely|pg)(/|$)',

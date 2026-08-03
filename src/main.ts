@@ -1,4 +1,7 @@
 import { buildDefaultRegistry } from './ontology/defaults.ts'
+import { buildDefaultWorkflowRegistry } from './workflow/defaults.ts'
+import { DEFAULT_AUTOMATION_RULES } from './workflow/automation.ts'
+import { OutboxPoller } from './infrastructure/poller.ts'
 import { defaultPolicies } from './identity/default-policies.ts'
 import { createPool } from './infrastructure/db/client.ts'
 import { migrate } from './infrastructure/db/migrate.ts'
@@ -21,14 +24,27 @@ if (applied.length > 0) {
 }
 
 const pool = createPool({ connectionString })
-const app = buildServer({
-  pool,
-  registry: buildDefaultRegistry(),
-  policies: defaultPolicies(tenant),
-})
+const registry = buildDefaultRegistry()
+const workflows = buildDefaultWorkflowRegistry()
+const policies = defaultPolicies(tenant)
+
+const app = buildServer({ pool, registry, workflows, policies })
+
+/**
+ * Poller 进程角色（ADR-0008）。
+ *
+ * `PROJECTOS_ROLE=api` 时不启动它——生产环境应当把 api 与 poller 分开部署，
+ * 这样后台积压不会影响请求时延。默认 `all` 是为了本地开发起一个进程就能跑通。
+ */
+const role = process.env['PROJECTOS_ROLE'] ?? 'all'
+const poller =
+  role === 'api'
+    ? null
+    : new OutboxPoller({ pool, registry, workflows, policies, rules: DEFAULT_AUTOMATION_RULES, tenants: [tenant] })
 
 const shutdown = async (signal: string): Promise<void> => {
   console.log(`${signal} received, shutting down`)
+  poller?.stop()
   await app.close()
   await pool.end()
   process.exit(0)
@@ -37,5 +53,12 @@ const shutdown = async (signal: string): Promise<void> => {
 process.on('SIGTERM', () => void shutdown('SIGTERM'))
 process.on('SIGINT', () => void shutdown('SIGINT'))
 
-await app.listen({ port, host: '0.0.0.0' })
-console.log(`ProjectOS listening on :${port} (tenant=${tenant})`)
+if (role !== 'poller') {
+  await app.listen({ port, host: '0.0.0.0' })
+  console.log(`ProjectOS listening on :${port} (tenant=${tenant}, role=${role})`)
+}
+
+if (poller !== null) {
+  console.log(`outbox poller started (${DEFAULT_AUTOMATION_RULES.length} automation rules)`)
+  void poller.run()
+}

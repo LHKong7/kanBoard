@@ -38,6 +38,13 @@ export const updateResourceSchema = z.object({
   reason: z.string().max(2000).optional(),
 })
 
+export const transitionSchema = z.object({
+  to: z.string().min(1).max(64),
+  /** 可选：带上就做乐观锁检查。迁移本身是幂等意图，不强制要求版本 */
+  expectedVersion: z.number().int().positive().optional(),
+  reason: z.string().max(2000).optional(),
+})
+
 export const querySchema = z.object({
   type: z.string().max(64).optional(),
   filter: z
@@ -80,6 +87,7 @@ export const pathSchema = z.object({
 
 export const relationDirectionSchema = z.enum(['out', 'in', 'both']).default('out')
 
+export type TransitionBody = z.infer<typeof transitionSchema>
 export type CreateResourceBody = z.infer<typeof createResourceSchema>
 export type UpdateResourceBody = z.infer<typeof updateResourceSchema>
 export type QueryBody = z.infer<typeof querySchema>

@@ -10,6 +10,7 @@ import { BufferedAuditSink, flushAudit, PgOutbox } from '../infrastructure/outbo
 import { ResourceService } from '../domain/resource/service.ts'
 import type { Caller } from '../domain/resource/service.ts'
 import type { OntologyRegistry } from '../ontology/registry.ts'
+import type { WorkflowRegistry } from '../workflow/engine.ts'
 import type { Policy } from '../identity/types.ts'
 import { systemClock } from '../platform/clock.ts'
 import type { Clock } from '../platform/clock.ts'
@@ -23,6 +24,7 @@ import {
   relateSchema,
   relationDirectionSchema,
   resourceIdSchema,
+  transitionSchema,
   traverseSchema,
   updateResourceSchema,
 } from './schemas.ts'
@@ -31,6 +33,7 @@ import { toWire } from './serialize.ts'
 export type ServerDeps = {
   pool: pg.Pool
   registry: OntologyRegistry
+  workflows: WorkflowRegistry
   policies: readonly Policy[]
   clock?: Clock
 }
@@ -94,6 +97,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       return await withTenant(db, subject.tenant, async (trx: Db) => {
         const service = new ResourceService({
           registry: deps.registry,
+          workflows: deps.workflows,
           resources: new PgResourceRepository(trx, subject.tenant),
           relations: new PgRelationRepository(trx, subject.tenant),
           events: new PgOutbox(trx),
@@ -124,6 +128,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.get('/v1/ontology/relation-types', async () => ({
     items: deps.registry.relationTypes(),
   }))
+
+  // 生命周期定义。UI 靠它渲染看板的列，而不是把状态硬编码在前端。
+  app.get('/v1/workflows', async () => ({ items: deps.workflows.all() }))
 
   // ── Resource CRUD ────────────────────────────────────────
   app.post('/v1/resources', async (request, reply) => {
@@ -175,6 +182,25 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     }
     await inTenant(request, (service, caller) => service.softDelete(caller, id, version))
     return reply.status(204).send()
+  })
+
+  // ── 生命周期 ─────────────────────────────────────────────
+  app.get('/v1/resources/:id/transitions', async (request) => {
+    const id = resourceIdSchema.parse((request.params as { id: string }).id)
+    const items = await inTenant(request, (service, caller) => service.transitionsOf(caller, id))
+    return { items }
+  })
+
+  app.post('/v1/resources/:id/transitions', async (request, reply) => {
+    const id = resourceIdSchema.parse((request.params as { id: string }).id)
+    const body = transitionSchema.parse(withIfMatch(request, 'expectedVersion'))
+    const resource = await inTenant(request, (service, caller) =>
+      service.transition(caller, id, body.to, {
+        expectedVersion: body.expectedVersion,
+        reason: body.reason,
+      }),
+    )
+    return reply.header('etag', `"${resource.version}"`).send(toWire(resource))
   })
 
   // AIP 风格的自定义方法（`resource:verb`）。
@@ -304,12 +330,12 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 }
 
 /** 允许用 If-Match 头代替 body 里的 expectedVersion，两者都可以 */
-function withIfMatch(request: FastifyRequest): unknown {
+function withIfMatch(request: FastifyRequest, field = 'expectedVersion'): unknown {
   const body = (request.body ?? {}) as Record<string, unknown>
-  if (body['expectedVersion'] !== undefined) return body
+  if (body[field] !== undefined) return body
   const raw = firstHeader(request.headers['if-match'])
   if (raw === undefined) return body
-  return { ...body, expectedVersion: Number(raw.replace(/"/g, '')) }
+  return { ...body, [field]: Number(raw.replace(/"/g, '')) }
 }
 
 function firstHeader(value: string | string[] | undefined): string | undefined {

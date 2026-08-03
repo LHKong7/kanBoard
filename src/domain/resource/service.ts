@@ -1,12 +1,21 @@
 import { decide } from '../../identity/pdp.ts'
 import type { Capability, Decision, Policy, ResourceRef, SubjectProfile } from '../../identity/types.ts'
 import type { OntologyRegistry } from '../../ontology/registry.ts'
+import {
+  applyActions,
+  assertValidInitialStatus,
+  availableTransitions,
+  resolveTransition,
+} from '../../workflow/engine.ts'
+import type { AvailableTransition, WorkflowRegistry } from '../../workflow/engine.ts'
+import type { GuardContext } from '../../workflow/types.ts'
 import type { Clock } from '../../platform/clock.ts'
 import {
   ApprovalRequiredError,
   ConflictError,
   ForbiddenError,
   NotFoundError,
+  TransitionError,
   ValidationError,
 } from '../../platform/errors.ts'
 import { newRelationId, newResourceId } from '../../platform/id.ts'
@@ -43,10 +52,18 @@ export type Caller = {
   runId?: string | undefined
   traceId?: string | undefined
   mfa?: boolean | undefined
+  /**
+   * 自动化触发链的深度。
+   *
+   * 由自动化执行器设置，随它发出的事件传递下去（W3 防环）。
+   * 人发起的操作没有这个字段——人不会以机器速度制造环。
+   */
+  automationDepth?: number | undefined
 }
 
 export type ServiceDeps = {
   registry: OntologyRegistry
+  workflows: WorkflowRegistry
   resources: ResourceRepository
   relations: RelationRepository
   events: EventSink
@@ -60,6 +77,20 @@ export class ResourceService {
 
   constructor(deps: ServiceDeps) {
     this.#deps = deps
+  }
+
+  /**
+   * 发出领域事件，并盖上自动化链路深度。
+   *
+   * 深度必须随事件传播，否则 AutomationRunner 的防环闸永远读到 0，
+   * 一条环形规则就能无限展开——闸门在那里但从不落下。
+   */
+  async #emit(caller: Caller, event: import('../events.ts').DomainEvent): Promise<void> {
+    const stamped =
+      caller.automationDepth === undefined
+        ? event
+        : { ...event, payload: { ...event.payload, automationDepth: caller.automationDepth } }
+    await this.#deps.events.emit(stamped)
   }
 
   // ───────────────────────── 授权 ─────────────────────────
@@ -130,6 +161,19 @@ export class ResourceService {
     const visibility = assertVisibility(input.visibility ?? 'workspace')
     const now = this.#deps.clock.now()
 
+    // 初始状态由生命周期决定。允许调用方指定，但必须是该状态机声明过的状态——
+    // 否则对象一出生就在一个流程到不了的地方。
+    const lifecycle = def.lifecycle === undefined ? null : this.#deps.workflows.byId(def.lifecycle)
+    let status: string
+    if (lifecycle === null) {
+      status = input.status ?? 'Draft'
+    } else if (input.status === undefined) {
+      status = lifecycle.initial
+    } else {
+      assertValidInitialStatus(lifecycle, input.status)
+      status = input.status
+    }
+
     const resource: Resource = {
       id: newResourceId(input.type),
       type: input.type,
@@ -141,8 +185,7 @@ export class ResourceService {
       createdBy: caller.subject.principal,
       createdAt: now,
       updatedAt: now,
-      // 状态机由 Workflow Engine 在 M1 接管；此前用本体声明的初始状态占位
-      status: input.status ?? 'Draft',
+      status,
       lifecycle: def.lifecycle ?? null,
       version: 1,
       labels: input.labels ?? [],
@@ -163,7 +206,8 @@ export class ResourceService {
       reason: null,
       traceId: caller.traceId ?? null,
     })
-    await this.#deps.events.emit(
+    await this.#emit(
+      caller,
       resourceCreated({
         tenant,
         resourceId: resource.id,
@@ -196,6 +240,19 @@ export class ResourceService {
 
     if (existing.version !== input.expectedVersion) {
       throw new ConflictError(id, input.expectedVersion, existing.version)
+    }
+
+    // 有生命周期的对象，状态只能通过 :transition 改。
+    //
+    // 留一个"PATCH 也能改 status"的口子，等于状态机形同虚设——
+    // 只要有一条路径能绕过守卫，守卫就只是建议。
+    if (input.status !== undefined && input.status !== existing.status) {
+      if (existing.lifecycle !== null && this.#deps.workflows.byId(existing.lifecycle) !== null) {
+        throw new TransitionError(
+          `status of ${existing.type} is governed by lifecycle "${existing.lifecycle}"; use the transition endpoint instead of a direct update`,
+          { current: existing.status, requested: input.status, lifecycle: existing.lifecycle },
+        )
+      }
     }
 
     // attributes 是整体替换而非合并：合并语义下无法表达"删除一个属性"
@@ -241,7 +298,8 @@ export class ResourceService {
       traceId: caller.traceId ?? null,
     })
 
-    await this.#deps.events.emit(
+    await this.#emit(
+      caller,
       resourceUpdated({
         tenant: existing.tenant,
         resourceId: id,
@@ -255,7 +313,8 @@ export class ResourceService {
     )
 
     if (existing.status !== next.status) {
-      await this.#deps.events.emit(
+      await this.#emit(
+        caller,
         resourceStatusChanged({
           tenant: existing.tenant,
           resourceId: id,
@@ -270,6 +329,133 @@ export class ResourceService {
     }
 
     return next
+  }
+
+  // ───────────────────────── 生命周期 ─────────────────────────
+
+  /**
+   * 状态迁移（FR-WF-002/003/004）。
+   *
+   * 顺序是有讲究的：先解析迁移（拿到它需要什么权限），再授权。
+   * 反过来的话就得对所有迁移用同一个笼统的权限，
+   * "谁能把需求置为 Approved" 这种区分就没法表达了。
+   */
+  async transition(
+    caller: Caller,
+    id: string,
+    to: string,
+    options: { expectedVersion?: number | undefined; reason?: string | undefined } = {},
+  ): Promise<Resource> {
+    const existing = await this.#requireLive(id)
+    const lifecycle = this.#lifecycleOf(existing)
+    const ctx = await this.#guardContext(existing)
+
+    const resolved = resolveTransition(lifecycle, existing.type, existing.status, to, ctx)
+
+    await this.#authorize(
+      caller,
+      resolved.capability,
+      {
+        tenant: existing.tenant,
+        workspace: existing.workspace,
+        project: existing.project ?? undefined,
+        id: existing.id,
+        type: existing.type,
+      },
+      existing.owner,
+      existing.type,
+    )
+
+    if (options.expectedVersion !== undefined && options.expectedVersion !== existing.version) {
+      throw new ConflictError(id, options.expectedVersion, existing.version)
+    }
+
+    const now = this.#deps.clock.now()
+    const attributes = applyActions(existing.attributes, resolved.actions, now)
+
+    // 副作用可能写入本体未声明的字段（如 startedAt）。走一次校验，
+    // 让"状态机想记录的东西"和"本体允许记录的东西"必须一致——
+    // 不一致时是本体该补字段，而不是让它悄悄绕过校验。
+    const validated = this.#deps.registry.validateAttributes(existing.type, attributes)
+
+    const next: Resource = {
+      ...existing,
+      status: resolved.to,
+      attributes: validated,
+      version: existing.version + 1,
+      updatedAt: now,
+    }
+
+    const changes = diffResource(existing, next)
+    const ok = await this.#deps.resources.update(next, existing.version)
+    if (!ok) {
+      const current = await this.#deps.resources.findById(id)
+      throw new ConflictError(id, existing.version, current?.version ?? -1)
+    }
+
+    await this.#deps.resources.appendHistory({
+      resourceId: id,
+      version: next.version,
+      changedBy: caller.subject.principal,
+      onBehalfOf: caller.delegator?.principal ?? null,
+      changedAt: now,
+      runRef: caller.runId ?? null,
+      changes,
+      reason: options.reason ?? null,
+      traceId: caller.traceId ?? null,
+    })
+
+    await this.#emit(
+      caller,
+      resourceStatusChanged({
+        tenant: existing.tenant,
+        resourceId: id,
+        resourceType: existing.type,
+        from: existing.status,
+        to: resolved.to,
+        changedBy: caller.subject.principal,
+        occurredAt: now,
+        traceId: caller.traceId ?? null,
+      }),
+    )
+
+    return next
+  }
+
+  /**
+   * 当前可用的迁移，**已按权限过滤**（FR-RES-008）。
+   *
+   * 无权限的迁移根本不出现在列表里，而不是列出来再在点击时报错。
+   * 同时保留未就绪的迁移并附上原因——用户需要知道"下一步差什么"。
+   */
+  async transitionsOf(caller: Caller, id: string): Promise<AvailableTransition[]> {
+    const resource = await this.get(caller, id)
+    const lifecycle = this.#lifecycleOf(resource)
+    const ctx = await this.#guardContext(resource)
+    const all = availableTransitions(lifecycle, resource.type, resource.status, ctx)
+
+    const permitted: AvailableTransition[] = []
+    for (const candidate of all) {
+      const decision = decide(
+        {
+          subject: caller.subject,
+          action: candidate.capability,
+          resource: {
+            tenant: resource.tenant,
+            workspace: resource.workspace,
+            project: resource.project ?? undefined,
+            id: resource.id,
+            type: resource.type,
+          },
+          delegator: caller.delegator,
+          context: { resourceOwner: resource.owner, mfa: caller.mfa, now: this.#deps.clock.now() },
+        },
+        this.#deps.policies,
+      )
+      // Ask 也列出：它是"需要人工确认"，不是"不能做"
+      if (decision.effect !== 'Deny') permitted.push(candidate)
+    }
+    return permitted
   }
 
   /** 软删除（FR-RES-004）。历史与关系都保留，只是不再出现在默认查询中。 */
@@ -315,7 +501,8 @@ export class ResourceService {
       traceId: caller.traceId ?? null,
     })
 
-    await this.#deps.events.emit(
+    await this.#emit(
+      caller,
       resourceDeleted({
         tenant: existing.tenant,
         resourceId: id,
@@ -429,7 +616,8 @@ export class ResourceService {
     }
 
     await this.#deps.relations.insert(relation)
-    await this.#deps.events.emit(
+    await this.#emit(
+      caller,
       relationCreated({
         tenant: from.tenant,
         relationId: relation.id,
@@ -445,6 +633,15 @@ export class ResourceService {
     return relation
   }
 
+  /**
+   * 查询关系，**逆关系视为等价**（FR-ONT-003）。
+   *
+   * 一条边只存一行。查 `partOf` 时，存储为 `decomposedInto` 且指向本节点的边
+   * 在语义上就是本节点的 `partOf` 出边——不做这层解析，
+   * "逆关系"就只是本体里的一句声明，查询时并不成立。
+   *
+   * 返回时翻转成**请求的方向**，让调用方看到的形状和存储方向无关。
+   */
   async relationsOf(
     caller: Caller,
     id: string,
@@ -452,7 +649,28 @@ export class ResourceService {
     type?: string,
   ): Promise<RelationInstance[]> {
     await this.get(caller, id)
-    return this.#deps.relations.listFor(id, direction, type)
+
+    // 不指定类型时按存储原样返回：把每条边同时以正名和逆名列出会重复一倍
+    if (type === undefined) {
+      return this.#deps.relations.listFor(id, direction)
+    }
+
+    const def = this.#deps.registry.relationType(type)
+    const found: RelationInstance[] = []
+
+    if (direction === 'out' || direction === 'both') {
+      found.push(...(await this.#deps.relations.listFor(id, 'out', type)))
+      found.push(
+        ...(await this.#deps.relations.listFor(id, 'in', def.inverse)).map((r) => flipRelation(r, type)),
+      )
+    }
+    if (direction === 'in' || direction === 'both') {
+      found.push(...(await this.#deps.relations.listFor(id, 'in', type)))
+      found.push(
+        ...(await this.#deps.relations.listFor(id, 'out', def.inverse)).map((r) => flipRelation(r, type)),
+      )
+    }
+    return found
   }
 
   async traverse(
@@ -460,13 +678,30 @@ export class ResourceService {
     spec: { start: string; follow: readonly string[]; maxDepth: number; direction: 'out' | 'in' | 'both' },
   ): Promise<TraverseHit[]> {
     await this.get(caller, spec.start)
-    for (const relType of spec.follow) {
-      this.#deps.registry.relationType(relType)
-    }
     if (spec.maxDepth < 1 || spec.maxDepth > 10) {
       throw new ValidationError('maxDepth must be between 1 and 10', { field: 'maxDepth' })
     }
-    return this.#deps.relations.traverse(spec)
+
+    // 与 relationsOf 同一个道理：沿 `implementedBy` 走时，
+    // 存成 `implements` 的边也必须能走通，否则遍历结果取决于当初是从哪一头建的关系。
+    const inverses = spec.follow.map((t) => this.#deps.registry.relationType(t).inverse)
+
+    const followOut =
+      spec.direction === 'out' ? spec.follow
+      : spec.direction === 'in' ? inverses
+      : [...spec.follow, ...inverses]
+
+    const followIn =
+      spec.direction === 'out' ? inverses
+      : spec.direction === 'in' ? spec.follow
+      : [...spec.follow, ...inverses]
+
+    return this.#deps.relations.traverse({
+      start: spec.start,
+      followOut: [...new Set(followOut)],
+      followIn: [...new Set(followIn)],
+      maxDepth: spec.maxDepth,
+    })
   }
 
   async shortestPath(caller: Caller, from: string, to: string, maxDepth: number): Promise<PathHit | null> {
@@ -479,6 +714,35 @@ export class ResourceService {
   }
 
   // ───────────────────────── 内部 ─────────────────────────
+
+  #lifecycleOf(resource: Resource) {
+    const lifecycle = resource.lifecycle === null ? null : this.#deps.workflows.byId(resource.lifecycle)
+    if (lifecycle === null) {
+      throw new TransitionError(`${resource.type} has no lifecycle; its status is not workflow-governed`, {
+        type: resource.type,
+      })
+    }
+    return lifecycle
+  }
+
+  /** 装配守卫求值所需的上下文。关系类型在这里被收成集合，工作流层因此不必接触仓储。 */
+  async #guardContext(resource: Resource): Promise<GuardContext> {
+    const relations = await this.#deps.relations.listFor(resource.id, 'both')
+    const outgoing = new Set<string>()
+    const incoming = new Set<string>()
+    for (const relation of relations) {
+      // 被人工否决的关系不算数——它和不存在是一个意思
+      if (relation.confirmed === false) continue
+      if (relation.fromId === resource.id) outgoing.add(relation.type)
+      if (relation.toId === resource.id) incoming.add(relation.type)
+    }
+    return {
+      attributes: resource.attributes,
+      owner: resource.owner,
+      outgoingRelationTypes: outgoing,
+      incomingRelationTypes: incoming,
+    }
+  }
 
   async #requireLive(id: string): Promise<Resource> {
     const resource = await this.#deps.resources.findById(id)
@@ -495,6 +759,11 @@ function throwIfNotAllowed(decision: Decision): void {
     throw new ApprovalRequiredError(decision.reason, { matchedPolicy: decision.matchedPolicy ?? null })
   }
   throw new ForbiddenError(decision.reason, { matchedPolicy: decision.matchedPolicy ?? null })
+}
+
+/** 把一条边翻转成请求方向的样子，使"正反向查询等价"在返回值上字面成立 */
+function flipRelation(relation: RelationInstance, asType: string): RelationInstance {
+  return { ...relation, type: asType, fromId: relation.toId, toId: relation.fromId }
 }
 
 function assertVisibility(value: string): Visibility {

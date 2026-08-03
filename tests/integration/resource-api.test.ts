@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { assertNotSuperuser, queryAsTenant, setupTestDb, truncateAll } from '../helpers/db.ts'
 import { buildServer } from '../../src/api/server.ts'
 import { buildDefaultRegistry } from '../../src/ontology/defaults.ts'
+import { buildDefaultWorkflowRegistry } from '../../src/workflow/defaults.ts'
 import { defaultPolicies } from '../../src/identity/default-policies.ts'
 import { createDb } from '../../src/infrastructure/db/client.ts'
 
@@ -31,6 +32,7 @@ beforeAll(async () => {
   app = buildServer({
     pool,
     registry: buildDefaultRegistry(),
+    workflows: buildDefaultWorkflowRegistry(),
     policies: defaultPolicies(TENANT),
   })
   await app.ready()
@@ -95,7 +97,8 @@ describe('unified Resource API (ADR-0002)', () => {
 
   it('stamps the ontology version the instance was written under', async () => {
     const res = await createRequirement()
-    expect(res.json().ontologyVersion).toBe('1.0.0')
+    // 本体加了状态机写入的时间戳字段，按 04-ontology 的兼容矩阵递增 minor
+    expect(res.json().ontologyVersion).toBe('1.1.0')
   })
 
   it('rejects attributes that violate the ontology, with field-level detail', async () => {
@@ -135,11 +138,11 @@ describe('optimistic locking (FR-RES-003)', () => {
       method: 'PATCH',
       url: `/v1/resources/${id}`,
       headers: asPM,
-      payload: { expectedVersion: 1, status: 'Review' },
+      payload: { expectedVersion: 1, labels: ['q3'] },
     })
     expect(res.statusCode).toBe(200)
     expect(res.json().version).toBe(2)
-    expect(res.json().status).toBe('Review')
+    expect(res.json().labels).toEqual(['q3'])
   })
 
   it('rejects a stale write with 409 and reports the actual version', async () => {
@@ -148,13 +151,13 @@ describe('optimistic locking (FR-RES-003)', () => {
       method: 'PATCH',
       url: `/v1/resources/${id}`,
       headers: asPM,
-      payload: { expectedVersion: 1, status: 'Review' },
+      payload: { expectedVersion: 1, labels: ['q3'] },
     })
     const stale = await app.inject({
       method: 'PATCH',
       url: `/v1/resources/${id}`,
       headers: asPM,
-      payload: { expectedVersion: 1, status: 'Approved' },
+      payload: { expectedVersion: 1, labels: ['q4'] },
     })
     expect(stale.statusCode).toBe(409)
     expect(stale.json().details).toEqual({ expected: 1, actual: 2 })
@@ -179,9 +182,23 @@ describe('optimistic locking (FR-RES-003)', () => {
       method: 'PATCH',
       url: `/v1/resources/${id}`,
       headers: { ...asPM, 'if-match': '"1"' },
-      payload: { status: 'Review' },
+      payload: { labels: ['q3'] },
     })
     expect(res.statusCode).toBe(200)
+  })
+
+  it('refuses to change a lifecycle-governed status through a plain update', async () => {
+    // 留一个 PATCH 能改 status 的口子，等于状态机形同虚设
+    const id = (await createRequirement()).json().id
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/v1/resources/${id}`,
+      headers: asPM,
+      payload: { expectedVersion: 1, status: 'Approved' },
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json().error).toBe('illegal_transition')
+    expect(res.json().message).toMatch(/use the transition endpoint/)
   })
 })
 
@@ -255,10 +272,10 @@ describe('domain events land in the outbox in the same transaction (FR-RES-006)'
   it('emits a dedicated status-change event so subscribers need not diff', async () => {
     const id = (await createRequirement()).json().id
     await app.inject({
-      method: 'PATCH',
-      url: `/v1/resources/${id}`,
+      method: 'POST',
+      url: `/v1/resources/${id}/transitions`,
       headers: asPM,
-      payload: { expectedVersion: 1, status: 'Review' },
+      payload: { to: 'Review' },
     })
     const rows = await queryAsTenant<{ event_type: string; payload: { from: string; to: string } }>(
       pool,

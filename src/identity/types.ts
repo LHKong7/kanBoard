@@ -11,6 +11,9 @@
 /** 主体。Agent 与 User 同级——这是 ADR-0003 的核心：Agent 是一等身份主体。 */
 export type Principal = `user://${string}` | `agent://${string}` | 'system://internal'
 
+/** 自动化引擎的身份。它不是 Agent（不受 Agent 护栏约束），也不是人（无法交互确认）。 */
+export const SYSTEM_PRINCIPAL: Principal = 'system://internal'
+
 export function isAgent(principal: string): boolean {
   return principal.startsWith('agent://')
 }

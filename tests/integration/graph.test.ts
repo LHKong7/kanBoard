@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { assertNotSuperuser, setupTestDb, truncateAll } from '../helpers/db.ts'
 import { buildServer } from '../../src/api/server.ts'
 import { buildDefaultRegistry } from '../../src/ontology/defaults.ts'
+import { buildDefaultWorkflowRegistry } from '../../src/workflow/defaults.ts'
 import { defaultPolicies } from '../../src/identity/default-policies.ts'
 import type { Policy } from '../../src/identity/types.ts'
 
@@ -37,6 +38,7 @@ beforeAll(async () => {
   app = buildServer({
     pool,
     registry: buildDefaultRegistry(),
+    workflows: buildDefaultWorkflowRegistry(),
     policies: [...defaultPolicies(TENANT), knowledgeAgentPolicy],
   })
   await app.ready()
@@ -113,6 +115,35 @@ describe('relations (FR-ONT-003/006)', () => {
       headers: asAdmin,
     })
     expect(res.json().items).toHaveLength(1)
+  })
+
+  it('finds an edge by its inverse name, flipped to the requested orientation (FR-ONT-003)', async () => {
+    // 回归测试。一条边只存一行：`story --decomposedInto--> task`。
+    // 从 task 查 `partOf` 必须找得到它，否则"逆关系"只是本体里的一句声明，
+    // 查询时并不成立——而依赖它的自动化规则会静默地什么都不做。
+    const { story, task } = await seedChain()
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${task}/relations?direction=out&type=partOf`,
+      headers: asAdmin,
+    })
+    const items = res.json().items as Array<{ type: string; fromId: string; toId: string }>
+    expect(items).toHaveLength(1)
+    // 返回值按请求的方向呈现，调用方不必关心当初是从哪一头建的
+    expect(items[0]).toMatchObject({ type: 'partOf', fromId: task, toId: story })
+  })
+
+  it('traverses an edge regardless of which end it was created from', async () => {
+    const { req, story } = await seedChain()
+    // 边存的是 implementedBy；沿它的逆名 implements 从 story 往回走也要通
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:traverse',
+      headers: asAdmin,
+      payload: { start: story, follow: ['implements'], maxDepth: 2, direction: 'out' },
+    })
+    expect((res.json().items as { id: string }[]).map((i) => i.id)).toEqual([req])
   })
 
   it('reads the same edge from either direction (FR-ONT-003)', async () => {

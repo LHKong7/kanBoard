@@ -52,6 +52,43 @@ export function defaultPolicies(tenant: string): Policy[] {
       action: 'Knowledge.*',
       scope: { kind: 'tenant', tenant },
     },
+    // 自动化以 system://internal 身份执行。
+    //
+    // 权限刻意开得很窄：只能推进状态和读取，不能创建、不能删除、不能授权。
+    // 自动化引擎是个高权限执行路径——它不面对人类的判断力，
+    // 一条写错的规则会以机器的速度把错误铺开。
+    {
+      id: 'pol-system-automation-transition',
+      effect: 'Allow',
+      subject: 'system://internal',
+      action: '*.Transition',
+      scope: { kind: 'tenant', tenant },
+      description: '自动化推进状态；守卫与生命周期约束照常生效',
+    },
+    {
+      id: 'pol-system-automation-read',
+      effect: 'Allow',
+      subject: 'system://internal',
+      action: '*.Read',
+      scope: { kind: 'tenant', tenant },
+    },
+    {
+      id: 'pol-system-automation-execute',
+      effect: 'Allow',
+      subject: 'system://internal',
+      action: 'Task.Execute',
+      scope: { kind: 'tenant', tenant },
+      description: 'Todo → Doing 需要它',
+    },
+    {
+      id: 'pol-system-no-delete',
+      effect: 'Deny',
+      subject: 'system://internal',
+      action: '*.Delete',
+      scope: { kind: 'tenant', tenant },
+      description: '自动化永远不删东西。需要删除时应当由人决定',
+    },
+
     // 删除限于资源 owner。
     //
     // 必须写成 Deny：上面的 `Task.*` / `Requirement.*` 已经把 Delete 包含在内，

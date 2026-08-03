@@ -33,6 +33,14 @@ pnpm dev         # 启动，默认 :3000
 | `pnpm check` | 上述三项，等同 CI |
 | `pnpm migrate` | 执行未应用的迁移 |
 
+进程角色（[ADR-0008](adr/0008-modular-monolith.md)）由 `PROJECTOS_ROLE` 控制：
+
+| 值 | 行为 |
+| --- | --- |
+| `all`（默认） | API + poller 同进程，本地开发用 |
+| `api` | 只起 HTTP，不消费 outbox |
+| `poller` | 只消费 outbox，不监听端口 |
+
 集成测试需要一个可连的 Postgres：
 
 ```bash
@@ -49,6 +57,7 @@ pnpm test
 src/
 ├── platform/        纯工具：id / clock / errors。不依赖任何业务层
 ├── ontology/        本体元模型、注册表、本体 → Zod 校验器
+├── workflow/        状态机引擎、守卫、自动化规则定义（纯层）
 ├── identity/        五层权限模型与 PDP（纯函数）
 ├── domain/          领域模型、端口（ports）、应用服务
 ├── infrastructure/  Postgres 适配器、迁移、outbox、审计
@@ -58,7 +67,7 @@ src/
 依赖方向自下而上，反向禁止：
 
 ```
-platform → ontology → identity → domain → infrastructure → api
+platform → ontology → identity → workflow → domain → infrastructure → api
 ```
 
 `pnpm lint:layers` 在 CI 中强制这条。最关键的一条是
@@ -106,7 +115,23 @@ CREATE POLICY tenant_isolation ON new_table
 
 需要改动就新增一个迁移文件。已应用的迁移被改写会让不同环境的 schema 悄悄分叉。
 
-### 5. 审计不写在业务事务里
+### 5. 状态只能通过迁移端点修改
+
+有生命周期的对象，`PATCH` 改 `status` 会被拒绝（409）。用：
+
+```bash
+POST /v1/resources/{id}/transitions   {"to": "Doing", "reason": "开工"}
+GET  /v1/resources/{id}/transitions   # 当前可用迁移，含未就绪的与原因
+```
+
+留一个能绕过守卫的口子，守卫就只是建议。
+
+### 6. 自动化不享有特权
+
+自动化以 `system://internal` 身份调用和人**完全相同的** `transition()`。
+它的权限刻意很窄（只能推进状态和读取），`*.Delete` 是显式 Deny。
+
+### 7. 审计不写在业务事务里
 
 授权被拒时业务事务会回滚。审计如果在同一个事务里，被拒绝的尝试就一起消失了——
 而那恰恰是最需要留痕的。服务层把审计记录收集在内存，
