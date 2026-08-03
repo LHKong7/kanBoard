@@ -30,7 +30,8 @@ pnpm dev         # 启动，默认 :3000
 | `pnpm typecheck` | `tsc --strict`，零容忍 |
 | `pnpm lint:layers` | 分层依赖方向校验（FR-ARCH-001） |
 | `pnpm test` | 单元 + 集成测试 |
-| `pnpm check` | 上述三项，等同 CI |
+| `pnpm test:ui` | 看板 UI，真实浏览器（见 [tests/ui/README.md](../tests/ui/README.md)） |
+| `pnpm check` | 上述全部，等同 CI |
 | `pnpm migrate` | 执行未应用的迁移 |
 
 进程角色（[ADR-0008](adr/0008-modular-monolith.md)）由 `PROJECTOS_ROLE` 控制：
@@ -126,20 +127,36 @@ GET  /v1/resources/{id}/transitions   # 当前可用迁移，含未就绪的与�
 
 留一个能绕过守卫的口子，守卫就只是建议。
 
-### 6. 自动化不享有特权
+### 6. UI 不硬编码业务语义
+
+`public/` 是三个文件的原生页面，没有构建工具。它遵守一条规则：
+
+| UI 上的东西 | 必须来自 |
+| --- | --- |
+| 看板的列 | `GET /v1/workflows` |
+| 卡片能做什么动作 | `GET /v1/resources/:id/transitions` |
+| 新建表单的字段 | `GET /v1/ontology/entity-types` |
+| 哪些字段不让人填 | 本体属性上的 `derived` 标记 |
+
+在前端写死状态名、动作列表或字段清单，等于把业务语义搬到了 UI 层
+（违反 [ADR-0001](adr/0001-ontology-first.md) 的 P1.4）。
+需要"某个字段不显示"时，改本体，不要改前端的 if。
+
+### 7. 自动化不享有特权
 
 自动化以 `system://internal` 身份调用和人**完全相同的** `transition()`。
 它的权限刻意很窄（只能推进状态和读取），`*.Delete` 是显式 Deny。
 
-### 7. 审计不写在业务事务里
+### 8. 审计不写在业务事务里
 
 授权被拒时业务事务会回滚。审计如果在同一个事务里，被拒绝的尝试就一起消失了——
 而那恰恰是最需要留痕的。服务层把审计记录收集在内存，
 由 API 层在业务事务结束后用独立事务落盘。
 
-## 认证（M0 临时方案）
+## 认证（M1 临时方案）
 
-M0 用请求头承载身份，OIDC / Agent Credential 在 M1 接入：
+用请求头承载身份，OIDC / Agent Credential 尚未接入。
+UI 右上角可以切换身份，用来观察权限过滤——那是 PDP 在起作用，不是界面在隐藏按钮。
 
 | 头 | 说明 |
 | --- | --- |
@@ -161,5 +178,5 @@ curl -X POST localhost:3000/v1/resources \
 
 ## 当前进度
 
-M0 已交付的部分见 [路线图](prd/13-roadmap.md#m0--foundation地基)。
-未完成项记录在 [M0 状态](m0-status.md)。
+- [M0 状态](m0-status.md)：地基层（本体、统一模型、权限、隔离）
+- [M1 状态](m1-status.md)：工作流引擎、自动化、看板 UI

@@ -24,8 +24,8 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'vision', kind: 'text' },
       { name: 'ownerTeam', kind: 'string' },
       // 以下由状态机的 entry action 写入（04-ontology：新增可选属性 = minor 版本）
-      { name: 'startedAt', kind: 'datetime' },
-      { name: 'completedAt', kind: 'datetime' },
+      { name: 'startedAt', kind: 'datetime', derived: true },
+      { name: 'completedAt', kind: 'datetime', derived: true },
     ],
   },
   {
@@ -44,7 +44,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
         values: ['customer', 'internal', 'incident', 'ai-proposed'],
       },
       { name: 'priority', kind: 'enum', values: ['Must', 'Should', 'Could', 'Wont'] },
-      { name: 'approvedAt', kind: 'datetime', description: '由状态机进入 Approved 时写入' },
+      { name: 'approvedAt', kind: 'datetime', derived: true, description: '由状态机进入 Approved 时写入' },
     ],
   },
   {
@@ -60,8 +60,8 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'value', kind: 'text', description: '以便 <价值>' },
       { name: 'storyPoint', kind: 'int' },
       { name: 'estimateRationale', kind: 'text', description: '估点依据，AI 估点时必填' },
-      { name: 'startedAt', kind: 'datetime' },
-      { name: 'completedAt', kind: 'datetime' },
+      { name: 'startedAt', kind: 'datetime', derived: true },
+      { name: 'completedAt', kind: 'datetime', derived: true },
     ],
   },
   {
@@ -76,8 +76,8 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'assignee', kind: 'string', description: 'user://… 或 agent://…' },
       { name: 'estimate', kind: 'float' },
       { name: 'blockReason', kind: 'text', description: '进入 Blocked 状态时必填' },
-      { name: 'startedAt', kind: 'datetime' },
-      { name: 'completedAt', kind: 'datetime' },
+      { name: 'startedAt', kind: 'datetime', derived: true },
+      { name: 'completedAt', kind: 'datetime', derived: true },
     ],
   },
   {
@@ -91,7 +91,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'chosen', kind: 'text', required: true },
       { name: 'rationale', kind: 'text', required: true },
       { name: 'consequences', kind: 'text' },
-      { name: 'acceptedAt', kind: 'datetime' },
+      { name: 'acceptedAt', kind: 'datetime', derived: true },
     ],
   },
   {
@@ -105,7 +105,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'body', kind: 'richtext', required: true },
       { name: 'confidence', kind: 'percent' },
       { name: 'validUntil', kind: 'datetime', description: '到期后进入待复核，避免知识腐化' },
-      { name: 'publishedAt', kind: 'datetime' },
+      { name: 'publishedAt', kind: 'datetime', derived: true },
     ],
   },
   {

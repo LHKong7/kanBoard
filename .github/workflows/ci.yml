@@ -38,6 +38,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Install Chromium for UI tests
+        run: pnpm exec playwright install --with-deps chromium
+
       # 类型检查。ADR-0007 接下的债之一：TS 的类型在运行期不存在，
       # 编译期这道关必须是零容忍的。
       - name: Typecheck (strict)
@@ -52,3 +55,10 @@ jobs:
       # 因此租户隔离（ADR-0005）是真的在 RLS 下被验证的。
       - name: Test
         run: pnpm test
+
+      # UI 走真实浏览器。用 Node 内置 runner，原因见 tests/ui/README.md
+      - name: UI tests
+        run: pnpm test:ui
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+

@@ -13,9 +13,10 @@
     "start": "node --experimental-strip-types src/main.ts",
     "migrate": "node --experimental-strip-types src/platform/db/migrate.ts",
     "test": "vitest run",
+    "test:ui": "node --experimental-strip-types --test tests/ui/*.test.ts",
     "test:watch": "vitest",
     "lint:layers": "depcruise src --config .dependency-cruiser.cjs",
-    "check": "pnpm typecheck && pnpm lint:layers && pnpm test"
+    "check": "pnpm typecheck && pnpm lint:layers && pnpm test && pnpm test:ui"
   },
   "dependencies": {
     "fastify": "^5.2.1",
@@ -28,6 +29,7 @@
     "@types/node": "^22.10.5",
     "@types/pg": "^8.11.10",
     "dependency-cruiser": "^16.9.0",
+    "playwright": "^1.62.1",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
   }

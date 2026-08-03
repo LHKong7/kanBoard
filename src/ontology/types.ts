@@ -28,6 +28,13 @@ export type AttributeType = {
   target?: string
   /** 数据分级，决定能否进入 Agent 上下文与能否出境（ADR-0006） */
   classification?: DataClassification
+  /**
+   * 由系统写入，不该出现在人填的表单里（如状态机 entry action 写的时间戳）。
+   *
+   * 这条信息属于本体而不是前端：ADR-0001 要求 UI 是本体的渲染视图，
+   * 前端不得自己判断"哪些字段该显示"——那等于把语义搬到了 UI 层。
+   */
+  derived?: boolean
   description?: string
 }
 

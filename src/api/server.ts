@@ -29,6 +29,7 @@ import {
   updateResourceSchema,
 } from './schemas.ts'
 import { toWire } from './serialize.ts'
+import { registerStatic } from './static.ts'
 
 export type ServerDeps = {
   pool: pg.Pool
@@ -305,6 +306,10 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   })
 
   app.get('/health', async () => ({ status: 'ok' }))
+
+  // 看板 UI。onRequest 的认证钩子只作用于 /v1，静态资源不需要身份——
+  // 页面本身不含任何数据，数据全部由它带着身份头去 /v1 取。
+  registerStatic(app)
 
   // ── 错误映射 ─────────────────────────────────────────────
   app.setErrorHandler((error: unknown, _request: FastifyRequest, reply: FastifyReply) => {
