@@ -74,7 +74,8 @@
 | NFR-COMP-001 | 数据分级：public / internal / confidential / pii |
 | NFR-COMP-002 | 数据驻留：支持按租户配置地域，数据不跨域 |
 | NFR-COMP-003 | GDPR / 个人信息保护：支持个人数据导出与擦除（擦除走专用流程，保留审计摘要） |
-| NFR-COMP-004 | 模型出境控制：confidential 数据默认不发送至外部模型 |
+| NFR-COMP-004 | 模型出境：默认允许 `internal` / `confidential` 数据发送至**已批准的**外部托管模型供应商；`pii` 字段默认脱敏；供应商白名单 + 租户级开关 + 全量出境审计（[ADR-0006](../adr/0006-model-data-egress.md)） |
+| NFR-COMP-007 | 与模型供应商签署零训练留存（zero-retention）条款，作为进入白名单的前置条件 |
 | NFR-COMP-005 | 数据保留策略可配置（默认 3 年，审计 1 年起） |
 | NFR-COMP-006 | 支持 SOC 2 Type II 所需的控制项与证据采集 |
 

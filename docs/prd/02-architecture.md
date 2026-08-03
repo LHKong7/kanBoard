@@ -152,23 +152,26 @@ Audit Log（全量、不可篡改）
 | FR-ARCH-002 | 所有写操作经过统一 PDP 授权 | M | 存在自动化测试证明绕过 PDP 的写路径为 0 |
 | FR-ARCH-003 | 所有领域变更发布 Domain Event | M | 抽样 100% 核心聚合，写入后可在事件存储中查到对应事件 |
 | FR-ARCH-004 | Agent 与人类共用同一套 Resource API | M | Agent 无专用写入端点；接口层无 `is_agent` 分支绕过权限 |
-| FR-ARCH-005 | 支持多租户隔离（Tenant / Workspace） | M | 跨租户读取测试全部返回 404/403，无数据泄漏 |
+| FR-ARCH-005 | 多租户隔离：数据模型自始携带 `tenant`，由 PG RLS 强制过滤 | M | 跨租户读取测试全部返回 404/403，无数据泄漏（见 [ADR-0005](../adr/0005-tenancy-model.md)） |
 | FR-ARCH-006 | 模型无关：LLM 供应商可插拔 | S | 至少接入 2 家供应商，切换仅需配置变更 |
 | FR-ARCH-007 | 事件消费幂等 | M | 重复投递同一事件，最终状态一致 |
 | FR-ARCH-008 | 存储可分层演进（图/向量可后置） | S | v1 允许以关系库模拟图查询，接口不变 |
 
 ---
 
-## 6. 技术选型基线（建议，非强制）
+## 6. 技术选型基线
 
-| 层 | 建议 | 备注 |
-| --- | --- | --- |
-| API | REST + GraphQL（读侧） | 统一 Resource API 见 [09](09-data-model.md) |
-| 服务端 | TypeScript / Node 或 Go | 以团队熟悉度为准，需在 ADR 中定稿 |
-| 关系库 | PostgreSQL 15+ | JSONB 承载本体动态属性 |
-| 事件总线 | Kafka / NATS | v1 可用 PG outbox + poller 起步 |
-| 向量 | pgvector（起步） → 独立向量库 | 与 Knowledge 规模挂钩 |
-| 工作流 | 自研状态机 + 规则 DSL | 见 [08](08-workflow-engine.md) |
-| Agent | 自研 Runtime + MCP 工具协议 | 见 [05](05-agent-runtime.md) |
+| 层 | 选型 | 状态 | 备注 |
+| --- | --- | --- | --- |
+| **服务端** | **Go 1.22+** | ✅ 已定 | 见 [ADR-0004](../adr/0004-go-server-stack.md) |
+| API | REST（写侧） + GraphQL（读侧） | ✅ 已定 | 统一 Resource API 见 [09](09-data-model.md) |
+| 关系库 | PostgreSQL 15+ | ✅ 已定 | JSONB 承载本体动态属性；RLS 承载租户隔离 |
+| 租户隔离 | 共享库 + `tenant` 列 + RLS | ✅ 已定 | 见 [ADR-0005](../adr/0005-tenancy-model.md) |
+| 事件总线 | PG outbox + poller（v1） | ✅ 已定 | 规模化后评估 Kafka/NATS（Q-A5） |
+| 向量 | pgvector（起步） → 独立向量库 | ⬜ 待评估 | 与 Knowledge 规模挂钩 |
+| 图查询 | PG 递归 CTE（v1） | ✅ 已定 | 留适配层，规模化后切独立图库 |
+| 工作流 | 自研状态机 + 规则 DSL | ✅ 已定 | 见 [08](08-workflow-engine.md) |
+| Agent | 自研 Runtime + MCP 工具协议 | ✅ 已定 | 见 [05](05-agent-runtime.md) |
+| 部署形态 | 模块化单体（按 BC 分模块） | ⬜ 待定（Q-A4） | 倾向单体优先，按需拆分 |
 
-> 选型定稿必须落 ADR：`docs/adr/`。
+> 后续选型定稿同样必须落 ADR：`docs/adr/`。

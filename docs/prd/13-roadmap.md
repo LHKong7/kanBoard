@@ -34,13 +34,18 @@ M0 基础  →  M1 领域  →  M2 集成  →  M3 智能  →  M4 规模化
 | 统一 Resource 模型与 CRUD/Query API | FR-RES-001~005, 012 |
 | 关系存储与图遍历（PG 递归 CTE） | FR-ONT-003/004/005, FR-RES-007 |
 | Identity + 五层权限 PDP（deny-by-default） | FR-IAM-001~005, 010, 015 |
+| 租户隔离：`tenant` 列 + PG RLS（v1 单租户运行） | FR-ARCH-005, FR-IAM-015 |
 | Domain Event（outbox）+ 审计日志 | FR-RES-006, FR-IAM-013 |
-| 分层架构与 CI 依赖校验 | FR-ARCH-001~003, 005 |
+| 分层架构与 CI 依赖校验（Go 模块依赖方向） | FR-ARCH-001~003, 005 |
+
+**技术基线**（已定稿）：Go 1.22+ · PostgreSQL 15+ · pgx/sqlc · PG outbox · 递归 CTE 图查询
+（[ADR-0004](../adr/0004-go-server-stack.md) / [ADR-0005](../adr/0005-tenancy-model.md)）
 
 **出口标准**
 - 至少 5 种 EntityType 通过同一套 API 完成全生命周期操作
 - 绕过 PDP 的写路径为 0（自动化检查）
 - 深度 5 图遍历 P95 < 500ms（100 万节点样本）
+- **移除应用层 tenant 过滤后，RLS 仍能阻止跨租户读取**（ADR-0005 核心验收项）
 
 ---
 
@@ -93,14 +98,15 @@ M0 基础  →  M1 领域  →  M2 集成  →  M3 智能  →  M4 规模化
 | 人机协作四模式 + 不可逆操作确认 | FR-AGT-009/010 |
 | Agent 临时授权 + 护栏 + blastRadius | FR-IAM-006~009, 012, FR-AGT-012 |
 | 首批 Agent：Requirement / PM / Meeting / Knowledge | FR-AI-001~003, 006/007/009/010 |
-| 提示注入防护与出境控制 | FR-AI-013/014, NFR-SEC-007 |
+| 提示注入防护、PII 脱敏管道、模型供应商白名单与出境审计 | FR-AI-013/014, NFR-SEC-007, NFR-COMP-004/007 |
 | Agent Dashboard（含 Automation Rate） | FR-DASH-003 |
 | Browser Connector（白名单 + 敏感动作确认） | FR-CON-009/010 |
 
 **出口标准**
-- Automation Rate ≥ 15%
+- Automation Rate ≥ 15%（口径见 [11-dashboard §2](11-dashboard.md)，即 L3：零编辑 + 7 天未推翻）
 - Agent 产出采纳率 ≥ 60%
 - 零越权事件；100% Agent 行为可审计回放
+- 出境审计完整：每次外部模型调用可查到租户、对象、最高分级、供应商
 
 ---
 
