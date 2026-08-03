@@ -30,9 +30,10 @@ docs/
 │   ├── 0001-ontology-first.md
 │   ├── 0002-unified-resource-model.md
 │   ├── 0003-agent-least-privilege.md
-│   ├── 0004-go-server-stack.md
+│   ├── 0004-go-server-stack.md          (Superseded → 0007)
 │   ├── 0005-tenancy-model.md
-│   └── 0006-model-data-egress.md
+│   ├── 0006-model-data-egress.md
+│   └── 0007-typescript-server-stack.md
 └── templates/                领域对象模板
     ├── requirement.md
     ├── story.md

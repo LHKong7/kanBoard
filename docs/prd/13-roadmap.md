@@ -36,16 +36,19 @@ M0 基础  →  M1 领域  →  M2 集成  →  M3 智能  →  M4 规模化
 | Identity + 五层权限 PDP（deny-by-default） | FR-IAM-001~005, 010, 015 |
 | 租户隔离：`tenant` 列 + PG RLS（v1 单租户运行） | FR-ARCH-005, FR-IAM-015 |
 | Domain Event（outbox）+ 审计日志 | FR-RES-006, FR-IAM-013 |
-| 分层架构与 CI 依赖校验（Go 模块依赖方向） | FR-ARCH-001~003, 005 |
+| 分层架构与 CI 依赖校验（dependency-cruiser） | FR-ARCH-001~003, 005, 010 |
 
-**技术基线**（已定稿）：Go 1.22+ · PostgreSQL 15+ · pgx/sqlc · PG outbox · 递归 CTE 图查询
-（[ADR-0004](../adr/0004-go-server-stack.md) / [ADR-0005](../adr/0005-tenancy-model.md)）
+**技术基线**（已定稿）：TypeScript / Node 22 LTS · Fastify · Zod · PostgreSQL 15+ · pg/Kysely ·
+PG outbox · 递归 CTE 图查询
+（[ADR-0007](../adr/0007-typescript-server-stack.md) / [ADR-0005](../adr/0005-tenancy-model.md)）
 
 **出口标准**
 - 至少 5 种 EntityType 通过同一套 API 完成全生命周期操作
 - 绕过 PDP 的写路径为 0（自动化检查）
 - 深度 5 图遍历 P95 < 500ms（100 万节点样本）
 - **移除应用层 tenant 过滤后，RLS 仍能阻止跨租户读取**（ADR-0005 核心验收项）
+- `tsc --strict` 零错误；所有外部输入边界具备 Zod 校验（FR-ARCH-010）
+- NFR-PERF 基线在 Node 下重新标定并达标（未达标项须显式调整目标并记录）
 
 ---
 
@@ -95,6 +98,7 @@ M0 基础  →  M1 领域  →  M2 集成  →  M3 智能  →  M4 规模化
 | 交付 | 关联需求 |
 | --- | --- |
 | Agent Runtime（定义、执行、Memory、轨迹） | FR-AGT-001~008 |
+| Agent Run worker 进程隔离 + AbortSignal 全链路取消 + 队列背压 | FR-ARCH-009/011 |
 | 人机协作四模式 + 不可逆操作确认 | FR-AGT-009/010 |
 | Agent 临时授权 + 护栏 + blastRadius | FR-IAM-006~009, 012, FR-AGT-012 |
 | 首批 Agent：Requirement / PM / Meeting / Knowledge | FR-AI-001~003, 006/007/009/010 |

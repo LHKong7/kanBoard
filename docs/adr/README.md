@@ -26,9 +26,10 @@ ADR 记录**为什么这样决定**，而不是**系统是什么样**。
 | [0001](0001-ontology-first.md) | 本体先行（Ontology First） | Accepted |
 | [0002](0002-unified-resource-model.md) | 统一 Resource 数据模型 | Accepted |
 | [0003](0003-agent-least-privilege.md) | Agent 最低权限与临时授权 | Accepted |
-| [0004](0004-go-server-stack.md) | 服务端采用 Go | Accepted |
+| [0004](0004-go-server-stack.md) | ~~服务端采用 Go~~ | Superseded → 0007 |
 | [0005](0005-tenancy-model.md) | 多租户隔离：共享库 + tenant 列 + RLS | Accepted |
 | [0006](0006-model-data-egress.md) | 允许项目数据发送至外部托管模型 | Accepted |
+| [0007](0007-typescript-server-stack.md) | 服务端采用 TypeScript | Accepted |
 
 ## 新增
 

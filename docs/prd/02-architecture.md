@@ -156,6 +156,9 @@ Audit Log（全量、不可篡改）
 | FR-ARCH-006 | 模型无关：LLM 供应商可插拔 | S | 至少接入 2 家供应商，切换仅需配置变更 |
 | FR-ARCH-007 | 事件消费幂等 | M | 重复投递同一事件，最终状态一致 |
 | FR-ARCH-008 | 存储可分层演进（图/向量可后置） | S | v1 允许以关系库模拟图查询，接口不变 |
+| FR-ARCH-009 | Agent Run 在独立 worker 进程执行，不阻塞 API 进程 | M | 长时 Run 并发下 API P95 时延不受影响；worker 崩溃不影响 API 可用性（见 §7） |
+| FR-ARCH-010 | 所有外部输入边界具备运行期校验（Zod） | M | 边界清单与校验测试一一对应；本体定义可自动生成校验 schema |
+| FR-ARCH-011 | 全链路可取消：任何超过 1 秒的操作接受 `AbortSignal` | M | 取消进行中的 Run，含 Connector 调用在 5 秒内全部停止 |
 
 ---
 
@@ -163,8 +166,11 @@ Audit Log（全量、不可篡改）
 
 | 层 | 选型 | 状态 | 备注 |
 | --- | --- | --- | --- |
-| **服务端** | **Go 1.22+** | ✅ 已定 | 见 [ADR-0004](../adr/0004-go-server-stack.md) |
+| **服务端** | **TypeScript / Node.js 22 LTS**（`strict`） | ✅ 已定 | 见 [ADR-0007](../adr/0007-typescript-server-stack.md)（取代 ADR-0004 的 Go 方案） |
+| 运行期校验 | **Zod**（本体自动生成 schema） | ✅ 已定 | TS 类型运行期不存在，所有边界必须校验 |
+| HTTP | Fastify | ✅ 已定 | 不引入全栈框架 |
 | API | REST（写侧） + GraphQL（读侧） | ✅ 已定 | 统一 Resource API 见 [09](09-data-model.md) |
+| 数据库访问 | `pg` + Kysely（类型化 SQL） | ✅ 已定 | 不使用重 ORM |
 | 关系库 | PostgreSQL 15+ | ✅ 已定 | JSONB 承载本体动态属性；RLS 承载租户隔离 |
 | 租户隔离 | 共享库 + `tenant` 列 + RLS | ✅ 已定 | 见 [ADR-0005](../adr/0005-tenancy-model.md) |
 | 事件总线 | PG outbox + poller（v1） | ✅ 已定 | 规模化后评估 Kafka/NATS（Q-A5） |
@@ -172,6 +178,36 @@ Audit Log（全量、不可篡改）
 | 图查询 | PG 递归 CTE（v1） | ✅ 已定 | 留适配层，规模化后切独立图库 |
 | 工作流 | 自研状态机 + 规则 DSL | ✅ 已定 | 见 [08](08-workflow-engine.md) |
 | Agent | 自研 Runtime + MCP 工具协议 | ✅ 已定 | 见 [05](05-agent-runtime.md) |
+| **Agent 执行位置** | **独立 worker 进程**（不在 API 进程内） | ✅ 已定 | Node 单线程事件循环的硬性要求，见下 §7 |
+| 依赖方向校验 | dependency-cruiser（CI 强制） | ✅ 已定 | 落实 FR-ARCH-001 |
 | 部署形态 | 模块化单体（按 BC 分模块） | ⬜ 待定（Q-A4） | 倾向单体优先，按需拆分 |
 
 > 后续选型定稿同样必须落 ADR：`docs/adr/`。
+
+---
+
+## 7. Node 运行时的进程边界（TypeScript 选型的硬性约束）
+
+Node 是单线程事件循环，长时任务会阻塞所有请求。因此**进程边界不是部署细节，是架构约束**：
+
+```
+┌─────────────────┐        ┌──────────────────┐
+│  API 进程        │  队列   │  Agent Worker     │
+│  只做 I/O        │ ──────►│  执行 Agent Run   │
+│  请求 P95 有保障 │        │  可崩溃、可重启    │
+└─────────────────┘        └──────────────────┘
+        │                          │
+        └──────────┬───────────────┘
+                   ▼
+              PostgreSQL
+```
+
+| 约束 | 要求 |
+| --- | --- |
+| Agent Run 不在 API 进程内执行 | 入队后由 worker 消费；worker 崩溃不影响 API 可用性 |
+| `AbortSignal` 全链路贯穿 | 任何超过 1 秒的操作必须可取消（等价于 Go 的 `context.Context`） |
+| 队列显式限长 + 并发上限 | 背压靠拒绝而非堆积；与 FR-AGT-012 预算熔断共用告警 |
+| CPU 密集任务进 worker threads | 编辑幅度计算（FR-DASH-015）、图后处理等 |
+| worker 设堆上限 | `--max-old-space-size`；配合 `blastRadius` 约束单 Run 影响面 |
+
+**验收**：长时 Run 并发运行时，API 进程 P95 时延不受影响。

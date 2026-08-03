@@ -2,11 +2,16 @@
 
 | 项 | 值 |
 | --- | --- |
-| 状态 | Accepted |
+| 状态 | **Superseded** |
 | 日期 | 2026-08-03 |
 | 决策者 | 项目负责人 |
 | 关联需求 | FR-ARCH-001, NFR-PERF-*, NFR-OPS-* |
 | 解决问题 | Q-A1 |
+| 被取代 | [ADR-0007](0007-typescript-server-stack.md)（2026-08-03，同日改用 TypeScript） |
+
+> ⚠️ **本 ADR 已被取代，不再有效。**
+> 服务端语言的当前决策见 [ADR-0007 · 服务端采用 TypeScript](0007-typescript-server-stack.md)。
+> 本文保留作为历史记录——它记录了当时的备选方案对比与权衡，ADR-0007 在此基础上做了反向选择。
 
 ## 背景
 

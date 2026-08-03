@@ -24,7 +24,7 @@
 
 | # | 问题 | 影响 | 建议倾向 | 需在何时定 |
 | --- | --- | --- | --- | --- |
-| ~~Q-A1~~ | ~~服务端语言与框架~~ | — | ✅ **已决：Go 1.22+** → [ADR-0004](../adr/0004-go-server-stack.md) | Resolved 2026-08-03 |
+| ~~Q-A1~~ | ~~服务端语言与框架~~ | — | ✅ **已决：TypeScript / Node 22 LTS** → [ADR-0007](../adr/0007-typescript-server-stack.md)（取代 [ADR-0004](../adr/0004-go-server-stack.md) 的 Go 方案） | Resolved 2026-08-03 |
 | Q-A2 | v1 是否引入独立图数据库？ | 复杂度 vs 查询性能 | 不引入，用 PG 递归 CTE + 物化路径，留适配层 | M0 |
 | Q-A3 | 本体是否采用 RDF/OWL 标准，还是自定义元模型？ | 生态互通 vs 实现复杂度 | 自定义元模型，但保留导出为 RDF 的能力 | M0 |
 | Q-A4 | 单体优先还是微服务优先？ | 早期迭代速度 | 模块化单体（按 BC 分模块），后期按需拆分 | M0 |
@@ -69,7 +69,7 @@
 | 本体先行 | ✅ Resolved | [ADR-0001](../adr/0001-ontology-first.md) |
 | 统一 Resource 模型 | ✅ Resolved | [ADR-0002](../adr/0002-unified-resource-model.md) |
 | Agent 最低权限与临时授权 | ✅ Resolved | [ADR-0003](../adr/0003-agent-least-privilege.md) |
-| Q-A1 服务端语言 | ✅ Resolved | [ADR-0004](../adr/0004-go-server-stack.md) |
+| Q-A1 服务端语言 | ✅ Resolved | [ADR-0007](../adr/0007-typescript-server-stack.md)（0004 已 Superseded） |
 | Q-A6 多租户隔离策略 | ✅ Resolved | [ADR-0005](../adr/0005-tenancy-model.md) |
 | Q-S1 模型数据出境 | ✅ Resolved | [ADR-0006](../adr/0006-model-data-egress.md) |
 | Q-I6 Automation Rate 口径 | ✅ Resolved | [11-dashboard §2](11-dashboard.md) |
@@ -85,7 +85,7 @@
 
 | # | 问题 | 结论 |
 | --- | --- | --- |
-| ✅ Q-A1 | 服务端语言与框架 | Go 1.22+ |
+| ✅ Q-A1 | 服务端语言与框架 | TypeScript / Node 22 LTS |
 | ✅ Q-A6 | 多租户隔离策略 | 共享库 + tenant 列 + RLS；v1 单租户运行 |
 | ✅ Q-I6 | Automation Rate 口径 | L0–L3 分级；L3 = 零编辑 + 7 天未推翻 |
 | ✅ Q-S1 | confidential 数据出境 | 允许，受控 |
