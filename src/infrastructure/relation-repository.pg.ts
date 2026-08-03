@@ -3,7 +3,7 @@ import type { Db } from './db/client.ts'
 import type {
   PathHit,
   RelationRepository,
-  TraverseHit,
+  TraverseResult,
   TraverseSpec,
 } from '../domain/resource/ports.ts'
 import type { RelationInstance, RelationOrigin } from '../ontology/types.ts'
@@ -120,7 +120,7 @@ export class PgRelationRepository implements RelationRepository {
    * `visited` 数组防止环导致的无限递归——需求图里成环是常态
    * （blockedBy 会绕回来），不能假设它是 DAG。
    */
-  async traverse(spec: TraverseSpec): Promise<TraverseHit[]> {
+  async traverse(spec: TraverseSpec): Promise<TraverseResult> {
     // 空列表天然匹配不到任何边，因此不再需要 outward/inward 布尔开关
     const outTypes = spec.followOut as string[]
     const inTypes = spec.followIn as string[]
@@ -174,15 +174,27 @@ export class PgRelationRepository implements RelationRepository {
         WHERE w.depth < ${spec.maxDepth}
           AND NOT (nxt.id = ANY(w.visited))
       )
-      SELECT DISTINCT ON (id) id, type, depth, path
-      FROM walk
-      WHERE depth > 0
-      ORDER BY id, depth ASC
+      SELECT id, type, depth, path FROM (
+        SELECT DISTINCT ON (id) id, type, depth, path
+        FROM walk
+        WHERE depth > 0
+        ORDER BY id, depth ASC
+      ) deduped
+      -- 排序放到 SQL 里：10k 行在 JS 侧排序会占住事件循环，
+      -- 而这台机器上那正是 P95 的主要来源
+      ORDER BY depth ASC, id ASC
+      -- 多取一条用来判断是否被截断，不需要额外的 count 查询
+      LIMIT ${sql.lit(spec.limit + 1)}
     `.execute(this.#db)
 
-    return rows.rows
-      .map((r) => ({ id: r.id, type: r.type, depth: r.depth, path: r.path }))
-      .sort((a, b) => a.depth - b.depth || (a.id < b.id ? -1 : 1))
+    const truncated = rows.rows.length > spec.limit
+    const hits = (truncated ? rows.rows.slice(0, spec.limit) : rows.rows).map((r) => ({
+      id: r.id,
+      type: r.type,
+      depth: r.depth,
+      path: r.path,
+    }))
+    return { hits, truncated }
   }
 
   /**

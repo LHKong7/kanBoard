@@ -177,6 +177,7 @@ describe('graph traversal (FR-ONT-004, FR-RES-007)', () => {
     expect(res.statusCode).toBe(200)
     const items = res.json().items as Array<{ id: string; depth: number; path: string[] }>
 
+    expect(res.json().truncated).toBe(false)
     expect(items.map((i) => i.id)).toEqual([story, task])
     expect(items[0]).toMatchObject({ depth: 1, path: ['implementedBy'] })
     expect(items[1]).toMatchObject({ depth: 2, path: ['implementedBy', 'decomposedInto'] })
@@ -229,6 +230,47 @@ describe('graph traversal (FR-ONT-004, FR-RES-007)', () => {
       payload: { start: req, follow: ['implementedBy'], maxDepth: 3, direction: 'out' },
     })
     expect(res.json().items).toHaveLength(0)
+  })
+
+  it('caps the result and says so, instead of returning an unbounded response', async () => {
+    // 没有上限的遍历不是"偶尔慢"，是没有上界。
+    // 截断本身可以接受，不告诉调用方才不行——他会以为拿到了全部。
+    const project = await create('Project', { key: 'P1', name: 'big' })
+    const kids: string[] = []
+    for (let i = 0; i < 5; i++) {
+      const task = await create('Task', { title: `t${i}` })
+      await relate(project, 'contains', task)
+      kids.push(task)
+    }
+
+    const capped = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:traverse',
+      headers: asAdmin,
+      payload: { start: project, follow: ['contains'], maxDepth: 2, direction: 'out', limit: 2 },
+    })
+    expect(capped.json().items).toHaveLength(2)
+    expect(capped.json().truncated).toBe(true)
+
+    const full = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:traverse',
+      headers: asAdmin,
+      payload: { start: project, follow: ['contains'], maxDepth: 2, direction: 'out', limit: 50 },
+    })
+    expect(full.json().items).toHaveLength(5)
+    expect(full.json().truncated).toBe(false)
+  })
+
+  it('rejects a limit above the hard maximum', async () => {
+    const { req } = await seedChain()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:traverse',
+      headers: asAdmin,
+      payload: { start: req, follow: ['implementedBy'], maxDepth: 2, direction: 'out', limit: 99999 },
+    })
+    expect(res.statusCode).toBe(400)
   })
 
   it('rejects an unknown relation type in follow', async () => {

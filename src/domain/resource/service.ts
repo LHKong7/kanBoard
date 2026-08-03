@@ -35,7 +35,7 @@ import type {
   RelationRepository,
   ResourceFilter,
   ResourceRepository,
-  TraverseHit,
+  TraverseResult,
 } from './ports.ts'
 import { diffResource, VISIBILITIES } from './resource.ts'
 import type { CreateResourceInput, Resource, UpdateResourceInput, Visibility } from './resource.ts'
@@ -675,11 +675,20 @@ export class ResourceService {
 
   async traverse(
     caller: Caller,
-    spec: { start: string; follow: readonly string[]; maxDepth: number; direction: 'out' | 'in' | 'both' },
-  ): Promise<TraverseHit[]> {
+    spec: {
+      start: string
+      follow: readonly string[]
+      maxDepth: number
+      direction: 'out' | 'in' | 'both'
+      limit: number
+    },
+  ): Promise<TraverseResult> {
     await this.get(caller, spec.start)
     if (spec.maxDepth < 1 || spec.maxDepth > 10) {
       throw new ValidationError('maxDepth must be between 1 and 10', { field: 'maxDepth' })
+    }
+    if (spec.limit < 1 || spec.limit > MAX_TRAVERSE_LIMIT) {
+      throw new ValidationError(`limit must be between 1 and ${MAX_TRAVERSE_LIMIT}`, { field: 'limit' })
     }
 
     // 与 relationsOf 同一个道理：沿 `implementedBy` 走时，
@@ -701,6 +710,7 @@ export class ResourceService {
       followOut: [...new Set(followOut)],
       followIn: [...new Set(followIn)],
       maxDepth: spec.maxDepth,
+      limit: spec.limit,
     })
   }
 
@@ -760,6 +770,16 @@ function throwIfNotAllowed(decision: Decision): void {
   }
   throw new ForbiddenError(decision.reason, { matchedPolicy: decision.matchedPolicy ?? null })
 }
+
+/**
+ * 单次遍历返回的节点数硬上限。
+ *
+ * 压测数据：一个 Project 的全后代是 10,100 个节点、1.12MB 响应，
+ * 单请求 300ms，并发 8 时 P95 961ms——Node 单事件循环上，
+ * 序列化这么大的响应会把其他请求一起拖慢。
+ * 上限的意义不是"让这个查询变快"，而是让它**有上界**。
+ */
+export const MAX_TRAVERSE_LIMIT = 5000
 
 /** 把一条边翻转成请求方向的样子，使"正反向查询等价"在返回值上字面成立 */
 function flipRelation(relation: RelationInstance, asType: string): RelationInstance {

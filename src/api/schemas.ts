@@ -77,6 +77,8 @@ export const traverseSchema = z.object({
   follow: z.array(z.string().min(1).max(64)).min(1).max(10),
   maxDepth: z.number().int().min(1).max(10).default(3),
   direction: z.enum(['out', 'in', 'both']).default('out'),
+  /** 返回节点数上限。默认值刻意保守：超出部分由响应里的 truncated 显式告知 */
+  limit: z.number().int().min(1).max(5000).default(500),
 })
 
 export const pathSchema = z.object({

@@ -26,7 +26,8 @@ Idea → Objective → Requirement → Architecture → Implementation
 | [docs/README.md](docs/README.md) | 文档索引与阅读顺序 |
 | [docs/development.md](docs/development.md) | **开发指南**：环境、命令、分层约定 |
 | [docs/m0-status.md](docs/m0-status.md) | **M0 进度**：地基层，已交付与欠账 |
-| [docs/m1-status.md](docs/m1-status.md) | **M1 进度**：工作流引擎、自动化、poller |
+| [docs/m1-status.md](docs/m1-status.md) | **M1 进度**：工作流引擎、自动化、poller、看板 UI |
+| [docs/perf-baseline.md](docs/perf-baseline.md) | **性能基线**：100 万节点实测数据与结论 |
 | [docs/prd/00-overview.md](docs/prd/00-overview.md) | 产品愿景、定位、核心理念、目标用户 |
 | [docs/prd/01-principles.md](docs/prd/01-principles.md) | 四大设计原则 |
 | [docs/prd/02-architecture.md](docs/prd/02-architecture.md) | 总体架构与七层分层 |

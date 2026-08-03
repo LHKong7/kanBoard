@@ -45,6 +45,21 @@ export type TraverseSpec = {
   /** 沿入边走时匹配的关系类型 */
   followIn: readonly string[]
   maxDepth: number
+  /**
+   * 返回节点数上限。
+   *
+   * 没有上限的遍历不是"偶尔慢"，是**没有上界**：项目越大返回越多，
+   * 一个 Project 的全后代在基准里是 10,100 个节点 / 1.12MB。
+   * 上限之外的部分由 `truncated` 显式告知——静默截断比慢更糟，
+   * 调用方会以为自己拿到了全部。
+   */
+  limit: number
+}
+
+export type TraverseResult = {
+  hits: TraverseHit[]
+  /** 命中数超过 limit，返回的是前 limit 个（按深度、id 排序） */
+  truncated: boolean
 }
 
 export type TraverseHit = {
@@ -76,7 +91,7 @@ export interface RelationRepository {
   findById(relationId: string): Promise<RelationInstance | null>
   /** direction=out 查 from_id，in 查 to_id；both 合并 */
   listFor(resourceId: string, direction: 'out' | 'in' | 'both', type?: string): Promise<RelationInstance[]>
-  traverse(spec: TraverseSpec): Promise<TraverseHit[]>
+  traverse(spec: TraverseSpec): Promise<TraverseResult>
   shortestPath(from: string, to: string, maxDepth: number): Promise<PathHit | null>
   setConfirmed(relationId: string, confirmed: boolean): Promise<boolean>
 }

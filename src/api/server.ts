@@ -283,15 +283,18 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
     if (action === 'traverse') {
       const body = traverseSchema.parse(request.body)
-      const items = await inTenant(request, (service, caller) =>
+      const result = await inTenant(request, (service, caller) =>
         service.traverse(caller, {
           start: body.start,
           follow: body.follow,
           maxDepth: body.maxDepth,
           direction: body.direction,
+          limit: body.limit,
         }),
       )
-      return { items }
+      // truncated 必须出现在响应里：被截断而调用方不知道，
+      // 比慢一点严重得多——他会以为自己拿到了全部
+      return { items: result.hits, truncated: result.truncated }
     }
 
     if (action === 'path') {
