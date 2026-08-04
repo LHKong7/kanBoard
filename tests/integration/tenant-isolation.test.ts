@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type pg from 'pg'
+import pg from 'pg'
 import { sql } from 'kysely'
-import { assertNotSuperuser, setupTestDb, truncateAll } from '../helpers/db.ts'
+import { adminUrl, assertNotSuperuser, queryAsTenant, setupTestDb, truncateAll } from '../helpers/db.ts'
 import { createDb, withTenant } from '../../src/infrastructure/db/client.ts'
 import type { Db } from '../../src/infrastructure/db/client.ts'
 
@@ -175,6 +175,87 @@ describe('tenant isolation is enforced by the database, not the application', ()
     for (const row of rows) {
       expect(row.relrowsecurity, `${row.relname} has RLS disabled`).toBe(true)
       expect(row.relforcerowsecurity, `${row.relname} does not FORCE RLS`).toBe(true)
+    }
+  })
+})
+
+/**
+ * 审计与历史是 append-only（FR-IAM-013）。
+ *
+ * 001_foundation.sql 里 `audit_log` 上方一直写着「append-only，永不物理删除」，
+ * 而同一个文件末尾的授权循环给每张表都授了 UPDATE 和 DELETE——
+ * 包括它自己。也就是说这句话此前只是一句话。
+ *
+ * **应用能改写的审计日志不是审计日志**：它的全部价值来自
+ * "发生过的事一定还在里面"。
+ */
+describe('audit and history cannot be rewritten (FR-IAM-013)', () => {
+  const TENANT = 't_alpha'
+
+  async function seedOneAuditRow(): Promise<void> {
+    await withTenant(db, TENANT, async (trx) => {
+      await trx
+        .insertInto('audit_log')
+        .values({
+          tenant: TENANT,
+          subject: 'user://alice',
+          action: 'Task.Create',
+          decision: 'Allow',
+          reason: 'test',
+          occurred_at: new Date(),
+        })
+        .execute()
+    })
+  }
+
+  it('lets the application append', async () => {
+    // 前提：写入本身是通的。不然下面两条"改不了"毫无意义
+    await seedOneAuditRow()
+    const rows = await queryAsTenant(pool, TENANT, 'SELECT 1 FROM audit_log')
+    expect(rows.length).toBeGreaterThan(0)
+  })
+
+  it('refuses an UPDATE from the application role', async () => {
+    // 第一道：权限。应用角色根本没有 UPDATE
+    await seedOneAuditRow()
+    await expect(
+      queryAsTenant(pool, TENANT, `UPDATE audit_log SET decision = 'Deny'`),
+    ).rejects.toThrow(/permission denied/)
+  })
+
+  it('refuses a DELETE from the application role', async () => {
+    await seedOneAuditRow()
+    await expect(queryAsTenant(pool, TENANT, 'DELETE FROM audit_log')).rejects.toThrow(
+      /permission denied/,
+    )
+  })
+
+  it('refuses even a role that holds the grant', async () => {
+    // 第二道：触发器。光收回权限不够——将来给某张表补授权时，
+    // 一句 `GRANT ALL ON ALL TABLES` 就能把第一道悄悄撤销掉。
+    // 触发器是表自己带着的规则，跟着表走，不依赖谁记得
+    await seedOneAuditRow()
+    const owner = new pg.Client({ connectionString: adminUrl() })
+    await owner.connect()
+    try {
+      await expect(owner.query('DELETE FROM audit_log')).rejects.toThrow(/append-only/)
+      await expect(owner.query(`UPDATE audit_log SET decision = 'Deny'`)).rejects.toThrow(
+        /append-only/,
+      )
+    } finally {
+      await owner.end()
+    }
+  })
+
+  it('protects resource history the same way', async () => {
+    // 历史是"谁在什么时候把什么改成了什么"的唯一记录。
+    // 它可改的话，Automation Rate 之类靠回放历史算出来的指标全部失去意义
+    const owner = new pg.Client({ connectionString: adminUrl() })
+    await owner.connect()
+    try {
+      await expect(owner.query('DELETE FROM resource_history')).rejects.toThrow(/append-only/)
+    } finally {
+      await owner.end()
     }
   })
 })
