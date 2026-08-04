@@ -79,6 +79,46 @@ export const querySchema = z.object({
     .optional(),
 }).strict()
 
+/**
+ * `GET /v1/resources` 的查询串。
+ *
+ * 为什么在 `POST :query` 之外还要一条 GET（docs/dogfooding-log.md #5）：
+ * 只有 POST 的话，**看板上任何一个视图都没有 URL**——分享不了、收藏不了、
+ * 浏览器前进后退不工作、HTTP 缓存完全用不上。「把搜索结果发给同事」
+ * 是最基本的协作动作，而它此前做不到。
+ *
+ * GET 只覆盖**放得进查询串的那部分**：类型、工作区、项目、负责人、
+ * 状态、标签、检索词、分页。`attributes` 的任意匹配留在 POST——
+ * 把嵌套 JSON 塞进查询串是这类接口变丑的起点，而且它本来也不是分享场景。
+ * 两条路径调用同一个 `service.query`，行为不会分叉。
+ *
+ * 同样 `.strict()`：查询串写错一个参数就 400。
+ * 被静默忽略的 `?stauts=Done` 会安安静静地返回全部结果——正是 #1 那个坑。
+ */
+const csvOrRepeated = z
+  .union([z.string(), z.array(z.string())])
+  // `?status=A&status=B` 与 `?status=A,B` 都支持：前者是 HTML 表单的习惯，
+  // 后者是手写 URL 的习惯，没有理由逼使用者记住我们挑了哪一种
+  .transform((v) => (Array.isArray(v) ? v : v.split(',')).map((s) => s.trim()).filter((s) => s !== ''))
+  .pipe(z.array(z.string().max(64)).min(1).max(20))
+
+export const queryParamsSchema = z
+  .object({
+    type: z.string().max(64).optional(),
+    workspace: z.string().max(64).optional(),
+    project: resourceIdSchema.optional(),
+    owner: z.string().max(256).optional(),
+    status: csvOrRepeated.optional(),
+    labels: csvOrRepeated.optional(),
+    text: z.string().min(1).max(256).optional(),
+    // 查询串里的一切都是字符串。写成枚举而不是 z.coerce.boolean()：
+    // 后者会把 "false" 也当成真，那正是"看起来成功的错误答案"
+    includeDeleted: z.enum(['true', 'false']).optional(),
+    size: z.coerce.number().int().min(1).max(200).optional(),
+    cursor: z.string().max(64).optional(),
+  })
+  .strict()
+
 export const relateSchema = z.object({
   type: z.string().min(1).max(64),
   toId: resourceIdSchema,

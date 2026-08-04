@@ -511,6 +511,122 @@ describe('search (FR-RES-016)', () => {
  * 142 条需求被翻成 1000 条重复结果——调用方没有任何办法察觉。
  * 宽松解析在这里买不到兼容性，只买到"看起来成功的错误答案"。
  */
+/**
+ * 可分享的读路径（docs/dogfooding-log.md #5）。
+ *
+ * 此前列表只有 `POST /v1/resources:query`，于是看板上任何一个视图都没有 URL：
+ * 分享不了、收藏不了、前进后退不工作。这组用例锁住的是
+ * **GET 与 POST 是同一份行为**——两条路径分叉的话，能分享的那条就会慢慢变得不可信。
+ */
+describe('GET /v1/resources gives read paths a URL (dogfooding #5)', () => {
+  beforeEach(async () => {
+    for (let i = 0; i < 5; i++) {
+      await app.inject({
+        method: 'POST',
+        url: '/v1/resources',
+        headers: asRD,
+        payload: {
+          type: 'Task',
+          workspace: 'ws_platform',
+          labels: i < 2 ? ['q3'] : ['q4'],
+          attributes: { title: `任务 ${i}`, description: i === 0 ? '状态机相关' : '' },
+        },
+      })
+    }
+  })
+
+  const get = async (qs: string) => app.inject({ method: 'GET', url: `/v1/resources${qs}`, headers: asRD })
+
+  it('returns the same result as the equivalent POST :query', async () => {
+    const viaGet = await get('?type=Task&labels=q3')
+    const viaPost = await app.inject({
+      method: 'POST',
+      url: '/v1/resources:query',
+      headers: asRD,
+      payload: { type: 'Task', filter: { labels: ['q3'] } },
+    })
+    expect(viaGet.statusCode).toBe(200)
+    expect(viaGet.json().items.map((i: { id: string }) => i.id)).toEqual(
+      viaPost.json().items.map((i: { id: string }) => i.id),
+    )
+  })
+
+  it('accepts repeated params and comma-separated lists alike', async () => {
+    // 手写 URL 的人写逗号，表单提交的是重复参数。没理由逼人记住我们挑了哪种。
+    // 注意标签是**与**语义（底层是数组包含 `@>`），不是或——
+    // 两个标签同时要求时，只带一个标签的对象不匹配。这条容易想反，所以在这里钉住
+    const repeated = await get('?type=Task&labels=q3&labels=q4')
+    const csv = await get('?type=Task&labels=q3,q4')
+    expect(repeated.json().items).toHaveLength(0)
+    expect(csv.json().items).toHaveLength(0)
+
+    const single = await get('?type=Task&labels=q3')
+    expect(single.json().items).toHaveLength(2)
+    expect(single.json().items.map((i: { id: string }) => i.id)).toEqual(
+      (await get('?type=Task&labels=q3,q3')).json().items.map((i: { id: string }) => i.id),
+    )
+  })
+
+  it('supports search, so a search result has a URL', async () => {
+    const res = await get('?type=Task&text=' + encodeURIComponent('状态机'))
+    expect(res.json().items).toHaveLength(1)
+  })
+
+  it('paginates with a cursor that actually advances', async () => {
+    const seen = new Set<string>()
+    let cursor: string | undefined
+    for (let page = 0; page < 10; page++) {
+      const res = await get(`?type=Task&size=2${cursor === undefined ? '' : `&cursor=${cursor}`}`)
+      for (const item of res.json().items) seen.add(item.id)
+      cursor = res.json().nextCursor ?? undefined
+      if (cursor === undefined) break
+    }
+    expect(seen.size).toBe(5)
+  })
+
+  it('rejects a misspelled parameter instead of ignoring it', async () => {
+    // 被静默忽略的 ?stauts=Done 会安静地返回全部结果——正是 #1 那个坑
+    const res = await get('?type=Task&stauts=Done')
+    expect(res.statusCode).toBe(400)
+    expect(res.json().details.map((d: { path: string }) => d.path)).toContain('stauts')
+  })
+
+  it('does not treat includeDeleted=false as true', async () => {
+    // z.coerce.boolean() 会把字符串 "false" 判为真。那是"看起来成功的错误答案"
+    const current = await get('?type=Task&size=1')
+    const one = current.json().items[0]
+    await app.inject({
+      method: 'DELETE',
+      url: `/v1/resources/${one.id}`,
+      headers: { ...asRD, 'if-match': `"${one.version}"` },
+    })
+    expect((await get('?type=Task&includeDeleted=false')).json().items).toHaveLength(4)
+    expect((await get('?type=Task&includeDeleted=true')).json().items).toHaveLength(5)
+  })
+
+  it('goes through the PDP, exactly like the POST path', async () => {
+    // 新开一条读路径最容易犯的错：绕过授权。
+    //
+    // 默认策略里 `pol-member-read` 给了租户内所有人 `*.Read`，
+    // 所以拿不到一个"读被拒"的用例。改为直接断言**判定发生过**：
+    // 审计里必须留下这次 Task.Read。绕过 #authorize 的实现会让这条红。
+    await app.inject({ method: 'GET', url: '/v1/resources?type=Task', headers: asRD })
+
+    const audits = await queryAsTenant<{ action: string; decision: string; subject: string }>(
+      pool,
+      TENANT,
+      `SELECT action, decision, subject FROM audit_log WHERE action = 'Task.Read'`,
+    )
+    expect(audits.length).toBeGreaterThan(0)
+    expect(audits.some((a) => a.subject === 'user://bob' && a.decision === 'Allow')).toBe(true)
+  })
+
+  it('refuses an unauthenticated read', async () => {
+    const res = await app.inject({ method: 'GET', url: '/v1/resources?type=Task' })
+    expect(res.statusCode).toBe(401)
+  })
+})
+
 describe('malformed request bodies are rejected, not silently trimmed (dogfooding #1)', () => {
   beforeEach(async () => {
     for (let i = 0; i < 5; i++) {

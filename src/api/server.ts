@@ -22,6 +22,7 @@ import {
   createResourceSchema,
   pathSchema,
   querySchema,
+  queryParamsSchema,
   confirmRelationSchema,
   relateSchema,
   relationDirectionSchema,
@@ -233,6 +234,33 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
           text: body.filter?.text,
         },
         { size: body.page?.size ?? 50, cursor: body.page?.cursor },
+      ),
+    )
+    return { items: result.items.map(toWire), nextCursor: result.nextCursor }
+  })
+
+  /**
+   * 可分享的读路径（docs/dogfooding-log.md #5）。
+   *
+   * 和 `POST :query` 共用同一个 `service.query`，只是把参数从请求体挪到查询串——
+   * 这样一个看板视图才有 URL。共用一条实现，两者的行为不可能分叉。
+   */
+  app.get('/v1/resources', async (request) => {
+    const q = queryParamsSchema.parse(request.query ?? {})
+    const result = await inTenant(request, (service, caller) =>
+      service.query(
+        caller,
+        {
+          type: q.type,
+          workspace: q.workspace,
+          project: q.project,
+          owner: q.owner,
+          status: q.status,
+          labels: q.labels,
+          text: q.text,
+          includeDeleted: q.includeDeleted === 'true',
+        },
+        { size: q.size ?? 50, cursor: q.cursor },
       ),
     )
     return { items: result.items.map(toWire), nextCursor: result.nextCursor }

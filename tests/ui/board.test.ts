@@ -71,10 +71,20 @@ after(async () => {
   await pool?.end()
 })
 
+/**
+ * 打开某个类型的看板。
+ *
+ * 直接用 URL 导航，而不是"打开首页再点标签页"。
+ * 点击那条路径有一个真实的竞态：`renderTabs` 是同步的，
+ * `refresh()` 是异步的，于是 `aria-selected` 已经变成新类型时，
+ * 列还是旧类型的——`waitForSelector('.column')` 立刻命中旧列，
+ * 断言读到上一个类型的列名。这条用例因此偶发性变红过两次。
+ *
+ * 视图现在由 URL 决定（自用日志 #5），整页加载后不存在中间态。
+ * 点击切换本身另有一条专门的用例覆盖。
+ */
 async function openBoard(type = 'Task'): Promise<void> {
-  await page.goto(`${baseUrl}/`)
-  await page.waitForSelector('.column')
-  await page.click(`.type-tab:text-is("${type}")`)
+  await page.goto(`${baseUrl}/?type=${encodeURIComponent(type)}`)
   await page.waitForFunction(
     (t) => document.querySelector('.type-tab[aria-selected="true"]')?.textContent === t,
     type,
@@ -493,11 +503,9 @@ describe('搜索', () => {
     await seed('锚定词 kanaria 的任务')
     await openBoard('Task')
 
-    const bodies: string[] = []
+    const urls: string[] = []
     const record = (request: import('playwright').Request) => {
-      if (request.url().includes('/v1/resources:query') && request.method() === 'POST') {
-        bodies.push(request.postData() ?? '')
-      }
+      if (request.url().includes('/v1/resources?')) urls.push(request.url())
     }
     page.on('request', record)
     try {
@@ -510,8 +518,8 @@ describe('搜索', () => {
     }
 
     assert.ok(
-      bodies.some((b) => JSON.parse(b).filter?.text === 'kanaria'),
-      `没有一个 :query 请求带上 filter.text，说明过滤是在前端做的：${JSON.stringify(bodies)}`,
+      urls.some((u) => new URL(u).searchParams.get('text') === 'kanaria'),
+      `没有一个读请求带上 text=，说明过滤是在前端做的：${JSON.stringify(urls)}`,
     )
   })
 
@@ -604,5 +612,78 @@ describe('建关系时能筛选候选对象', () => {
       { timeout: 5000 },
     )
     await page.click('#modalClose')
+  })
+})
+
+/**
+ * 视图有 URL（docs/dogfooding-log.md #5）。
+ *
+ * 此前看板的类型和搜索词只活在内存里：分享不了、收藏不了、前进后退不工作。
+ * 「把搜索结果发给同事」是最基本的协作动作，而它做不到。
+ */
+describe('看板视图可以分享', () => {
+  it('把链接粘过来就是同一个视图', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: { type: 'Task', workspace: 'ws_url', attributes: { title: '可分享的目标 sharable' } },
+    })
+
+    // 完全模拟"收到一条链接直接打开"：不点任何东西
+    await page.goto(`${baseUrl}/?type=Task&q=sharable`)
+    await page.waitForFunction(() => document.querySelectorAll('.card').length === 1, undefined, {
+      timeout: 5000,
+    })
+
+    assert.equal(await page.locator('#searchInput').inputValue(), 'sharable')
+    assert.match((await page.locator('.card').first().textContent()) ?? '', /sharable/)
+  })
+
+  it('切换类型会写进地址栏，后退键能回去', async () => {
+    // 这条同时覆盖点击切换本身——openBoard 已经改成直接用 URL 导航
+    await openBoard('Task')
+    await page.click('.type-tab:text-is("Requirement")')
+    await page.waitForFunction(
+      () => document.querySelector('.type-tab[aria-selected="true"]')?.textContent === 'Requirement',
+    )
+    assert.equal(new URL(page.url()).searchParams.get('type'), 'Requirement')
+
+    await page.goBack()
+    // 等列真的重画完再断言：标签页是同步更新的，refresh() 是异步的，
+    // 只等标签页会读到上一个类型的列——openBoard 当初就栽在这里
+    await page.waitForFunction(
+      () => document.querySelector('.column .column-head > span')?.textContent === 'Todo',
+      undefined,
+      { timeout: 5000 },
+    )
+    assert.deepEqual(await columnNames(), [
+      'Todo', 'Doing', 'Review', 'Testing', 'Blocked', 'Done', 'Cancelled',
+    ])
+  })
+
+  it('搜索不会在历史里堆一串记录', async () => {
+    // 每敲一个字都 pushState 的话，后退键要按二十次才出得去
+    await openBoard('Task')
+    await page.fill('#searchInput', 'abc')
+    await page.waitForFunction(() => new URL(location.href).searchParams.get('q') === 'abc', undefined, {
+      timeout: 5000,
+    })
+    await page.fill('#searchInput', 'abcd')
+    await page.waitForFunction(() => new URL(location.href).searchParams.get('q') === 'abcd', undefined, {
+      timeout: 5000,
+    })
+
+    // 一次后退就该跳过中间那次输入。断言"不是 abc"而不是断言具体退到了哪儿——
+    // 上一条历史是什么取决于前面的用例，钉死它只会让用例互相牵连
+    await page.goBack()
+    assert.notEqual(new URL(page.url()).searchParams.get('q'), 'abc')
+  })
+
+  it('URL 里写了不存在的类型时退回第一个，而不是留在空白看板', async () => {
+    await page.goto(`${baseUrl}/?type=Wormhole`)
+    await page.waitForSelector('.column')
+    const selected = await page.locator('.type-tab[aria-selected="true"]').textContent()
+    assert.ok(selected !== null && selected !== '')
   })
 })

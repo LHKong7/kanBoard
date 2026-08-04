@@ -151,10 +151,52 @@ async function bootstrap() {
 
   // 只展示有生命周期的类型：没有状态机的对象没有列可分
   const boardable = state.entityTypes.filter((t) => lifecycleFor(t.name) !== undefined)
-  state.activeType = boardable[0]?.name ?? ''
+  boardableTypes = boardable
+
+  // URL 决定初始视图，不是代码里的默认值。粘一条链接过来要能看到同样的东西
+  applyUrl(new URLSearchParams(location.search), boardable)
   renderTabs(boardable)
   await refresh()
 }
+
+/** 当前可上看板的类型。前进后退时要重新渲染标签页，所以存下来 */
+let boardableTypes = []
+
+/**
+ * URL ⇄ 视图状态（docs/dogfooding-log.md #5）。
+ *
+ * 此前看板的类型和搜索词只活在内存里：一个视图没有 URL，
+ * 分享不了、收藏不了、前进后退不工作。
+ * URL 是**唯一事实来源**——先改地址栏，再由它决定渲染什么，
+ * 两边各存一份状态迟早会对不上。
+ */
+function applyUrl(params, boardable) {
+  const wanted = params.get('type')
+  const valid = boardable.some((t) => t.name === wanted)
+  // URL 里写了个不存在的类型就退回第一个，而不是留在空白看板上
+  state.activeType = valid ? wanted : (boardable[0]?.name ?? '')
+  state.search = params.get('q') ?? ''
+  el.searchInput.value = state.search
+}
+
+/** 把当前视图写回地址栏。`replace` 用于不该在历史里留一条记录的变化（如输入中的搜索） */
+function syncUrl(replace = false) {
+  const params = new URLSearchParams()
+  if (state.activeType !== '') params.set('type', state.activeType)
+  if (state.search !== '') params.set('q', state.search)
+  const qs = params.toString()
+  const url = qs === '' ? location.pathname : `${location.pathname}?${qs}`
+  if (url === location.pathname + location.search) return
+  history[replace ? 'replaceState' : 'pushState']({}, '', url)
+}
+
+// 前进/后退：地址变了就照着地址重新渲染
+window.addEventListener('popstate', async () => {
+  applyUrl(new URLSearchParams(location.search), boardableTypes)
+  renderTabs(boardableTypes)
+  closeDrawer()
+  await refresh()
+})
 
 function lifecycleFor(typeName) {
   return state.lifecycles.find((l) => l.entityType === typeName)
@@ -169,6 +211,8 @@ function renderTabs(types) {
       btn.setAttribute('aria-selected', String(t.name === state.activeType))
       btn.onclick = async () => {
         state.activeType = t.name
+        // 切换类型是一次导航，该在历史里留一条——后退键要能回到上一个看板
+        syncUrl()
         renderTabs(types)
         closeDrawer()
         await refresh()
@@ -182,17 +226,14 @@ function renderTabs(types) {
 
 async function refresh() {
   if (state.activeType === '') return
-  // 检索交给服务端做，不在前端过滤已加载的 200 条——
+  // 走 GET 而不是 POST :query。
+  //
+  // 一是我们自己就该用那条可分享的读路径——加了不用等于没加；
+  // 二是检索交给服务端做，不在前端过滤已加载的 200 条：
   // 那样搜到的永远只是"最近 200 条里的"，而用户以为搜的是全部。
-  const filter = state.search === '' ? undefined : { text: state.search }
-  const result = await api('/v1/resources:query', {
-    method: 'POST',
-    body: JSON.stringify({
-      type: state.activeType,
-      ...(filter === undefined ? {} : { filter }),
-      page: { size: 200 },
-    }),
-  })
+  const params = new URLSearchParams({ type: state.activeType, size: '200' })
+  if (state.search !== '') params.set('text', state.search)
+  const result = await api(`/v1/resources?${params}`)
   state.items = result.items
   state.truncated = result.nextCursor !== null
   renderBoard()
@@ -673,14 +714,9 @@ async function openRelationModal(item) {
     const options = []
     let truncated = false
     for (const type of def?.range ?? []) {
-      const result = await api('/v1/resources:query', {
-        method: 'POST',
-        body: JSON.stringify({
-          type,
-          ...(term === '' ? {} : { filter: { text: term } }),
-          page: { size: 50 },
-        }),
-      })
+      const picker = new URLSearchParams({ type, size: '50' })
+      if (term !== '') picker.set('text', term)
+      const result = await api(`/v1/resources?${picker}`)
       if (result.nextCursor !== null) truncated = true
       for (const candidate of result.items) {
         if (candidate.id === item.id) continue // 自环被数据库约束挡住，不如先别列出来
@@ -1158,6 +1194,8 @@ el.searchInput.addEventListener('input', () => {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(async () => {
     state.search = el.searchInput.value.trim()
+    // replace 而不是 push：每敲一个字都进历史的话，后退键要按二十次才出得去
+    syncUrl(true)
     try {
       await refresh()
     } catch (error) {
@@ -1172,6 +1210,7 @@ el.searchInput.addEventListener('keydown', (event) => {
   event.stopPropagation()
   el.searchInput.value = ''
   state.search = ''
+  syncUrl(true)
   void refresh()
 })
 el.drawerClose.onclick = closeDrawer
