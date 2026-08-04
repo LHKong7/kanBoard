@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
+import { join } from 'node:path'
 
 /**
  * `docs/prd-coverage.md` 的合计必须等于各行之和。
@@ -9,10 +10,15 @@ import { readFile } from 'node:fs/promises'
  * 这份文档存在的全部意义是"诚实地报进度"。一个会悄悄漂移的数字
  * 比没有这个数字更糟：它看起来经过了核对。
  *
+ * 顺带核对每个模块的 **Must 条数**是不是真的等于 PRD 里 M 的数量。
+ * 这一列原本是手数出来的，而"表里写 9 条、PRD 其实 11 条"这种错
+ * 会让覆盖率显得比实际高，且永远不会有人发现。
+ *
  *   node --experimental-strip-types tools/check-coverage-total.ts
  */
 
 const DOC = 'docs/prd-coverage.md'
+const PRD_DIR = 'docs/prd'
 
 export type CoverageRow = { label: string; must: number; delivered: number }
 
@@ -70,13 +76,44 @@ export async function checkCoverage(path = DOC): Promise<CoverageCheck> {
       )
     }
   }
+  const declared = await mustCountsFromPrd()
   for (const row of rows) {
     if (row.delivered > row.must) {
       problems.push(`${row.label}: delivered ${row.delivered} exceeds Must ${row.must}`)
     }
+    // 行首形如「WF 工作流」「AGT Agent」，取第一个词当模块代号
+    const code = (row.label.split(/\s+/)[0] ?? '').toUpperCase()
+    const actual = declared.get(code)
+    if (actual === undefined) {
+      problems.push(`${row.label}: no FR-${code}-* requirements found in ${PRD_DIR}`)
+    } else if (actual !== row.must) {
+      problems.push(`${row.label}: table says ${row.must} Must but the PRD has ${actual}`)
+    }
   }
 
   return { rows, stated, computed, problems }
+}
+
+/** 从 PRD 的需求表里数出每个模块的 Must 条数 */
+async function mustCountsFromPrd(dir = PRD_DIR): Promise<Map<string, number>> {
+  const counts = new Map<string, number>()
+  const seen = new Set<string>()
+  for (const name of await readdir(dir)) {
+    if (!name.endsWith('.md')) continue
+    for (const line of (await readFile(join(dir, name), 'utf8')).split('\n')) {
+      const match = /^\|\s*(FR-([A-Z]+)-\d+)\s*\|(.*)$/.exec(line.trim())
+      if (match === null) continue
+      const id = match[1] ?? ''
+      // 同一个编号在两处出现过的话，数出来的条数会翻倍
+      if (seen.has(id)) continue
+      seen.add(id)
+      const cells = (match[3] ?? '').split('|').map((c) => c.trim())
+      if (cells[1] !== 'M') continue
+      const code = match[2] ?? ''
+      counts.set(code, (counts.get(code) ?? 0) + 1)
+    }
+  }
+  return counts
 }
 
 function toInt(cell: string | undefined): number | null {
