@@ -68,7 +68,7 @@ export class ConnectorGateway {
     }))
   }
 
-  async invoke(caller: Caller, input: CallInput): Promise<CallResult> {
+  async invoke(caller: Caller, input: CallInput, signal?: AbortSignal): Promise<CallResult> {
     const connector = this.#deps.connectors.find((c) => c.spec.id === input.connectorId)
     if (connector === undefined) {
       throw new DomainError('not_found', `unknown connector: ${input.connectorId}`, 404, {
@@ -149,7 +149,7 @@ export class ConnectorGateway {
         ? null
         : await this.#deps.secrets.get(connector.spec.credentialRef)
 
-    const { data, attempts } = await this.#callWithRetry(connector, input, secret)
+    const { data, attempts } = await this.#callWithRetry(connector, input, secret, signal)
 
     if (mutating && input.idempotencyKey !== undefined) {
       await this.#deps.callLog.save({
@@ -237,13 +237,22 @@ export class ConnectorGateway {
     connector: Connector,
     input: CallInput,
     secret: string | null,
+    signal?: AbortSignal,
   ): Promise<{ data: unknown; attempts: number }> {
     const { maxRetries, breakAfterFailures, breakForMs } = connector.spec.limits
     let lastError: unknown
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      // 取消之后不再重试。退避重试最长能拖好几秒，
+      // 而"取消了还在重试"正是取消看起来没生效的样子
+      if (signal?.aborted === true) {
+        throw new DomainError('cancelled', 'call cancelled before completing', 499, {
+          connector: connector.spec.id,
+          attempts: attempt,
+        })
+      }
       try {
-        const data = await connector.execute(input, secret)
+        const data = await connector.execute(input, secret, signal)
         this.#breakers.delete(connector.spec.id)
         return { data, attempts: attempt + 1 }
       } catch (error) {

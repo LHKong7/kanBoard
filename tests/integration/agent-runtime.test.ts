@@ -537,3 +537,137 @@ describe('blast radius is the last gate (FR-IAM-012)', () => {
     void run
   })
 })
+
+/**
+ * 全链路可取消（FR-ARCH-011）。
+ *
+ * 验收标准原文："取消进行中的 Run，含 Connector 调用在 5 秒内全部停止"。
+ * 五秒这个数字的意思是：**不能等最后一次推理自然结束**。
+ */
+describe('a run can be cancelled (FR-ARCH-011)', () => {
+  const propose = (title: string): ScriptedTurn => ({
+    thought: `拆一个：${title}`,
+    action: { kind: 'propose', resourceType: 'Story', attributes: { title }, rationale: 'r' },
+  })
+
+  it('stops before doing any more work when the signal is already aborted', async () => {
+    const { run } = await seedRun('Autonomous', { attributes: { maxSteps: 8 } })
+
+    let outcome: RunResult['outcome'] | null = null
+    const runner = runnerWith(
+      new ScriptedModelClient([propose('A'), propose('B'), FINISH]),
+      (_r, result) => { outcome = result.outcome },
+    )
+    runner.stop() // 置位取消信号
+    await runner.pollOnce()
+
+    expect(outcome).not.toBeNull()
+    expect(outcome!.kind).toBe('cancelled')
+    // 一个对象都不该被创建
+    const stories = await app.inject({
+      method: 'GET',
+      url: '/v1/resources?type=Story',
+      headers: asAdmin,
+    })
+    expect(stories.json().items).toHaveLength(0)
+    void run
+  })
+
+  it('lands the run in Cancelled, not Failed', async () => {
+    // 都记成失败的话，"这批 Run 为什么这么多失败"就永远问不清楚
+    const { run } = await seedRun('Autonomous', { attributes: { maxSteps: 8 } })
+    const runner = runnerWith(new ScriptedModelClient([propose('A'), FINISH]))
+    runner.stop()
+    await runner.pollOnce()
+
+    expect((await get(run.id)).status).toBe('Cancelled')
+    expect(String((await get(run.id)).attributes.outcome)).toMatch(/被取消/)
+  })
+
+  it('leaves an uncancelled run completely alone', async () => {
+    // 取消的实现最容易出的问题是"顺手把没取消的也停了"
+    const { run } = await seedRun('Autonomous', { attributes: { maxSteps: 8 } })
+    await runnerWith(new ScriptedModelClient([propose('A'), FINISH])).pollOnce()
+    expect((await get(run.id)).status).toBe('Succeeded')
+  })
+
+  it('refuses to keep retrying a connector call after cancellation', async () => {
+    // 退避重试最长能拖好几秒。"取消了还在重试"正是取消看起来没生效的样子
+    const aborter = new AbortController()
+    aborter.abort()
+
+    let attempts = 0
+    const invoker: ConnectorInvoker = {
+      async invoke(_caller, _input, signal) {
+        attempts++
+        if (signal?.aborted === true) {
+          throw new DomainError('cancelled', 'call cancelled before completing', 499)
+        }
+        return { ok: true, data: {}, attempts: 1, replayed: false }
+      },
+    }
+
+    const { run } = await seedRun('Autonomous', { attributes: { maxSteps: 4 } })
+    const runner = runnerWith(new ScriptedModelClient([FINISH]), undefined, invoker)
+    runner.stop()
+    await runner.pollOnce()
+
+    // 取消之后一次工具调用都不该发生
+    expect(attempts).toBe(0)
+    void run
+  })
+})
+
+/**
+ * 跨进程取消（FR-ARCH-011）。
+ *
+ * 运行 Run 的是 runner 进程，点"取消"的是 API 进程。
+ * 两者之间没有消息通道（ADR-0008 模块化单体），所以取消只能通过
+ * **库里那条 Run 的状态**传递：运行时在步与步之间回读一次。
+ */
+describe('cancelling a specific run across processes (FR-ARCH-011)', () => {
+  const propose = (title: string): ScriptedTurn => ({
+    thought: `拆一个：${title}`,
+    action: { kind: 'propose', resourceType: 'Story', attributes: { title }, rationale: 'r' },
+  })
+
+  it('notices that someone moved the run to Cancelled mid-flight', async () => {
+    const { run } = await seedRun('Autonomous', { attributes: { maxSteps: 8 } })
+
+    // 模型第一步就把这条 Run 取消掉——模拟"另一个进程点了取消"
+    let cancelledOnce = false
+    const model: ModelClient = {
+      async complete() {
+        if (!cancelledOnce) {
+          cancelledOnce = true
+          const res = await app.inject({
+            method: 'POST',
+            url: `/v1/resources/${run.id}/transitions`,
+            headers: asAdmin,
+            payload: { to: 'Cancelled' },
+          })
+          if (res.statusCode !== 200) throw new Error(`cancel failed: ${res.body}`)
+        }
+        return {
+          thought: '继续',
+          action: { kind: 'propose', resourceType: 'Story', attributes: { title: 'X' }, rationale: 'r' },
+          tokensUsed: 10,
+          costUsd: 0.01,
+        }
+      },
+    }
+
+    let outcome: RunResult['outcome'] | null = null
+    await runnerWith(model, (_r, result) => { outcome = result.outcome }).pollOnce()
+
+    expect(outcome!.kind).toBe('cancelled')
+    // 取消之后不该再写回：那是在做一件已经被叫停的事
+    const stories = await app.inject({
+      method: 'GET',
+      url: '/v1/resources?type=Story',
+      headers: asAdmin,
+    })
+    expect(stories.json().items).toHaveLength(0)
+    void propose
+  })
+})

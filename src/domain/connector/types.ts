@@ -119,7 +119,13 @@ export type CallResult = {
  */
 export interface Connector {
   readonly spec: ConnectorSpec
-  execute(input: CallInput, secret: string | null): Promise<unknown>
+  /**
+   * `signal` 必须被适配器传给它底层的 HTTP 客户端（FR-ARCH-011）。
+   *
+   * 只在网关这一层查信号是不够的：一次挂住的外部请求可以卡上几分钟，
+   * 而验收标准要求取消在 5 秒内生效。信号必须一路传到真正等待的地方。
+   */
+  execute(input: CallInput, secret: string | null, signal?: AbortSignal): Promise<unknown>
 }
 
 /**

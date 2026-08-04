@@ -143,6 +143,13 @@ export type RunOutcome =
   /** 影响面触顶（FR-IAM-012）。与超预算分开，因为要采取的行动完全不同 */
   | { kind: 'blast-radius-exceeded'; limit: number; touched: number }
   | { kind: 'failed'; reason: string }
+  /**
+   * 被取消（FR-ARCH-011）。
+   *
+   * 与 `failed` 分开：取消是有人**要求**它停下来，失败是它自己走不下去。
+   * 混成一种的话，"这批 Run 为什么这么多失败"就永远问不清楚。
+   */
+  | { kind: 'cancelled'; afterSteps: number }
 
 export type RunResult = {
   outcome: RunOutcome

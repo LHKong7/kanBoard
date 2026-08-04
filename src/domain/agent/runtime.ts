@@ -25,7 +25,8 @@ import type {
  * 拿不到 connector 列表，也碰不到凭据。
  */
 export interface ConnectorInvoker {
-  invoke(caller: Caller, input: CallInput): Promise<CallResult>
+  /** `signal` 一路传到真正等待的地方，否则一次挂住的外部请求会拖住取消（FR-ARCH-011） */
+  invoke(caller: Caller, input: CallInput, signal?: AbortSignal): Promise<CallResult>
 }
 
 /**
@@ -61,6 +62,14 @@ export type RuntimeDeps = {
   /** Context 装配的深度与段数上限 */
   contextDepth?: number
   contextLimit?: number
+  /**
+   * 取消信号（FR-ARCH-011）。
+   *
+   * 在步与步之间、以及每次写回之前检查。**不在模型调用中途打断**——
+   * 那一次调用的钱已经花了，硬断只会让它的用量丢失，
+   * 而"取消掉的 Run 花了多少"正是最该问清楚的。
+   */
+  signal?: AbortSignal
   /**
    * 单次 Run 允许影响的对象数上限（FR-IAM-012 blastRadius）。
    *
@@ -159,8 +168,36 @@ export class AgentRuntime {
       truncated: context.truncated,
     })
 
+    /**
+     * 这次 Run 是不是该停了。
+     *
+     * 两个来源：
+     *   ① 进程内的 AbortSignal——关停时打断在途的 Run。
+     *   ② **库里这条 Run 的状态**——有人把它迁到了 Cancelled。
+     *
+     * 第二条是跨进程取消的实现方式。它多花一次主键读，
+     * 而这一步本来就要发一次模型调用，代价可以忽略。
+     * 换成进程间广播的话，消息丢了没人知道，表现是"点了取消但它还在跑"
+     * ——和 ADR-0008 里拒绝广播失效的理由是同一个。
+     */
+    const cancelled = async (): Promise<boolean> => {
+      if (this.#deps.signal?.aborted === true) return true
+      const current = await this.#deps.service.get(caller, run.id)
+      return current.status === 'Cancelled'
+    }
+
     // ── 推理循环 ────────────────────────────────────────
     for (let step = 0; step < spec.budget.maxSteps; step++) {
+      if (await cancelled()) {
+        await record('guardrail', '收到取消信号，停止', { afterSteps: step })
+        return {
+          outcome: { kind: 'cancelled', afterSteps: step },
+          steps: seq,
+          tokensUsed,
+          costUsd,
+          proposals,
+        }
+      }
       const response = await this.#deps.model.complete({
         tier: spec.tier,
         system: spec.system,
@@ -233,6 +270,19 @@ export class AgentRuntime {
             limit: spec.budget.maxObjectsPerRun,
             touched: touched.size,
           },
+          steps: seq,
+          tokensUsed,
+          costUsd,
+          proposals,
+        }
+      }
+
+      // 取消之后**不再写回**。模型这一步已经算完了，钱花了，
+      // 但把结果落库就是在做一件已经被叫停的事
+      if (await cancelled()) {
+        await record('guardrail', '收到取消信号，放弃本次写回', { afterSteps: step + 1 })
+        return {
+          outcome: { kind: 'cancelled', afterSteps: step + 1 },
           steps: seq,
           tokensUsed,
           costUsd,
@@ -321,7 +371,7 @@ export class AgentRuntime {
         target: action.target,
         params: action.params,
         ...(action.idempotencyKey === undefined ? {} : { idempotencyKey: action.idempotencyKey }),
-      })
+      }, this.#deps.signal)
       await record('tool', `${action.connectorId}.${action.operation} → ${action.target}`, {
         // 记的是网关脱敏之后的结果：轨迹会被人看、被导出，不该成为泄漏点
         replayed: result.replayed,

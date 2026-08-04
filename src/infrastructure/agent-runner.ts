@@ -58,6 +58,13 @@ export class AgentRunner {
   readonly #deps: AgentRunnerDeps
   readonly #db: Db
   #stopped = false
+  /**
+   * 关停时用来打断在途的 Run（FR-ARCH-011）。
+   *
+   * 没有它的话，`stop()` 只是"不再认领新的"，进程会一直等到
+   * 最后一次推理跑完——而那可能是几分钟。验收标准写的是 5 秒内停止。
+   */
+  #aborter = new AbortController()
 
   constructor(deps: AgentRunnerDeps) {
     this.#deps = deps
@@ -174,6 +181,7 @@ export class AgentRunner {
             clock,
             ...(this.#deps.connectors === undefined ? {} : { connectors: this.#deps.connectors }),
             ...(this.#deps.blastRadius === undefined ? {} : { blastRadius: this.#deps.blastRadius }),
+            signal: this.#aborter.signal,
           })
           result = await runtime.execute(agentCaller, run)
         } catch (error) {
@@ -227,12 +235,24 @@ export class AgentRunner {
         ? 'Succeeded'
         : result.outcome.kind === 'awaiting-review'
           ? 'AwaitingReview'
-          : 'Failed'
+          // 被取消的 Run 落在 Cancelled 而不是 Failed（FR-ARCH-011）。
+          // 都记成失败的话，"这批 Run 为什么这么多失败"就永远问不清楚
+          : result.outcome.kind === 'cancelled'
+            ? 'Cancelled'
+            : 'Failed'
 
-    await service.transition(caller, run.id, next, {
-      expectedVersion: updated.version,
-      reason: describe(result),
-    })
+    // 已经在目标状态就不再迁移。
+    //
+    // 外部取消会走到这里：有人把 Run 迁到了 Cancelled，运行时读到之后停下来，
+    // 结算再迁一次就会撞上"不能从 Cancelled 迁到 Cancelled"，
+    // 于是整个结算失败——用量与终止原因都写不回去。
+    // 结算必须是幂等的
+    if (updated.status !== next) {
+      await service.transition(caller, run.id, next, {
+        expectedVersion: updated.version,
+        reason: describe(result),
+      })
+    }
   }
 
   #service(trx: Db, tenant: string, audit: BufferedAuditSink, clock: Clock): ResourceService {
@@ -289,6 +309,9 @@ export class AgentRunner {
 
   stop(): void {
     this.#stopped = true
+    // 在途的 Run 也要停。只置一个"别再认领"的标志，
+    // 关停就要等最后一次推理自然结束
+    this.#aborter.abort()
   }
 }
 
@@ -303,6 +326,8 @@ function describe(result: RunResult): string {
       return `预算触顶（${o.limit}=${o.used}）后终止`
     case 'blast-radius-exceeded':
       return `影响面触顶（已改动 ${o.touched} 个对象，上限 ${o.limit}）后熔断`
+    case 'cancelled':
+      return `被取消（已执行 ${o.afterSteps} 步）`
     case 'failed':
       return `失败：${o.reason}`
   }
