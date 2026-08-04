@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { ZodError } from 'zod'
+import type { ZodIssue } from 'zod'
 import type pg from 'pg'
 import { createDb, withTenant } from '../infrastructure/db/client.ts'
 import type { Db } from '../infrastructure/db/client.ts'
@@ -337,7 +338,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       return reply.status(400).send({
         error: 'invalid_request',
         message: 'request body failed validation',
-        details: error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        details: error.issues.flatMap(issueDetails),
       })
     }
     if (error instanceof DomainError) {
@@ -377,4 +378,24 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
 function customMethod(request: FastifyRequest): string {
   const raw = (request.params as { action?: string }).action ?? ''
   return raw.startsWith(':') ? raw.slice(1) : raw
+}
+
+/**
+ * 把一条 Zod 问题渲染成客户端能直接定位的形式。
+ *
+ * `unrecognized_keys` 的 `path` 指向**容器**而不是多余的那个字段，
+ * 顶层多写一个字段时 path 就是空数组。照直渲染的话客户端拿到的是
+ * `{path: "", message: "Unrecognized key(s)…"}`——知道错了，不知道错在哪。
+ * 字段名在 `issue.keys` 里，每个多余字段拆成一条，
+ * 客户端就能像处理其他校验错误一样按 path 定位。
+ */
+function issueDetails(issue: ZodIssue): Array<{ path: string; message: string }> {
+  const base = issue.path.join('.')
+  if (issue.code !== 'unrecognized_keys') {
+    return [{ path: base, message: issue.message }]
+  }
+  return issue.keys.map((key) => ({
+    path: base === '' ? key : `${base}.${key}`,
+    message: 'unrecognized field',
+  }))
 }

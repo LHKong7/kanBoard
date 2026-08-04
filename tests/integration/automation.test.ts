@@ -301,6 +301,74 @@ describe('automation driven by the outbox (FR-WF-005/006)', () => {
   })
 })
 
+/**
+ * 自用第一天发现的洞（docs/dogfooding-log.md #2）。
+ *
+ * 规则跑了、算出了准确的原因、然后把它扔了：Story 停在原地，
+ * 日志、历史、审计三处都查不到，看起来像"自动化没配"。
+ * 这里断言的是**痕迹留下来了**，不是状态变了——
+ * 停滞本身是允许的，查不出原因才是缺陷。
+ */
+describe('automation leaves a trace when it does not move things (dogfooding #2)', () => {
+  async function declinesFor(resourceId: string): Promise<Array<{ reason: string }>> {
+    return queryAsTenant<{ reason: string }>(
+      pool,
+      TENANT,
+      `SELECT reason FROM audit_log
+       WHERE resource_id = '${resourceId}' AND decision = 'Rejected'
+       ORDER BY seq`,
+    )
+  }
+
+  it('records why a rule declined to advance a target', async () => {
+    // 人忘了把 Story 标成 Ready，子任务却已经做完了
+    const story = await create('Story', { title: 'forgot to mark ready' })
+    const task = await create('Task', { title: 'done anyway', assignee: 'user://bob' })
+    await relate(story, 'decomposedInto', task)
+    for (const to of ['Doing', 'Review', 'Testing', 'Done']) await move(task, to)
+    await drainOutbox()
+
+    // Story 确实没动——这是规则的本意，不是 bug
+    expect(await statusOf(story)).toBe('Draft')
+
+    // 但"为什么没动"必须查得到
+    const rows = await declinesFor(story)
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.map((r) => r.reason).join(' | ')).toMatch(/is "Draft", not in/)
+  })
+
+  it('records the target that a guard rejected, and keeps going for the others', async () => {
+    // Story 在 Review：`onlyIfCurrentIn` 放行，但 Review→InProgress 是合法的，
+    // 所以这里用另一条路径——把 Story 推到终态后再让规则去动它
+    const { story, taskA, taskB } = await seedStoryWithTasks()
+    await move(taskA, 'Doing')
+    await drainOutbox()
+    expect(await statusOf(story)).toBe('InProgress')
+
+    await move(story, 'Cancelled')
+    await drainOutbox()
+
+    // 终态的 Story 不在 onlyIfCurrentIn 里，规则应当留下停滞记录
+    for (const to of ['Review', 'Testing', 'Done']) await move(taskA, to)
+    for (const to of ['Doing', 'Review', 'Testing', 'Done']) await move(taskB, to)
+    await drainOutbox()
+
+    expect(await statusOf(story)).toBe('Cancelled')
+    const rows = await declinesFor(story)
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.map((r) => r.reason).join(' | ')).toMatch(/Cancelled/)
+  })
+
+  it('says nothing when there is no target at all', async () => {
+    // 不属于任何 Story 的任务是常态。给它记一条"停滞"只会把真信号淹掉
+    const orphan = await create('Task', { title: 'standalone', assignee: 'user://bob' })
+    await move(orphan, 'Doing')
+    await drainOutbox()
+
+    expect(await declinesFor(orphan)).toHaveLength(0)
+  })
+})
+
 describe('automation is denied what it should not do', () => {
   it('the system principal cannot delete', async () => {
     // pol-system-no-delete 是一条 Deny，优先于任何 Allow。

@@ -100,6 +100,24 @@ export interface EventSink {
   emit(event: DomainEvent): Promise<void>
 }
 
+/**
+ * 审计里记录的判定。
+ *
+ * PDP 只输出 Allow / Deny，但审计要回答的问题比"权限够不够"更宽：
+ * **一次被拒绝的尝试**都得留痕（见 docs/development.md §7）。
+ * 被工作流守卫挡回去的自动化正属于此类——权限是够的（PDP 判了 Allow），
+ * 是状态机不让走。用独立的 `Rejected` 而不是复用 `Deny`：
+ * Deny 意味着权限不足，是要去查权限配置的信号，两者混在一起
+ * 会让"有多少次越权尝试"这个数字失真。
+ */
+export type AuditEffect = Decision['effect'] | 'Rejected'
+
+export type AuditOutcome = {
+  effect: AuditEffect
+  reason: string
+  matchedPolicy?: string | undefined
+}
+
 export type AuditRecord = {
   tenant: string
   subject: string
@@ -107,7 +125,7 @@ export type AuditRecord = {
   action: string
   resourceId: string | null
   resourceType: string | null
-  decision: Decision
+  decision: AuditOutcome
   runRef: string | null
   occurredAt: Date
   traceId: string | null

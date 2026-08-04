@@ -34,11 +34,34 @@ export function systemCaller(tenant: string, traceId: string | null, depth = 0):
   }
 }
 
+/**
+ * 一条规则**找到了目标却没能推动它**。
+ *
+ * 区分两种，因为要给的答案不一样：
+ * - `rejected`：守卫挡回或调用出错。系统层面的异常，要告警。
+ * - `declined`：规则自己的条件不满足（目标状态不对、还有未完成的兄弟对象）。
+ *   不是异常，但**是一次停滞**——对象就停在那儿了，得有人能问出"为什么没动"。
+ *
+ * 关键在于"找到了目标"。压根没有这条关系（任务不属于任何 Story）不算停滞，
+ * 那是常态，记下来只会把有用的信号淹掉。
+ *
+ * 这个类型来自自用第一天（docs/dogfooding-log.md #2）：
+ * Story 忘了标 Ready，子任务全部做完，两条规则都算出了准确的原因——
+ * `story_… is "Draft", not in ["Ready"]`——然后把它扔了。
+ */
+export type AutomationDecline = {
+  targetId: string
+  reason: string
+  kind: 'rejected' | 'declined'
+}
+
 export type AutomationOutcome = {
   ruleId: string
   action: string
   status: 'applied' | 'skipped' | 'failed'
   detail: string
+  /** 找到了目标但没推动它的记录。空数组与缺省同义：没有停滞。 */
+  declines?: readonly AutomationDecline[]
 }
 
 export type RunnerDeps = {
@@ -136,6 +159,7 @@ export class AutomationRunner {
         }
 
         const details: string[] = []
+        const declines: AutomationDecline[] = []
         for (const relation of related) {
           const targetId = action.direction === 'out' ? relation.toId : relation.fromId
           const target = await this.#deps.service.get(caller, targetId)
@@ -145,30 +169,45 @@ export class AutomationRunner {
             action.onlyIfCurrentIn !== undefined &&
             !action.onlyIfCurrentIn.includes(target.status)
           ) {
-            details.push(`${targetId} is "${target.status}", not in ${JSON.stringify(action.onlyIfCurrentIn)}`)
+            const reason = `${targetId} is "${target.status}", not in ${JSON.stringify(action.onlyIfCurrentIn)}`
+            details.push(reason)
+            declines.push({ targetId, reason, kind: 'declined' })
             continue
           }
 
           if (action.requireAllSiblings !== undefined) {
             const pending = await this.#pendingSiblings(caller, targetId, action)
             if (pending.length > 0) {
-              details.push(`${targetId} still has ${pending.length} unfinished sibling(s)`)
+              const reason = `${targetId} still has ${pending.length} unfinished sibling(s)`
+              details.push(reason)
+              declines.push({ targetId, reason, kind: 'declined' })
               continue
             }
           }
 
-          await this.#deps.service.transition(caller, targetId, action.to, {
-            reason: `automation: ${rule.id}`,
-          })
-          details.push(`${targetId} → ${action.to}`)
+          // 每个目标单独兜住：一个目标被守卫拒绝，不该让同一动作的其余目标也不执行。
+          // 之前是整个动作抛出去由外层捕获，于是列表里排在后面的对象白白被牵连。
+          try {
+            await this.#deps.service.transition(caller, targetId, action.to, {
+              reason: `automation: ${rule.id}`,
+            })
+            details.push(`${targetId} → ${action.to}`)
+          } catch (error) {
+            const reason = error instanceof DomainError ? error.message : String(error)
+            declines.push({ targetId, reason, kind: 'rejected' })
+            details.push(`${targetId} ✗ ${reason}`)
+          }
         }
 
         const applied = details.some((d) => d.includes('→'))
+        const rejected = declines.some((d) => d.kind === 'rejected')
         return {
           ruleId: rule.id,
           action: action.kind,
-          status: applied ? 'applied' : 'skipped',
+          // 有 rejected 就是 failed，哪怕另一些目标成功了——部分成功不能报告成成功
+          status: rejected ? 'failed' : applied ? 'applied' : 'skipped',
           detail: details.join('; ') || 'no matching target',
+          ...(declines.length > 0 ? { declines } : {}),
         }
       }
 

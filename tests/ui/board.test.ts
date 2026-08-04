@@ -316,6 +316,10 @@ describe('编辑属性', () => {
     const toast = await page.locator('.toast.error').textContent()
     assert.match(toast ?? '', /已被他人修改/)
 
+    // 提示是同步弹的，重新载入是异步的：不等抽屉真的画完就断言，
+    // 读到的是「加载中…」而不是内容——这条用例会随机红一次
+    await page.waitForSelector('.drawer-body .section')
+
     // 对方的修改必须还在——静默覆盖是这里最不能接受的失败方式
     const drawer = await page.locator('.drawer-body').textContent()
     assert.match(drawer ?? '', /别人写的/)

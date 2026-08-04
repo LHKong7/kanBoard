@@ -18,9 +18,26 @@ if (connectionString === undefined) {
 const tenant = process.env['PROJECTOS_TENANT'] ?? 'default'
 const port = Number(process.env['PORT'] ?? 3000)
 
-const applied = await migrate(connectionString)
-if (applied.length > 0) {
-  console.log(`migrations applied: ${applied.join(', ')}`)
+/**
+ * 迁移用的连接与应用用的连接是分开的。
+ *
+ * 建表需要 DDL 权限，跑业务不需要。用同一个连接串意味着 API 进程常驻着
+ * 一个能 `DROP TABLE` 的身份——RLS 的 `FORCE` 挡得住 owner 绕过读写，
+ * 挡不住一次 DDL。测试夹具（tests/helpers/db.ts）一直是分开的，
+ * 只有生产入口没分；自用第一天就绊在这里
+ * （docs/dogfooding-log.md #4）：以非特权角色启动直接起不来。
+ *
+ * 不设 `MIGRATE_DATABASE_URL` 就退回 `DATABASE_URL`，本地开发照旧一条命令跑通。
+ */
+const migrateUrl = process.env['MIGRATE_DATABASE_URL'] ?? connectionString
+
+if (process.env['PROJECTOS_SKIP_MIGRATE'] === 'true') {
+  console.log('migrations skipped (PROJECTOS_SKIP_MIGRATE=true)')
+} else {
+  const applied = await migrate(migrateUrl)
+  if (applied.length > 0) {
+    console.log(`migrations applied: ${applied.join(', ')}`)
+  }
 }
 
 const pool = createPool({ connectionString })

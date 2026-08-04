@@ -396,6 +396,86 @@ describe('query (FR-RES-002/012)', () => {
   })
 })
 
+/**
+ * 自用第一天发现的洞（docs/dogfooding-log.md #1）。
+ *
+ * 分页写成了 `{limit, cursor}` 而不是 `{page:{size, cursor}}`。
+ * Zod 默认剥掉未知字段，于是接口回 200、游标永远停在第一页，
+ * 142 条需求被翻成 1000 条重复结果——调用方没有任何办法察觉。
+ * 宽松解析在这里买不到兼容性，只买到"看起来成功的错误答案"。
+ */
+describe('malformed request bodies are rejected, not silently trimmed (dogfooding #1)', () => {
+  beforeEach(async () => {
+    for (let i = 0; i < 5; i++) {
+      await app.inject({
+        method: 'POST',
+        url: '/v1/resources',
+        headers: asRD,
+        payload: { type: 'Task', workspace: 'ws_platform', attributes: { title: `t${i}` } },
+      })
+    }
+  })
+
+  it('rejects pagination written at the top level instead of under page', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/resources:query',
+      headers: asRD,
+      payload: { type: 'Task', limit: 200, cursor: 'whatever' },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().details.map((d: { path: string }) => d.path)).toContain('limit')
+  })
+
+  it('rejects a misspelled field on create rather than dropping it', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: asRD,
+      // `label` 少了个 s：静默丢弃的话，这条资源会不带任何标签地建出来
+      payload: {
+        type: 'Task',
+        workspace: 'ws_platform',
+        label: ['q3'],
+        attributes: { title: 't' },
+      },
+    })
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('still accepts the documented pagination shape', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/resources:query',
+      headers: asRD,
+      payload: { type: 'Task', page: { size: 2 } },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().items).toHaveLength(2)
+    expect(res.json().nextCursor).toBeTruthy()
+  })
+
+  it('advances the cursor instead of returning the same page forever', async () => {
+    const seen = new Set<string>()
+    let cursor: string | undefined
+    for (let page = 0; page < 10; page++) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/resources:query',
+        headers: asRD,
+        payload: { type: 'Task', page: { size: 2, ...(cursor === undefined ? {} : { cursor }) } },
+      })
+      const body = res.json()
+      for (const item of body.items) seen.add(item.id)
+      cursor = body.nextCursor ?? undefined
+      if (cursor === undefined) break
+    }
+    // beforeEach 建了 5 条，翻完必须正好是 5 条不重复的
+    expect(seen.size).toBe(5)
+    expect(cursor).toBeUndefined()
+  })
+})
+
 describe('authorization is on the write path, not beside it (FR-ARCH-002)', () => {
   it('rejects a create the caller lacks capability for', async () => {
     // RD 没有 Requirement.Create

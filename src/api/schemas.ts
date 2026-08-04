@@ -9,6 +9,15 @@ import { z } from 'zod'
  * 注意这里只校验**信封**（envelope）：id、分页、关系方向这些。
  * `attributes` 的内容由本体校验（OntologyRegistry），不在这里重复定义，
  * 否则本体一改这里就漂移。
+ *
+ * 信封一律 `.strict()`：多余字段直接 400，不静默丢弃。
+ * 这条是自用第一天踩出来的（docs/dogfooding-log.md #1）——
+ * 把分页写成 `{limit, cursor}` 而不是 `{page:{size, cursor}}`，
+ * Zod 默认把两个字段都剥掉，接口回 200，游标永远不前进，
+ * 于是 142 条需求被翻成 1000 条重复结果，而调用方没有任何办法察觉。
+ * 宽松解析在这里买不到兼容性，只买到"看起来成功的错误答案"。
+ *
+ * `attributes` 是有意开放的 `z.record`：那部分归本体管，不受这条约束。
  */
 
 export const resourceIdSchema = z
@@ -26,7 +35,7 @@ export const createResourceSchema = z.object({
   labels: z.array(z.string().max(64)).max(50).optional(),
   attributes: z.record(z.unknown()).optional(),
   visibility: visibilitySchema.optional(),
-})
+}).strict()
 
 export const updateResourceSchema = z.object({
   expectedVersion: z.number().int().positive(),
@@ -36,14 +45,14 @@ export const updateResourceSchema = z.object({
   visibility: visibilitySchema.optional(),
   owner: z.string().max(256).optional(),
   reason: z.string().max(2000).optional(),
-})
+}).strict()
 
 export const transitionSchema = z.object({
   to: z.string().min(1).max(64),
   /** 可选：带上就做乐观锁检查。迁移本身是幂等意图，不强制要求版本 */
   expectedVersion: z.number().int().positive().optional(),
   reason: z.string().max(2000).optional(),
-})
+}).strict()
 
 export const querySchema = z.object({
   type: z.string().max(64).optional(),
@@ -57,20 +66,22 @@ export const querySchema = z.object({
       attributes: z.record(z.unknown()).optional(),
       includeDeleted: z.boolean().optional(),
     })
+    .strict()
     .optional(),
   page: z
     .object({
       size: z.number().int().min(1).max(200).default(50),
       cursor: z.string().max(64).optional(),
     })
+    .strict()
     .optional(),
-})
+}).strict()
 
 export const relateSchema = z.object({
   type: z.string().min(1).max(64),
   toId: resourceIdSchema,
   confidence: z.number().min(0).max(1).optional(),
-})
+}).strict()
 
 export const traverseSchema = z.object({
   start: resourceIdSchema,
@@ -79,17 +90,17 @@ export const traverseSchema = z.object({
   direction: z.enum(['out', 'in', 'both']).default('out'),
   /** 返回节点数上限。默认值刻意保守：超出部分由响应里的 truncated 显式告知 */
   limit: z.number().int().min(1).max(5000).default(500),
-})
+}).strict()
 
 export const pathSchema = z.object({
   from: resourceIdSchema,
   to: resourceIdSchema,
   maxDepth: z.number().int().min(1).max(10).default(6),
-})
+}).strict()
 
 export const confirmRelationSchema = z.object({
   confirmed: z.boolean(),
-})
+}).strict()
 
 export const relationDirectionSchema = z.enum(['out', 'in', 'both']).default('out')
 

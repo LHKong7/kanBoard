@@ -3,7 +3,7 @@ import type { Db } from './db/client.ts'
 import { claimUnpublished, markPublished, BufferedAuditSink, flushAudit, PgOutbox } from './outbox.pg.ts'
 import { PgRelationRepository } from './relation-repository.pg.ts'
 import { PgResourceRepository } from './resource-repository.pg.ts'
-import { AutomationRunner, systemCaller } from '../domain/automation/runner.ts'
+import { AutomationRunner, SYSTEM_SUBJECT } from '../domain/automation/runner.ts'
 import type { AutomationOutcome } from '../domain/automation/runner.ts'
 import { ResourceService } from '../domain/resource/service.ts'
 import type { DomainEvent, DomainEventType } from '../domain/events.ts'
@@ -116,7 +116,7 @@ export class OutboxPoller {
     const depth = Number(event.payload['automationDepth'] ?? 0)
 
     try {
-      return await withTenant(this.#db, event.tenant, async (trx: Db) => {
+      const outcomes = await withTenant(this.#db, event.tenant, async (trx: Db) => {
         const service = new ResourceService({
           registry: this.#deps.registry,
           workflows: this.#deps.workflows,
@@ -130,6 +130,8 @@ export class OutboxPoller {
         const runner = new AutomationRunner({ service, rules: this.#deps.rules })
         return runner.handle(event, depth)
       })
+      await this.#reportDeclines(event, outcomes, audit, clock)
+      return outcomes
     } finally {
       // 自动化的授权决策同样要审计：一条规则以 system 身份改了什么，必须查得到
       const entries = audit.drain()
@@ -140,6 +142,60 @@ export class OutboxPoller {
           // 与 API 层同样的取舍：不让审计写入失败掩盖业务结果。
           // TODO(M1)：持久缓冲
         }
+      }
+    }
+  }
+
+  /**
+   * 让没推动的自动化留下痕迹。
+   *
+   * 这件事**不能**交给 `onOutcome` 钩子：钩子是可选的，main.ts 一开始就没接，
+   * 于是规则算出了准确的原因之后原地丢掉。自用第一天的实测
+   * （docs/dogfooding-log.md #2）：Story 忘了标 Ready，子任务全做完了，
+   * 两条规则都给出了 `story_… is "Draft", not in ["Ready"]`——
+   * 日志、历史、审计三处一个字都没有，看起来就像"自动化根本没配"。
+   * 可选的可观测性等于没有可观测性。
+   *
+   * 两个去处，各答一个问题：
+   * - stderr：只发 `rejected`。守卫挡回或调用出错是异常，该触发告警；
+   *   条件不满足是正常业务分支，刷进日志只会让真正的异常被淹掉。
+   * - audit_log：两种都写。使用者的问题是"我这条为什么没动"，
+   *   按 resource_id 一查就有答案，不必区分是被拒还是被跳过。
+   */
+  async #reportDeclines(
+    event: DomainEvent,
+    outcomes: readonly AutomationOutcome[],
+    audit: BufferedAuditSink,
+    clock: Clock,
+  ): Promise<void> {
+    for (const outcome of outcomes) {
+      // 动作整体抛出（或链深超限）时没有逐目标信息，挂到触发事件的源对象上——
+      // 定位差一点，但绝不能因此不记
+      const declines =
+        outcome.declines ??
+        (outcome.status === 'failed'
+          ? ([{ targetId: event.resourceId, reason: outcome.detail, kind: 'rejected' }] as const)
+          : [])
+
+      for (const decline of declines) {
+        if (decline.kind === 'rejected') {
+          console.error(
+            `[poller] automation rejected: rule=${outcome.ruleId} action=${outcome.action} ` +
+              `target=${decline.targetId} event=${event.type} reason=${decline.reason}`,
+          )
+        }
+        await audit.record({
+          tenant: event.tenant,
+          subject: SYSTEM_SUBJECT.principal,
+          onBehalfOf: null,
+          action: `automation:${outcome.ruleId}`,
+          resourceId: decline.targetId,
+          resourceType: null,
+          decision: { effect: 'Rejected', reason: decline.reason },
+          runRef: null,
+          occurredAt: clock.now(),
+          traceId: event.traceId,
+        })
       }
     }
   }

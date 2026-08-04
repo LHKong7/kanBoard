@@ -34,6 +34,31 @@ pnpm dev         # 启动，默认 :3000
 | `pnpm check` | 上述全部，等同 CI |
 | `pnpm migrate` | 执行未应用的迁移 |
 
+### 迁移权限与运行权限要分开
+
+建表要 DDL 权限，跑业务不要。两者用同一个连接串意味着 API 进程常驻着一个
+能 `DROP TABLE` 的身份——RLS 的 `FORCE` 挡得住 owner 绕过读写，挡不住一次 DDL。
+
+```bash
+# 迁移用管理员，业务用只有 DML 权限的角色
+export MIGRATE_DATABASE_URL="postgresql://postgres@127.0.0.1:5432/projectos_dev"
+export DATABASE_URL="postgresql://projectos_dev_app@127.0.0.1:5432/projectos_dev"
+```
+
+| 变量 | 说明 |
+| --- | --- |
+| `MIGRATE_DATABASE_URL` | 迁移用的连接；不设则退回 `DATABASE_URL` |
+| `PROJECTOS_SKIP_MIGRATE` | `true` 时启动不跑迁移，迁移由部署流水线单独执行 |
+
+应用角色这样建（和 `tests/helpers/db.ts` 一致）：
+
+```sql
+CREATE ROLE projectos_dev_app LOGIN;              -- 无 SUPERUSER、无 BYPASSRLS
+GRANT projectos_app TO projectos_dev_app;
+GRANT USAGE ON SCHEMA public TO projectos_dev_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO projectos_dev_app;
+```
+
 进程角色（[ADR-0008](adr/0008-modular-monolith.md)）由 `PROJECTOS_ROLE` 控制：
 
 | 值 | 行为 |
