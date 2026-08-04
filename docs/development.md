@@ -117,6 +117,20 @@ platform → ontology → identity → workflow → domain → infrastructure �
 注册完就能通过 `/v1/resources` 完成全生命周期操作，**不需要新增端点、表或权限规则**。
 这是 [ADR-0002](adr/0002-unified-resource-model.md) 的收益兑现处。
 
+文本类属性会按 `kind` 自动获得一个长度上限（`string` 1,024 / `text` 20,000 /
+`richtext` 200,000 / `json` 100,000），需要另设时在属性上写 `maxLength` 覆盖。
+它会随 `GET /v1/ontology/entity-types` 发给客户端——**上限是语义的一部分，
+藏在校验器里等于逼每个客户端各猜一个数**（[自用日志 #7](dogfooding-log.md)）。
+
+**收紧任何约束之前先跑一次**，别猜它是不是破坏性变更：
+
+```bash
+MIGRATE_DATABASE_URL=… node --experimental-strip-types tools/check-ontology-fit.ts
+```
+
+它用当前本体校验库里每一行，有越界就非零退出。规则见
+[04-ontology §6](prd/04-ontology.md#6-本体版本与演进)。
+
 ### 2. 所有数据库访问都走 `withTenant`
 
 ```ts
