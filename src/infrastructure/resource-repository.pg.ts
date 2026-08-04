@@ -157,6 +157,7 @@ export class PgResourceRepository implements ResourceRepository {
         created_at: resource.createdAt,
         updated_at: resource.updatedAt,
         status: resource.status,
+        status_since: resource.createdAt,
         lifecycle: resource.lifecycle,
         version: resource.version,
         labels: resource.labels as string[],
@@ -195,6 +196,13 @@ export class PgResourceRepository implements ResourceRepository {
         updated_at: resource.updatedAt,
         version: resource.version,
         deleted_at: resource.deletedAt,
+        // 只在状态真的变了时重置计时，而且**在 SQL 里判**。
+        //
+        // 交给调用方去判断"这次改了状态吗"，迟早会有一条写路径忘记，
+        // 而症状是某些对象的 SLA 永远不触发——一个没人会去查的静默失败。
+        // 放在这里，它对所有写路径一视同仁。
+        status_since: sql<Date>`CASE WHEN resources.status <> ${resource.status}
+          THEN ${resource.updatedAt}::timestamptz ELSE resources.status_since END`,
       })
       .where('tenant', '=', this.#tenant)
       .where('id', '=', resource.id)

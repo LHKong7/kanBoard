@@ -3,6 +3,8 @@ import { buildDefaultWorkflowRegistry, DEFAULT_LIFECYCLES } from './workflow/def
 import { ReloadingWorkflowRegistry } from './infrastructure/lifecycle-store.pg.ts'
 import { DEFAULT_AUTOMATION_RULES } from './workflow/automation.ts'
 import { OutboxPoller } from './infrastructure/poller.ts'
+import { SlaSweeper } from './infrastructure/sla-sweeper.pg.ts'
+import { slaNotifier } from './infrastructure/sla-notifier.ts'
 import { AgentRunner } from './infrastructure/agent-runner.ts'
 import { ScriptedModelClient } from './infrastructure/model/scripted.ts'
 import { defaultPolicies } from './identity/default-policies.ts'
@@ -76,6 +78,28 @@ const poller =
     : new OutboxPoller({ pool, registry, workflows, policies, rules: DEFAULT_AUTOMATION_RULES, tenants: [tenant] })
 
 /**
+ * SLA 巡检（FR-WF-002）。跟 poller 同一个进程角色。
+ *
+ * 间隔默认 1 分钟。它决定的是**检测延迟的上界**——一条 5 天的 SLA
+ * 晚一分钟报出来没有任何影响，而把间隔调到秒级只会让数据库白干活。
+ *
+ * 设成 0 可以关掉。关掉是一个显式的选择，而不是"忘了启动"：
+ * 启动时会打印它有没有在跑，因为一个悄悄没起来的告警巡检
+ * 表现出来就是"这个系统从来不告警"，而那看起来像一切正常。
+ */
+const sweepIntervalMs = Number(process.env['PROJECTOS_SLA_SWEEP_MS'] ?? 60_000)
+const sweeper =
+  role === 'api' || sweepIntervalMs <= 0
+    ? null
+    : new SlaSweeper({
+        pool,
+        tenants: [tenant],
+        workflows,
+        onBreach: slaNotifier({ pool, registry, workflows, policies }),
+      })
+let sweepTimer: NodeJS.Timeout | null = null
+
+/**
  * Agent Runner（ADR-0008 的第三种进程角色）。
  *
  * 模型客户端目前只有确定性实现：真实供应商的适配器要凭据，
@@ -106,6 +130,7 @@ const shutdown = async (signal: string): Promise<void> => {
   console.log(`${signal} received, shutting down`)
   poller?.stop()
   runner?.stop()
+  if (sweepTimer !== null) clearInterval(sweepTimer)
   await app.close()
   await pool.end()
   process.exit(0)
@@ -127,4 +152,16 @@ if (poller !== null) {
 if (runner !== null) {
   console.log(`agent runner started (model=${modelKind})`)
   void runner.run()
+}
+
+if (sweeper !== null) {
+  console.log(`sla sweeper started (every ${Math.round(sweepIntervalMs / 1000)}s)`)
+  sweepTimer = setInterval(() => {
+    // 巡检失败不该把进程带走，但必须说出来：
+    // 一个安静停掉的告警巡检看起来和"没有任何超时"一模一样
+    void sweeper.sweepOnce().catch((error: unknown) => console.error('[sla] sweep failed:', error))
+  }, sweepIntervalMs)
+  sweepTimer.unref()
+} else if (role !== 'api') {
+  console.log('sla sweeper disabled (PROJECTOS_SLA_SWEEP_MS=0)')
 }

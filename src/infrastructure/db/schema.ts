@@ -17,6 +17,8 @@ export type ResourcesTable = {
   created_at: ColumnType<Date, Date, never>
   updated_at: Date
   status: string
+  /** 进入当前状态的时刻（007_sla.sql）。不是 updated_at——改标题不该重置计时 */
+  status_since: Date
   lifecycle: string | null
   version: number
   labels: string[]
@@ -141,8 +143,20 @@ export type LifecyclesTable = {
   updated_at: Date
 }
 
+export type SlaBreachesTable = {
+  tenant: string
+  resource_id: string
+  status: string
+  status_since: Date
+  action: string
+  breached_at: Date
+  detected_at: Date
+  notification_id: string | null
+}
+
 export type Database = {
   resources: ResourcesTable
+  sla_breaches: SlaBreachesTable
   lifecycles: LifecyclesTable
   agent_run_steps: AgentRunStepsTable
   connector_calls: ConnectorCallsTable
