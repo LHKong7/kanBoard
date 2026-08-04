@@ -285,20 +285,32 @@ export class ConnectorGateway {
  * 一条写错的正则可以悄悄放开整个互联网，而没人看得出来。
  */
 export function isAllowed(allowed: readonly string[], target: string): boolean {
-  const host = hostOf(target)
   return allowed.some((pattern) => {
+    const host = targetKey(target, pattern)
     if (pattern === host) return true
     if (pattern.startsWith('*.')) {
-      const suffix = pattern.slice(1) // '.example.com'
+      // 前缀留着那个点：`*.example.com` 不该匹配 `evil-example.com`，
+      // 也不该匹配 `example.com` 本身
+      const suffix = pattern.slice(1)
       return host.endsWith(suffix) && host.length > suffix.length
     }
     return false
   })
 }
 
-function hostOf(target: string): string {
+/**
+ * 拿来和白名单比对的那个串。
+ *
+ * 白名单项**不带端口时按 hostname 比，带端口时按 host 比**。
+ * 都按 host（含端口）比的话，`api.example.com` 配不上
+ * `https://api.example.com:8443/…`——一个只在非默认端口上出现、
+ * 而且看起来像"白名单没生效"的失败。
+ * 反过来都按 hostname 比，就没法把访问限制在某个端口上。
+ */
+function targetKey(target: string, pattern: string): string {
   try {
-    return new URL(target).host
+    const url = new URL(target)
+    return pattern.includes(':') ? url.host : url.hostname
   } catch {
     // 不是 URL 就按原样比（repo 名、队列名之类）
     return target

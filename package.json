@@ -27,6 +27,7 @@
     "fastify": "^5.2.1",
     "kysely": "^0.27.5",
     "pg": "^8.13.1",
+    "playwright": "^1.62.1",
     "ulid": "^2.3.0",
     "zod": "^3.24.1"
   },
@@ -35,7 +36,6 @@
     "@types/pg": "^8.11.10",
     "@vitest/coverage-v8": "2.1.9",
     "dependency-cruiser": "^16.9.0",
-    "playwright": "^1.62.1",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
   }

@@ -436,3 +436,30 @@ describe('retry decides by status, not by hope', () => {
     expect(isRetryable(new Error('ECONNRESET'))).toBe(true)
   })
 })
+
+
+describe('the allow-list also covers targets that are not URLs', () => {
+  it('compares a repo name literally', () => {
+    // GitHub / Jira 的 target 是 `owner/repo`、队列名之类，不是 URL。
+    // 解析失败时按原样比——退回"允许"的话，白名单在这些连接器上等于不存在
+    expect(isAllowed(['acme/platform'], 'acme/platform')).toBe(true)
+    expect(isAllowed(['acme/platform'], 'acme/other')).toBe(false)
+  })
+
+  it('matches a host regardless of port when the pattern has none', () => {
+    // 都按 host（含端口）比的话，`api.example.com` 配不上
+    // `https://api.example.com:8443/…`——一个看起来像"白名单没生效"的失败
+    expect(isAllowed(['api.example.com'], 'https://api.example.com:8443/x')).toBe(true)
+  })
+
+  it('honours a port when the pattern names one', () => {
+    // 反过来都按 hostname 比，就没法把访问限制在某个端口上
+    expect(isAllowed(['api.example.com:8443'], 'https://api.example.com:8443/x')).toBe(true)
+    expect(isAllowed(['api.example.com:8443'], 'https://api.example.com:9000/x')).toBe(false)
+  })
+
+  it('refuses everything when the list is empty', () => {
+    // 漏配的白名单应当让连接器不可用，而不是全开
+    expect(isAllowed([], 'https://anything.example.com')).toBe(false)
+  })
+})

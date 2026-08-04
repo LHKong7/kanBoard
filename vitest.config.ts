@@ -34,6 +34,15 @@ export default defineConfig({
         'src/domain/resource/ports.ts',
         'src/infrastructure/db/schema.ts',
         'src/workflow/types.ts',
+        // 这个文件**是被测的**，只是测它的套件用 Node 内置 runner
+        // （tests/ui/browser-connector.test.ts，真实 Chromium + 本地页面），
+        // 而 vitest 收不到那边的覆盖率。
+        //
+        // 排除一个"其实测过"的文件是有风险的：它会顺带盖住这个文件里
+        // 真正没测到的代码。所以不需要浏览器的那一半——声明、动作范围判定、
+        // 参数校验——仍然有一份 vitest 用例（tests/browser-connector.test.ts），
+        // 那部分照常被这里的门槛管着。
+        'src/infrastructure/connectors/browser.ts',
       ],
       reporter: ['text-summary'],
       thresholds: {
