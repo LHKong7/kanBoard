@@ -109,7 +109,7 @@ RES 这一行此前记的是 **11/12，缺「FR-RES-010 事件订阅 / Webhook �
 | FR-DOM-006 Task 的 assignee 支持 User 与 Agent | ✅ 同一套分配与权限流程 |
 | FR-DOM-008 Knowledge 必须有来源引用 | ✅ Published 守卫要求 `derivedFrom` |
 | FR-DOM-002 跨 BC 仅通过事件或只读引用 | ✅ 自动化规则带 `owningContext`；分层检查挡住直接写 |
-| FR-DOM-001 7 个 BC 的聚合与不变量 | ❌ 不变量在服务层，未按 BC 拆分目录 |
+| FR-DOM-001 7 个 BC 的聚合与不变量 | ⚠️ 见下 |
 | FR-DOM-005 Dependency 环检测 | ✅ `acyclic` 写在本体里；建边时判可达性，含逆向存储的边 |
 | FR-DOM-007 Release 只允许包含 Done 的 Task | ✅ `allRelatedIn` 守卫；未完成的会被指名列出 |
 
@@ -157,6 +157,26 @@ FR-IAM-013 的注释此前是一句空话：`001_foundation.sql` 里 `audit_log`
 | FR-AGT-012 三层预算与熔断 | ✅ |
 | FR-AGT-005 四级 Memory 模型 | ✅ Working 在内存、Episodic 有界 TTL、Semantic 落 Knowledge、Procedural 即声明 |
 | FR-AGT-006 Semantic Memory 必须落 Knowledge BC | ✅ 私有表上的 CHECK 让「藏语义记忆」**做不到**，而不是「不该做」 |
+
+FR-DOM-001 的验收标准是「每个聚合有单元测试覆盖其不变量，**覆盖率 ≥ 85%**」。
+现在能测了（`pnpm test` 带覆盖率门槛）：
+
+| | 覆盖率 | 需求 |
+| --- | ---: | ---: |
+| Statements | 92.99% | ≥ 85% ✅ |
+| Lines | 92.99% | ≥ 85% ✅ |
+| Functions | 95.53% | ≥ 85% ✅ |
+| **Branches** | **82.58%** | ≥ 85% ❌ |
+
+**分支覆盖差 2.4 个百分点，所以这一条不算交付。**
+门槛因此定在 80 而不是 85——定成 85 的话，这条检查从第一天就是红的，
+于是会被 `--no-coverage` 绕过去，然后再也没人看它。
+一条从不通过的检查和没有检查是一回事。抬高它的方式是补没覆盖到的分支，
+不是把需求调低。
+
+七个上下文的聚合本身都在，不变量也都由守卫强制着
+（Story 要 Acceptance、Risk 要 mitigation、Release 只装 Done 的 Task、
+Knowledge 要来源、Approval 会过期），这部分是够的。
 
 ## Dashboard 细分
 

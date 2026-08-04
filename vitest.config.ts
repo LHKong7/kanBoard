@@ -10,5 +10,30 @@ export default defineConfig({
     fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    /**
+     * 覆盖率门槛（FR-DOM-001 的验收标准里写着 ≥ 85%）。
+     *
+     * 阈值定在**当前真实达到的水平**略下方，而不是定在一个好看的目标值。
+     * 定成目标值的话，门槛从第一天就是红的，于是它会被 `--no-coverage`
+     * 绕过去，然后再也没人看——一条从不通过的检查和没有检查是一回事。
+     *
+     * 分支覆盖是 82.5%，**低于需求要求的 85%**，所以门槛也定在 80。
+     * 这个差距记在 docs/prd-coverage.md 里，没有假装它达标了。
+     * 抬高它的方式是补那些没被覆盖的分支，不是调低需求。
+     */
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      // 迁移是 SQL，入口只是接线——两者都不是逻辑，
+      // 算进分母只会稀释掉真正该被覆盖的地方
+      exclude: ['src/main.ts', 'src/**/migrations/**'],
+      reporter: ['text-summary'],
+      thresholds: {
+        statements: 90,
+        lines: 90,
+        functions: 93,
+        branches: 80,
+      },
+    },
   },
 })
