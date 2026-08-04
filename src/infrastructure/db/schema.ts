@@ -131,8 +131,19 @@ export type ConnectorCallsTable = {
   occurred_at: Date
 }
 
+export type LifecyclesTable = {
+  tenant: string
+  id: string
+  entity_type: string
+  definition: JSONColumnType<Record<string, unknown>, string, string>
+  revision: Generated<number>
+  updated_by: string
+  updated_at: Date
+}
+
 export type Database = {
   resources: ResourcesTable
+  lifecycles: LifecyclesTable
   agent_run_steps: AgentRunStepsTable
   connector_calls: ConnectorCallsTable
   relations: RelationsTable

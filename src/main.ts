@@ -1,5 +1,6 @@
 import { buildDefaultRegistry } from './ontology/defaults.ts'
-import { buildDefaultWorkflowRegistry } from './workflow/defaults.ts'
+import { buildDefaultWorkflowRegistry, DEFAULT_LIFECYCLES } from './workflow/defaults.ts'
+import { ReloadingWorkflowRegistry } from './infrastructure/lifecycle-store.pg.ts'
 import { DEFAULT_AUTOMATION_RULES } from './workflow/automation.ts'
 import { OutboxPoller } from './infrastructure/poller.ts'
 import { AgentRunner } from './infrastructure/agent-runner.ts'
@@ -47,7 +48,20 @@ const registry = buildDefaultRegistry()
 const workflows = buildDefaultWorkflowRegistry()
 const policies = defaultPolicies(tenant)
 
-const app = buildServer({ pool, registry, workflows, policies })
+/**
+ * 可热加载的状态机（FR-WF-001）。
+ *
+ * 库里的定义覆盖同名内置定义；库里没有的，内置的继续生效。
+ * TTL 决定多进程部署时其余进程最迟多久跟上——写入进程立刻生效。
+ */
+const lifecycles = new ReloadingWorkflowRegistry({
+  pool,
+  tenant,
+  builtins: DEFAULT_LIFECYCLES,
+  ttlMs: Number(process.env['PROJECTOS_LIFECYCLE_TTL_MS'] ?? 5_000),
+})
+
+const app = buildServer({ pool, registry, workflows, lifecycles, policies })
 
 /**
  * Poller 进程角色（ADR-0008）。

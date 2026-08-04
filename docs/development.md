@@ -49,6 +49,7 @@ export DATABASE_URL="postgresql://projectos_dev_app@127.0.0.1:5432/projectos_dev
 | --- | --- |
 | `MIGRATE_DATABASE_URL` | 迁移用的连接；不设则退回 `DATABASE_URL` |
 | `PROJECTOS_SKIP_MIGRATE` | `true` 时启动不跑迁移，迁移由部署流水线单独执行 |
+| `PROJECTOS_LIFECYCLE_TTL_MS` | 状态机定义的缓存有效期，默认 5000。写入进程立刻生效，其余进程最迟晚这么久 |
 
 应用角色这样建（和 `tests/helpers/db.ts` 一致）：
 

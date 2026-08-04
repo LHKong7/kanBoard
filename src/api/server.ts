@@ -24,6 +24,7 @@ import {
   querySchema,
   queryParamsSchema,
   metricIdSchema,
+  lifecycleSchema,
   metricScopeSchema,
   metricBreakdownSchema,
   confirmRelationSchema,
@@ -35,6 +36,8 @@ import {
   updateResourceSchema,
 } from './schemas.ts'
 import { DashboardService } from '../domain/dashboard/service.ts'
+import { PgLifecycleStore } from '../infrastructure/lifecycle-store.pg.ts'
+import type { ReloadingWorkflowRegistry } from '../infrastructure/lifecycle-store.pg.ts'
 import { toWire } from './serialize.ts'
 import { registerStatic } from './static.ts'
 
@@ -42,6 +45,13 @@ export type ServerDeps = {
   pool: pg.Pool
   registry: OntologyRegistry
   workflows: WorkflowRegistry
+  /**
+   * 可热加载的状态机注册表（FR-WF-001）。
+   *
+   * 给了就用它——每次请求取当前定义，改完不用重启。
+   * 不给就退回静态的 `workflows`，测试与内嵌场景照旧。
+   */
+  lifecycles?: ReloadingWorkflowRegistry
   policies: readonly Policy[]
   clock?: Clock
 }
@@ -100,12 +110,16 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     }
     const subject = caller.subject
     const audit = new BufferedAuditSink()
+    // 每个请求取一次当前状态机定义：改了流程，下一个请求就按新的走
+    const activeWorkflows = deps.lifecycles === undefined
+      ? deps.workflows
+      : await deps.lifecycles.current()
 
     try {
       return await withTenant(db, subject.tenant, async (trx: Db) => {
         const service = new ResourceService({
           registry: deps.registry,
-          workflows: deps.workflows,
+          workflows: activeWorkflows,
           resources: new PgResourceRepository(trx, subject.tenant),
           relations: new PgRelationRepository(trx, subject.tenant),
           events: new PgOutbox(trx),
@@ -138,7 +152,52 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   }))
 
   // 生命周期定义。UI 靠它渲染看板的列，而不是把状态硬编码在前端。
-  app.get('/v1/workflows', async () => ({ items: deps.workflows.all() }))
+  app.get('/v1/workflows', async () => {
+    const registry = deps.lifecycles === undefined ? deps.workflows : await deps.lifecycles.current()
+    return { items: registry.all() }
+  })
+
+  /**
+   * 改一台状态机（FR-WF-001）。
+   *
+   * 校验在写入时做，非法定义根本存不进去——存进去之后，
+   * 损害要等到下一次有人试图迁移才出现，那时故障点离原因已经很远。
+   */
+  app.put('/v1/workflows/:id', async (request, reply) => {
+    if (deps.lifecycles === undefined) {
+      return reply.status(501).send({
+        error: 'not_configured',
+        message: 'this deployment runs with static lifecycles; no store is configured',
+      })
+    }
+    const id = (request.params as { id: string }).id
+    const body = lifecycleSchema.parse(request.body)
+    if (body.id !== id) {
+      return reply.status(400).send({
+        error: 'invalid_request',
+        message: `body declares lifecycle "${body.id}" but the path says "${id}"`,
+      })
+    }
+
+    const caller = callers.get(request)
+    if (caller === undefined) throw new DomainError('unauthenticated', 'no identity', 401)
+
+    // 改流程是一次高权限操作：它一次性改变所有该类型对象的可用动作
+    if (!caller.subject.roles.includes('Admin')) {
+      throw new DomainError('forbidden', 'changing a lifecycle requires the Admin role', 403)
+    }
+
+    const revision = await withTenant(db, caller.subject.tenant, (trx: Db) =>
+      new PgLifecycleStore(trx, caller.subject.tenant).put(
+        body as unknown as import('../workflow/types.ts').Lifecycle,
+        caller.subject.principal,
+        clock,
+      ),
+    )
+    // 同进程立刻生效；别的进程按 TTL 跟上
+    deps.lifecycles.invalidate()
+    return reply.status(200).send({ id: body.id, revision })
+  })
 
   // ── Resource CRUD ────────────────────────────────────────
   app.post('/v1/resources', async (request, reply) => {

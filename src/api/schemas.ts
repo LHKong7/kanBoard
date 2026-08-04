@@ -175,3 +175,44 @@ export const metricBreakdownSchema = metricScopeSchema.extend({
   size: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().max(64).optional(),
 }).strict()
+
+/**
+ * 状态机定义（FR-WF-001）。
+ *
+ * 这里只校验**形状**，合法性（初始状态存在、迁移两端有定义、没有孤岛状态）
+ * 由 `WorkflowRegistry.register` 在写入时判——那份规则只有一处实现，
+ * 在这里重写一遍必然漂移。
+ */
+export const lifecycleSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(/^[a-z][a-z0-9-]*$/),
+    entityType: z.string().min(1).max(64),
+    initial: z.string().min(1).max(64),
+    states: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(64),
+            terminal: z.boolean().optional(),
+            requires: z.array(z.record(z.unknown())).max(20).optional(),
+            entryActions: z.array(z.record(z.unknown())).max(20).optional(),
+            slaHours: z.number().int().min(1).max(8760).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(40),
+    transitions: z
+      .array(
+        z
+          .object({
+            from: z.array(z.string().min(1).max(64)).min(1).max(40),
+            to: z.string().min(1).max(64),
+            capability: z.string().max(96).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(200),
+  })
+  .strict()

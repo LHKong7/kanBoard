@@ -106,9 +106,22 @@ export async function truncateAll(pool: pg.Pool): Promise<void> {
   const admin = new pg.Client({ connectionString: adminUrl() })
   await admin.connect()
   try {
-    await admin.query(
-      'TRUNCATE relations, resource_history, outbox_events, audit_log, grants, resources CASCADE',
+    // 表名**查出来**而不是写死一份清单。
+    //
+    // 写死的清单会悄悄过期：加了 `lifecycles` 之后忘了往这里补一行，
+    // 于是上一个用例写的定义留到了下一个用例——症状是
+    // "单跑绿、一起跑红"，而且看起来像被测代码有问题。
+    // 这类清单必须自己维护自己。
+    //
+    // 用管理员连接：应用角色受 FORCE RLS 约束，
+    // 没有租户上下文时 DELETE 一行也删不掉（而且不报错）。
+    const { rows } = await admin.query<{ tablename: string }>(
+      `SELECT tablename FROM pg_tables
+       WHERE schemaname = 'public' AND tablename <> 'schema_migrations'`,
     )
+    if (rows.length === 0) return
+    const tables = rows.map((r) => `"${r.tablename}"`).join(', ')
+    await admin.query(`TRUNCATE ${tables} CASCADE`)
   } finally {
     await admin.end()
   }
