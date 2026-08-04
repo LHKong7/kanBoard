@@ -7,7 +7,7 @@ import { createDb, withTenant } from '../infrastructure/db/client.ts'
 import type { Db } from '../infrastructure/db/client.ts'
 import { PgResourceRepository } from '../infrastructure/resource-repository.pg.ts'
 import { PgRelationRepository } from '../infrastructure/relation-repository.pg.ts'
-import { BufferedAuditSink, flushAudit, PgOutbox } from '../infrastructure/outbox.pg.ts'
+import { BufferedAuditSink, flushAudit, PgOutbox, BufferedApprovalSink, flushApprovals } from '../infrastructure/outbox.pg.ts'
 import { ResourceService } from '../domain/resource/service.ts'
 import type { Caller } from '../domain/resource/service.ts'
 import type { OntologyRegistry } from '../ontology/registry.ts'
@@ -96,6 +96,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       traceId: firstHeader(request.headers['x-trace-id']) ?? newTraceId(),
       runId: firstHeader(request.headers['x-run-id']),
       mfa: firstHeader(request.headers['x-mfa']) === 'true',
+      // 人工确认凭证（FR-IAM-009）。被 Ask 挡下之后，
+      // 调用方拿着批准了的 Approval id 原样重发这个请求
+      approvalId: firstHeader(request.headers['x-approval']),
     })
   })
 
@@ -111,6 +114,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     }
     const subject = caller.subject
     const audit = new BufferedAuditSink()
+    const approvals = new BufferedApprovalSink()
     // 每个请求取一次当前状态机定义：改了流程，下一个请求就按新的走
     const activeWorkflows = deps.lifecycles === undefined
       ? deps.workflows
@@ -125,13 +129,25 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
           relations: new PgRelationRepository(trx, subject.tenant),
           events: new PgOutbox(trx),
           audit,
+          approvals,
           policies: deps.policies,
           clock,
         })
         return fn(service, caller)
       })
     } finally {
-      // 独立事务落盘：业务事务回滚时（尤其是授权被拒），审计不能跟着消失。
+      // 独立事务落盘：业务事务回滚时（尤其是授权被拒），
+      // 审计和待审批的挂起单都不能跟着消失。
+      const pending = approvals.drain()
+      if (pending.length > 0) {
+        try {
+          await withTenant(db, subject.tenant, (trx: Db) =>
+            flushApprovals(trx, subject.tenant, pending),
+          )
+        } catch (error) {
+          app.log.error({ err: error, pending: pending.length }, 'failed to persist approvals')
+        }
+      }
       const entries = audit.drain()
       try {
         await withTenant(db, subject.tenant, (trx: Db) => flushAudit(trx, entries))

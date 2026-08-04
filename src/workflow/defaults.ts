@@ -242,6 +242,47 @@ export const RELEASE_LIFECYCLE: Lifecycle = {
   ],
 }
 
+/**
+ * 人工确认（FR-IAM-009）。
+ *
+ * 三个终态刻意分开：Approved / Rejected / Expired。
+ * 把超时并进 Rejected 的话，"有多少确认是被人拒的、多少是没人管"
+ * 就再也分不出来——而这两件事要采取的行动完全不同。
+ */
+export const APPROVAL_LIFECYCLE: Lifecycle = {
+  id: 'approval-default',
+  entityType: 'Approval',
+  initial: 'Pending',
+  states: [
+    {
+      name: 'Pending',
+      // 挂起超过一天没人管，SLA 巡检会告警。真正的过期判定在使用时做——
+      // 靠巡检把状态刷成 Expired 的话，巡检停掉的那几天里
+      // 过期的批准照样能用（见 approvalProblem）
+      sla: { maxDurationMs: DAY, onBreach: 'escalate' },
+    },
+    {
+      name: 'Approved',
+      entryActions: [{ kind: 'stampNow', path: 'decidedAt' }],
+      terminal: true,
+    },
+    { name: 'Rejected', entryActions: [{ kind: 'stampNow', path: 'decidedAt' }], terminal: true },
+    {
+      name: 'Expired',
+      description: '超时没人处理。默认拒绝——沉默不是同意',
+      entryActions: [{ kind: 'stampNow', path: 'decidedAt' }],
+      terminal: true,
+    },
+  ],
+  transitions: [
+    // 批准需要一个人才有的能力。少了这条，被 Ask 挡下的主体
+    // 可以自己批准自己，整条确认流程就是个摆设
+    { from: ['Pending'], to: 'Approved', capability: 'Approval.Decide' },
+    { from: ['Pending'], to: 'Rejected', capability: 'Approval.Decide' },
+    { from: ['Pending'], to: 'Expired' },
+  ],
+}
+
 export const ACCEPTANCE_LIFECYCLE: Lifecycle = {
   id: 'acceptance-default',
   entityType: 'Acceptance',
@@ -366,6 +407,7 @@ export const DEFAULT_LIFECYCLES: readonly Lifecycle[] = [
   NOTIFICATION_LIFECYCLE,
   ACCEPTANCE_LIFECYCLE,
   RELEASE_LIFECYCLE,
+  APPROVAL_LIFECYCLE,
 ]
 
 export function buildDefaultWorkflowRegistry(): WorkflowRegistry {

@@ -35,6 +35,7 @@ import type {
   Page,
   PageResult,
   PathHit,
+  PendingApprovalSink,
   RelationRepository,
   ResourceFilter,
   ResourceRepository,
@@ -71,6 +72,14 @@ export type Caller = {
    * 人发起的操作没有这个字段——人不会以机器速度制造环。
    */
   automationDepth?: number | undefined
+  /**
+   * 人工确认凭证（FR-IAM-009）。
+   *
+   * 被 Ask 挡下之后，调用方拿着批准了的 Approval id 重试。
+   * 放在 Caller 上而不是每个方法的参数里：授权只有一个收口，
+   * 凭证也该只在那一处被检查——分散到各个端点必然漏掉几个。
+   */
+  approvalId?: string | undefined
 }
 
 export type ServiceDeps = {
@@ -82,6 +91,10 @@ export type ServiceDeps = {
   audit: AuditSink
   policies: readonly Policy[]
   clock: Clock
+  /** 人工确认的有效期（FR-IAM-009）。缺省 24 小时 */
+  approvalTtlMs?: number
+  /** 挂起单的缓冲。由调用方在独立事务里落盘——业务事务会回滚 */
+  approvals?: PendingApprovalSink
 }
 
 export class ResourceService {
@@ -152,7 +165,79 @@ export class ResourceService {
       traceId: caller.traceId ?? null,
     })
 
+    if (decision.effect === 'Ask') {
+      await this.#handleAsk(caller, action, resource, decision, now)
+      return
+    }
     throwIfNotAllowed(decision)
+  }
+
+  /**
+   * 策略判定为 Ask 时的处理（FR-IAM-009）。
+   *
+   * 三条路：
+   *   ① 带着一个**已批准且未过期**的 Approval → 放行。
+   *   ② 带着一个不合格的（不存在 / 不匹配 / 已过期 / 未批准）→ 拒绝，说清楚是哪一种。
+   *   ③ 什么都没带 → 建一条 Pending 挂起，428 里把 id 给回去。
+   *
+   * 过期在**使用时**判，而不是靠一个定时任务把状态刷成 Expired。
+   * 靠任务的话，任务停掉的那几天里过期的批准照样能用——
+   * 一个安静失效的护栏。任务只负责让"没人管的确认"在界面上看得见。
+   */
+  async #handleAsk(
+    caller: Caller,
+    action: Capability,
+    resource: ResourceRef,
+    decision: Decision,
+    now: Date,
+  ): Promise<void> {
+    if (caller.approvalId !== undefined) {
+      const approval = await this.#deps.resources.findById(caller.approvalId)
+      const reason = approvalProblem(approval, action, resource, now)
+      if (reason === null) return
+      throw new ForbiddenError(`approval ${caller.approvalId} cannot authorise this: ${reason}`, {
+        matchedPolicy: decision.matchedPolicy ?? null,
+        approvalId: caller.approvalId,
+      })
+    }
+
+    const ttlMs = this.#deps.approvalTtlMs ?? DEFAULT_APPROVAL_TTL_MS
+    const pending: Resource = {
+      id: newResourceId('Approval'),
+      tenant: resource.tenant,
+      type: 'Approval',
+      ontologyVersion: this.#deps.registry.entityType('Approval').version,
+      workspace: resource.workspace ?? 'default',
+      project: resource.project ?? null,
+      owner: caller.subject.principal,
+      createdBy: caller.subject.principal,
+      createdAt: now,
+      updatedAt: now,
+      status: 'Pending',
+      lifecycle: 'approval-default',
+      version: 1,
+      labels: ['pending-approval'],
+      attributes: {
+        action,
+        requestedBy: caller.subject.principal,
+        ...(resource.id === undefined ? {} : { targetId: resource.id }),
+        ...(decision.matchedPolicy == null ? {} : { matchedPolicy: decision.matchedPolicy }),
+        expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
+      },
+      visibility: 'workspace',
+      deletedAt: null,
+    }
+    // 交给缓冲，不直接落库：马上要抛 428，事务会回滚，
+    // 写在这个事务里的挂起单会跟着消失——于是"系统说要审批，
+    // 但审批列表里什么都没有"。也不走 create()：那会再授权一次，
+    // 而我们正处在授权中间
+    this.#deps.approvals?.record(pending)
+
+    throw new ApprovalRequiredError(decision.reason, {
+      matchedPolicy: decision.matchedPolicy ?? null,
+      approvalId: pending.id,
+      expiresInMs: ttlMs,
+    })
   }
 
   // ───────────────────────── 写 ─────────────────────────
@@ -1052,6 +1137,49 @@ export class ResourceService {
     }
     return resource
   }
+}
+
+/**
+ * 一次确认的有效期。
+ *
+ * 24 小时不是随便定的：太短会让跨时区的批准永远赶不上，
+ * 太长则失去意义——一张三周前签发的批准还能用，
+ * 和没有确认流程差别不大。
+ */
+export const DEFAULT_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000
+
+/**
+ * 这条 Approval 能不能用来放行这次操作。返回 null 表示可以。
+ *
+ * 每一种不可以都要说清楚是哪一种——"批准无效"这四个字
+ * 会让人反复重试同一个已经过期的凭证。
+ */
+function approvalProblem(
+  approval: Resource | null,
+  action: Capability,
+  resource: ResourceRef,
+  now: Date,
+): string | null {
+  if (approval === null || approval.type !== 'Approval') return 'no such approval'
+  if (approval.deletedAt !== null) return 'approval was deleted'
+  if (approval.status !== 'Approved') return `approval is ${approval.status}, not Approved`
+
+  // 过期在**使用时**判。靠定时任务把状态刷成 Expired 的话，
+  // 任务停掉的那几天里过期的批准照样能用——一个安静失效的护栏
+  const expiresAt = approval.attributes['expiresAt']
+  if (typeof expiresAt !== 'string') return 'approval has no expiry'
+  if (new Date(expiresAt).getTime() <= now.getTime()) return 'approval has expired'
+
+  // 一张批准只对**它被签发时那件事**有效。不比对的话，
+  // "批准删除一个测试对象"就能拿去删生产数据
+  if (approval.attributes['action'] !== action) {
+    return `approval is for "${String(approval.attributes['action'])}", not "${action}"`
+  }
+  const target = approval.attributes['targetId']
+  if (typeof target === 'string' && resource.id !== undefined && target !== resource.id) {
+    return `approval is for ${target}, not ${resource.id}`
+  }
+  return null
 }
 
 function throwIfNotAllowed(decision: Decision): void {

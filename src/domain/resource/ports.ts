@@ -140,6 +140,18 @@ export interface RelationRepository {
   setConfirmed(relationId: string, confirmed: boolean): Promise<boolean>
 }
 
+/**
+ * 待人工确认的挂起单（FR-IAM-009）。
+ *
+ * 和审计是同一个道理：它必须在**业务事务回滚之后**依然存在。
+ * 被 Ask 挡下的请求会抛 428，事务随之回滚——挂起单写在同一个事务里的话，
+ * 会跟着一起消失，于是"系统说要审批，但审批列表里什么都没有"。
+ * 所以缓冲下来，由调用方在独立事务里落盘。
+ */
+export interface PendingApprovalSink {
+  record(approval: import('./resource.ts').Resource): void
+}
+
 export interface EventSink {
   emit(event: DomainEvent): Promise<void>
 }

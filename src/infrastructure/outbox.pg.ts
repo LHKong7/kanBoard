@@ -1,5 +1,12 @@
 import type { Db } from './db/client.ts'
-import type { AuditRecord, AuditSink, EventSink } from '../domain/resource/ports.ts'
+import type {
+  AuditRecord,
+  AuditSink,
+  EventSink,
+  PendingApprovalSink,
+} from '../domain/resource/ports.ts'
+import type { Resource } from '../domain/resource/resource.ts'
+import { PgResourceRepository } from './resource-repository.pg.ts'
 import type { DomainEvent } from '../domain/events.ts'
 
 /**
@@ -53,6 +60,42 @@ export class BufferedAuditSink implements AuditSink {
 
   drain(): AuditRecord[] {
     return this.#entries.splice(0, this.#entries.length)
+  }
+}
+
+/**
+ * 挂起的人工确认（FR-IAM-009）。缓冲的理由和审计一样：
+ * 被 Ask 挡下的请求会抛 428，业务事务随之回滚，
+ * 写在里面的挂起单会跟着消失。
+ */
+export class BufferedApprovalSink implements PendingApprovalSink {
+  readonly #pending: Resource[] = []
+
+  record(approval: Resource): void {
+    this.#pending.push(approval)
+  }
+
+  drain(): Resource[] {
+    return this.#pending.splice(0, this.#pending.length)
+  }
+}
+
+/** 用独立事务落盘挂起单 */
+export async function flushApprovals(
+  db: Db,
+  tenant: string,
+  pending: readonly Resource[],
+): Promise<void> {
+  if (pending.length === 0) return
+  const repo = new PgResourceRepository(db, tenant)
+  // 逐条插入而不是批量：一条挂起单写失败不该把其余的一起带走，
+  // 而"少了一条待审批"比"少了一批"更难被发现
+  for (const approval of pending) {
+    try {
+      await repo.insert(approval)
+    } catch (error) {
+      console.error(`[approval] failed to persist pending approval ${approval.id}:`, error)
+    }
   }
 }
 

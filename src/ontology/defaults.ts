@@ -234,6 +234,31 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
     ],
   },
   {
+    name: 'Approval',
+    version: '1.0.0',
+    context: 'Identity',
+    lifecycle: 'approval-default',
+    description:
+      '一次人工确认（FR-IAM-009）。策略判定为 Ask 时挂起在这里，' +
+      '等人批准或拒绝，**超时自动拒绝**。' +
+      '做成领域对象而不是内存里的一张挂起表：进程重启不该让待批的操作凭空消失，' +
+      '而"谁批准了什么"本来就该是可查、可审计的。',
+    attributes: [
+      { name: 'action', kind: 'string', required: true, description: '被挂起的 Capability' },
+      { name: 'requestedBy', kind: 'string', required: true },
+      { name: 'targetId', kind: 'string', description: '作用于哪个对象' },
+      { name: 'matchedPolicy', kind: 'string', description: '哪条 Ask 策略把它挡下来的' },
+      {
+        name: 'expiresAt',
+        kind: 'datetime',
+        required: true,
+        description: '过了这个时刻自动拒绝。**没有它，一次挂起就是永久待批**',
+      },
+      { name: 'decidedBy', kind: 'string', derived: true },
+      { name: 'decidedAt', kind: 'datetime', derived: true },
+    ],
+  },
+  {
     name: 'Acceptance',
     version: '1.0.0',
     context: 'Requirement',
