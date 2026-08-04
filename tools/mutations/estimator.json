@@ -1,0 +1,66 @@
+{
+  "file": "src/domain/ai/estimator.ts",
+  "test": "tests/estimator.test.ts",
+  "mutations": [
+    {
+      "name": "用平均数而不是中位数",
+      "from": "  return sorted.length % 2 === 0 ? ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2 : (sorted[mid] ?? 0)",
+      "to": "  return values.reduce((s, v) => s + v, 0) / values.length"
+    },
+    {
+      "name": "没有可比的也硬估",
+      "from": "      points: 0,\n      analogies: [],\n      rationale: '没有找到可比的历史任务，无法给出有依据的估算',\n      confident: false,",
+      "to": "      points: 5,\n      analogies: [],\n      rationale: '没有找到可比的历史任务，无法给出有依据的估算',\n      confident: true,"
+    },
+    {
+      "name": "相似度不设下限",
+      "from": "filter((x) => x.similarity >= MIN_SIMILARITY)",
+      "to": "filter(() => true)"
+    },
+    {
+      "name": "拿自己当类比",
+      "from": "filter((s) => s.id !== target.id && typeof s.points === 'number')",
+      "to": "filter((s) => typeof s.points === 'number')"
+    },
+    {
+      "name": "用没有点数的历史",
+      "from": "filter((s) => s.id !== target.id && typeof s.points === 'number')",
+      "to": "filter((s) => s.id !== target.id)"
+    },
+    {
+      "name": "不截到最近的 k 条",
+      "from": ".slice(0, neighbours)",
+      "to": ".slice(0)"
+    },
+    {
+      "name": "同分时顺序不确定",
+      "from": ".sort((a, b) => b.similarity - a.similarity || a.story.id.localeCompare(b.story.id))",
+      "to": ".sort((a, b) => b.similarity - a.similarity)"
+    },
+    {
+      "name": "档位对半时往下取",
+      "from": "if (gap <= bestGap) {",
+      "to": "if (gap < bestGap) {"
+    },
+    {
+      "name": "偏差按点数算而不是档数",
+      "from": "return Math.abs(ia - ib)",
+      "to": "return Math.abs(snapToBand(a) - snapToBand(b))"
+    },
+    {
+      "name": "弃权算进中位偏差",
+      "from": "      abstained++\n      continue",
+      "to": "      abstained++\n      perStory.push({ id: story.id, actual, predicted: 0, bands: 0 })\n      continue"
+    },
+    {
+      "name": "相似度分母取历史那条",
+      "from": "return hits / targetTerms.size",
+      "to": "return hits / candidate.size"
+    },
+    {
+      "name": "留出集为空时中位偏差算 0",
+      "from": "perStory.length === 0 ? Infinity : median(perStory.map((p) => p.bands))",
+      "to": "median(perStory.map((p) => p.bands))"
+    }
+  ]
+}
