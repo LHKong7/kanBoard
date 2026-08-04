@@ -50,6 +50,22 @@ export type ModelResponse = {
   action:
     | { kind: 'finish'; summary: string }
     | { kind: 'propose'; resourceType: string; attributes: Record<string, unknown>; rationale: string }
+    /**
+     * 调用一个外部工具。
+     *
+     * 注意这里给的是**意图**（哪个 connector、哪个操作、什么参数），
+     * 不是一个 URL。运行时把它交给 ConnectorGateway，
+     * 由网关去授权、限流、注入凭据、脱敏——模型既不知道凭据，
+     * 也没有绕过这一层的办法（FR-CON-002）。
+     */
+    | {
+        kind: 'call'
+        connectorId: string
+        operation: string
+        target: string
+        params: Record<string, unknown>
+        idempotencyKey?: string
+      }
   tokensUsed: number
   costUsd: number
 }
@@ -84,7 +100,7 @@ export const DEFAULT_RUN_BUDGET: RunBudget = {
   maxCostUsd: 5,
 }
 
-export type RunStepKind = 'context' | 'reasoning' | 'observation' | 'artifact' | 'guardrail'
+export type RunStepKind = 'context' | 'reasoning' | 'observation' | 'artifact' | 'guardrail' | 'tool'
 
 /** Run 轨迹的一步（FR-AGT-007）。逐步可回放，所以每一步都要能独立看懂 */
 export type RunStep = {

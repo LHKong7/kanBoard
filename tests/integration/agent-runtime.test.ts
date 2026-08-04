@@ -10,6 +10,8 @@ import { AgentRunner } from '../../src/infrastructure/agent-runner.ts'
 import { NeverFinishingModelClient, ScriptedModelClient } from '../../src/infrastructure/model/scripted.ts'
 import type { ScriptedTurn } from '../../src/infrastructure/model/scripted.ts'
 import type { ModelClient } from '../../src/domain/agent/types.ts'
+import type { ConnectorInvoker } from '../../src/domain/agent/runtime.ts'
+import { DomainError } from '../../src/platform/errors.ts'
 
 /**
  * Agent Runtime（FR-AGT-002/003/004/007/009/012）。
@@ -47,8 +49,13 @@ beforeEach(async () => {
   await truncateAll(pool)
 })
 
-function runnerWith(model: ModelClient, onFinished?: AgentRunnerOnFinished): AgentRunner {
+function runnerWith(
+  model: ModelClient,
+  onFinished?: AgentRunnerOnFinished,
+  connectors?: ConnectorInvoker,
+): AgentRunner {
   return new AgentRunner({
+    ...(connectors === undefined ? {} : { connectors }),
     pool,
     tenants: [TENANT],
     registry: buildDefaultRegistry(),
@@ -331,5 +338,83 @@ describe('the run trace is replayable (FR-AGT-007)', () => {
     ])
     // 成本记在产生它的那一步上，超预算时才能看出是哪一步烧掉的
     expect(steps.filter((s) => s.kind === 'reasoning').every((s) => s.tokens_used > 0)).toBe(true)
+  })
+})
+
+
+/**
+ * Agent 通过网关调用外部工具（FR-CON-002 与 FR-AGT-002 的交汇处）。
+ *
+ * 关键不是"能调通"，而是**只能经由网关调**：
+ * 运行时拿不到 connector 列表、碰不到凭据，
+ * 网关拒了它就得把拒绝当作一次观察继续推理。
+ */
+describe('agents reach the outside world only through the gateway', () => {
+  const toolCall: ScriptedTurn = {
+    thought: '先去查一下 issue',
+    action: {
+      kind: 'call',
+      connectorId: 'fake',
+      operation: 'getIssue',
+      target: 'https://api.github.com/repos/x/y',
+      params: { number: 7 },
+    },
+  }
+
+  it('records the tool call in the run trace with the masked result', async () => {
+    const { run } = await seedRun('Autonomous')
+    const invoker = {
+      async invoke() {
+        return { ok: true, data: { title: 'a bug', email: 'a***@example.com' }, replayed: false, attempts: 1 }
+      },
+    }
+    await runnerWith(new ScriptedModelClient([toolCall, FINISH]), undefined, invoker).pollOnce()
+
+    const steps = await queryAsTenant<{ kind: string; summary: string; detail: Record<string, unknown> }>(
+      pool,
+      TENANT,
+      `SELECT kind, summary, detail FROM agent_run_steps WHERE run_id = '${run.id}' ORDER BY seq`,
+    )
+    const tool = steps.find((s) => s.kind === 'tool')
+    expect(tool?.summary).toMatch(/fake\.getIssue/)
+    // 轨迹里存的是脱敏后的值——它会被人看、被导出
+    expect(JSON.stringify(tool?.detail)).toContain('a***@example.com')
+  })
+
+  it('cannot call anything when the run has no connectors configured', async () => {
+    // 没配就是不能调，不是不受限制
+    const { run } = await seedRun('Autonomous')
+    await runnerWith(new ScriptedModelClient([toolCall, FINISH])).pollOnce()
+
+    const steps = await queryAsTenant<{ kind: string; summary: string }>(
+      pool,
+      TENANT,
+      `SELECT kind, summary FROM agent_run_steps WHERE run_id = '${run.id}' ORDER BY seq`,
+    )
+    expect(steps.some((s) => s.kind === 'guardrail' && s.summary.includes('未配置外部工具'))).toBe(true)
+    expect(steps.some((s) => s.kind === 'tool')).toBe(false)
+  })
+
+  it('treats a gateway refusal as an observation rather than a crash', async () => {
+    // 网关拒了，Run 要能继续推理并正常收尾——而且拒绝要留痕
+    const { run } = await seedRun('Autonomous')
+    const invoker = {
+      async invoke(): Promise<never> {
+        throw new DomainError('forbidden', 'target "evil.com" is not in the allow-list', 403)
+      },
+    }
+    const { results } = await runnerWith(
+      new ScriptedModelClient([toolCall, FINISH]),
+      undefined,
+      invoker,
+    ).pollOnce()
+
+    expect(results[0]?.result.outcome.kind).toBe('completed')
+    const steps = await queryAsTenant<{ kind: string; summary: string }>(
+      pool,
+      TENANT,
+      `SELECT kind, summary FROM agent_run_steps WHERE run_id = '${run.id}' ORDER BY seq`,
+    )
+    expect(steps.some((s) => s.kind === 'guardrail' && s.summary.includes('allow-list'))).toBe(true)
   })
 })

@@ -5,6 +5,7 @@ import { PgRelationRepository } from './relation-repository.pg.ts'
 import { PgResourceRepository } from './resource-repository.pg.ts'
 import { PgRunStepRepository } from './run-step-repository.pg.ts'
 import { AgentRuntime } from '../domain/agent/runtime.ts'
+import type { ConnectorInvoker } from '../domain/agent/runtime.ts'
 import type { ModelClient, RunResult } from '../domain/agent/types.ts'
 import { ResourceService } from '../domain/resource/service.ts'
 import type { Caller } from '../domain/resource/service.ts'
@@ -38,6 +39,8 @@ export type AgentRunnerDeps = {
   workflows: WorkflowRegistry
   policies: readonly Policy[]
   model: ModelClient
+  /** 外部系统通道。不给就是这批 Run 不能调用任何外部工具 */
+  connectors?: ConnectorInvoker
   clock?: Clock
   /** 每轮最多认领几个 Run */
   batchSize?: number
@@ -167,6 +170,7 @@ export class AgentRunner {
             model: this.#deps.model,
             steps: new PgRunStepRepository(trx, tenant),
             clock,
+            ...(this.#deps.connectors === undefined ? {} : { connectors: this.#deps.connectors }),
           })
           result = await runtime.execute(agentCaller, run)
         } catch (error) {

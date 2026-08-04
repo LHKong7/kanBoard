@@ -4,6 +4,7 @@ import type { Caller, ResourceService } from '../resource/service.ts'
 import type { Resource } from '../resource/resource.ts'
 import { assembleContext } from './context.ts'
 import { agentSpecFrom, DEFAULT_RUN_BUDGET } from './types.ts'
+import type { CallInput, CallResult } from '../connector/types.ts'
 import type {
   AgentSpec,
   CollaborationMode,
@@ -13,7 +14,19 @@ import type {
   RunResult,
   RunStep,
   RunStepRepository,
+  ModelResponse,
 } from './types.ts'
+
+/**
+ * 运行时只认这个窄接口，不认 `ConnectorGateway` 本身。
+ *
+ * 好处是测试里可以塞一个假的，而生产里塞真网关——
+ * 更重要的是它明确了：运行时**只能**发起调用，
+ * 拿不到 connector 列表，也碰不到凭据。
+ */
+export interface ConnectorInvoker {
+  invoke(caller: Caller, input: CallInput): Promise<CallResult>
+}
 
 /**
  * Agent Runtime（FR-AGT-002）。
@@ -38,6 +51,13 @@ export type RuntimeDeps = {
   model: ModelClient
   steps: RunStepRepository
   clock: Clock
+  /**
+   * 外部系统的唯一通道（FR-CON-002）。
+   *
+   * 不给就是这个 Agent 不能调用任何外部工具——**不是"不受限制"**。
+   * 缺省值必须是最小权限那一侧。
+   */
+  connectors?: ConnectorInvoker
   /** Context 装配的深度与段数上限 */
   contextDepth?: number
   contextLimit?: number
@@ -152,6 +172,13 @@ export class AgentRuntime {
         return { outcome: { kind: 'budget-exceeded', ...exceeded }, steps: seq, tokensUsed, costUsd, proposals }
       }
 
+      // ── 调用外部工具 ──────────────────────────────────
+      if (response.action.kind === 'call') {
+        const observation = await this.#callTool(caller, response.action, record)
+        history.push({ thought: response.thought, observation })
+        continue
+      }
+
       if (response.action.kind === 'finish') {
         const summary = response.action.summary
         await record('artifact', '完成', { summary })
@@ -224,6 +251,52 @@ export class AgentRuntime {
       tokensUsed,
       costUsd,
       proposals,
+    }
+  }
+
+  /**
+   * 经网关调用一个外部工具。
+   *
+   * 失败**不终止 Run**：把失败原文作为一次观察交回模型，它可能换个参数再试。
+   * 但失败必须留痕——一次静默失败的工具调用，会让模型基于"什么都没发生"
+   * 继续推理，而使用者看到的产出像是凭空来的。
+   */
+  async #callTool(
+    caller: Caller,
+    action: Extract<ModelResponse['action'], { kind: 'call' }>,
+    record: (kind: RunStep['kind'], summary: string, detail: Record<string, unknown>) => Promise<void>,
+  ): Promise<string> {
+    const invoker = this.#deps.connectors
+    if (invoker === undefined) {
+      // 没配就是不能调，**不是**不受限制。缺省值必须在最小权限那一侧
+      await record('guardrail', `拒绝调用 ${action.connectorId}.${action.operation}：该 Run 未配置外部工具`, {
+        connectorId: action.connectorId,
+      })
+      return '这次执行没有配置任何外部工具'
+    }
+
+    try {
+      const result = await invoker.invoke(caller, {
+        connectorId: action.connectorId,
+        operation: action.operation,
+        target: action.target,
+        params: action.params,
+        ...(action.idempotencyKey === undefined ? {} : { idempotencyKey: action.idempotencyKey }),
+      })
+      await record('tool', `${action.connectorId}.${action.operation} → ${action.target}`, {
+        // 记的是网关脱敏之后的结果：轨迹会被人看、被导出，不该成为泄漏点
+        replayed: result.replayed,
+        attempts: result.attempts,
+        data: result.data,
+      })
+      return JSON.stringify(result.data)
+    } catch (error) {
+      const message = error instanceof DomainError ? error.message : String(error)
+      await record('guardrail', `工具调用被拒或失败：${message}`, {
+        connectorId: action.connectorId,
+        operation: action.operation,
+      })
+      return `调用失败：${message}`
     }
   }
 }
