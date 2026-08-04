@@ -342,6 +342,35 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return { items }
   })
 
+  /**
+   * 北极星指标（FR-DASH-015）。
+   *
+   * 单独一条路径而不是混进 `/v1/metrics/:id`：它的形状不一样——
+   * 有分级分布、有口径版本、有"还可能变"的临时计数。
+   * 硬套进通用指标模型只会让那个模型变成什么都能装的容器。
+   */
+  app.get('/v1/metrics:automation-rate', async (request) => {
+    const q = metricScopeSchema.parse(request.query ?? {})
+    const summary = await inTenant(request, async (service, caller) => {
+      const registry = deps.lifecycles === undefined ? deps.workflows : await deps.lifecycles.current()
+      return new DashboardService(service, registry).automationRate(caller, q)
+    })
+    return {
+      ...summary,
+      // 明细一起给：北极星指标必须能下钻到"是哪些工作项"，
+      // 否则它只是一个没人能验证的数字
+      items: summary.items.map((i) => ({
+        id: i.id,
+        type: i.type,
+        title: i.title,
+        level: i.level,
+        editRatio: i.editRatio,
+        agent: i.agent,
+        provisional: i.provisional,
+      })),
+    }
+  })
+
   app.get('/v1/metrics/:id', async (request) => {
     const params = metricIdSchema.parse(request.params)
     const q = metricScopeSchema.parse(request.query ?? {})

@@ -211,3 +211,118 @@ describe('agent metrics make the review burden visible (FR-DASH-003)', () => {
     expect((await metric('agent.runs.awaiting-review')).json().direction).toBe('lower-is-better')
   })
 })
+
+/**
+ * Automation Rate（FR-DASH-015，口径见 docs/prd/11-dashboard.md §2）。
+ *
+ * 纯计算部分在 tests/automation-rate.test.ts 里逐条对着口径表验证过。
+ * 这里验证的是**接进真实数据之后仍然对**：历史能还原出 Agent 初版，
+ * 终态取自状态机而不是另写一份清单，分母包含人做的工作项。
+ */
+describe('Automation Rate over real data (FR-DASH-015)', () => {
+  const rate = async (qs = '') =>
+    app.inject({ method: 'GET', url: `/v1/metrics:automation-rate${qs}`, headers: asAdmin })
+
+  async function agentTask(title: string, edit?: Record<string, unknown>) {
+    // 以 Agent 身份创建，这样 createdBy 是 agent://
+    const asAgent = {
+      'x-principal': 'agent://planner@1.0.0',
+      'x-tenant': TENANT,
+      'x-roles': 'AIAgent',
+      'x-capabilities': 'Task.*',
+    }
+    const created = await app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: asAgent,
+      payload: { type: 'Task', workspace: 'ws', attributes: { title, assignee: 'user://bob' } },
+    })
+    const id = created.json().id as string
+
+    if (edit !== undefined) {
+      const current = await app.inject({ method: 'GET', url: `/v1/resources/${id}`, headers: asAdmin })
+      await app.inject({
+        method: 'PATCH',
+        url: `/v1/resources/${id}`,
+        headers: asAdmin,
+        payload: {
+          expectedVersion: current.json().version,
+          attributes: { ...current.json().attributes, ...edit },
+        },
+      })
+    }
+    for (const to of ['Doing', 'Review', 'Testing', 'Done']) await move(id, to)
+    return id
+  }
+
+  it('does not collide with GET /v1/metrics/:id', async () => {
+    // 这个项目在 `:query` 上栽过一次：Fastify 把冒号后的部分当成了路径参数
+    const res = await rate()
+    expect(res.statusCode).toBe(200)
+    expect(res.json().rubricVersion).toBeTruthy()
+
+    const byId = await metric('project.tasks.blocked')
+    expect(byId.statusCode).toBe(200)
+    expect(byId.json().id).toBe('project.tasks.blocked')
+  })
+
+  it('counts an untouched agent output as L3', async () => {
+    await agentTask('Agent 原样被接受的任务')
+    const body = (await rate()).json()
+    expect(body.byLevel.L3).toBe(1)
+    expect(body.automationRate).toBe(1)
+  })
+
+  it('counts human work in the denominator', async () => {
+    // 只统计 Agent 碰过的，率会虚高到毫无意义
+    await agentTask('Agent 的')
+    const human = await create('Task', { title: '人做的', assignee: 'user://bob' })
+    for (const to of ['Doing', 'Review', 'Testing', 'Done']) await move(human, to)
+
+    const body = (await rate()).json()
+    expect(body.total).toBe(2)
+    expect(body.byLevel.L0).toBe(1)
+    expect(body.automationRate).toBe(0.5)
+  })
+
+  it('drops to a lower level once a human edits the output', async () => {
+    await agentTask('原标题', { title: '人重写过的完全不同的标题内容' })
+    const body = (await rate()).json()
+    expect(body.byLevel.L3).toBe(0)
+    expect(body.items[0].editRatio).toBeGreaterThan(0)
+  })
+
+  it('ignores items that have not reached a terminal state', async () => {
+    // 未进入终态的产出不计入（§2.3）
+    const asAgent = {
+      'x-principal': 'agent://planner@1.0.0',
+      'x-tenant': TENANT,
+      'x-roles': 'AIAgent',
+      'x-capabilities': 'Task.*',
+    }
+    await app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: asAgent,
+      payload: { type: 'Task', workspace: 'ws', attributes: { title: '还没做完' } },
+    })
+    expect((await rate()).json().total).toBe(0)
+  })
+
+  it('exposes the drill-down and the rubric version', async () => {
+    // 一个没人能验证的数字不配当北极星
+    await agentTask('可下钻的任务')
+    const body = (await rate()).json()
+    expect(body.items).toHaveLength(1)
+    expect(body.items[0].title).toBe('可下钻的任务')
+    expect(body.items[0].agent).toBe('agent://planner@1.0.0')
+    expect(body.rubricVersion).toBe('1.0.0')
+  })
+
+  it('flags recent L3 items as provisional', async () => {
+    // 刚进终态的项还在 7 天推翻窗口内，随时可能被扣回去
+    await agentTask('刚刚完成的')
+    const body = (await rate()).json()
+    expect(body.provisional).toBe(1)
+  })
+})
