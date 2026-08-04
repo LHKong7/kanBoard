@@ -3,6 +3,7 @@ import { ValidationError } from '../platform/errors.ts'
 import { attributesSchema, toFieldErrors } from './validation.ts'
 import { MAX_LENGTH_BY_KIND } from './types.ts'
 import type { EntityTypeDef, RelationTypeDef } from './types.ts'
+import { compatibilityOf } from './compatibility.ts'
 
 /**
  * Ontology Registry（FR-ONT-001）。
@@ -24,6 +25,44 @@ export class OntologyRegistry {
     const normalized = withResolvedMaxLength(def)
     this.#entities.set(def.name, normalized)
     // 提前构建 schema：本体定义里的错误（如 enum 没有取值）在注册时就暴露，而不是等到第一次写入
+    this.#schemas.set(def.name, attributesSchema(normalized))
+  }
+
+  /**
+   * 升级一个已注册的类型（FR-ONT-007）。
+   *
+   * 和 `registerEntity` 分开，是因为**升级和首次注册是两件事**：
+   * 让 register 悄悄覆盖已有定义的话，一次拼错的类型名会安静地
+   * 替换掉另一个类型的模式，而那要到第一次写入失败时才会被发现。
+   *
+   * minor / patch 升级要过兼容检查。不兼容就是 major——
+   * 破坏性变更不是不允许，是要求它显式地表现在版本号上。
+   */
+  upgradeEntity(def: EntityTypeDef): void {
+    const current = this.#entities.get(def.name)
+    if (current === undefined) {
+      throw new ValidationError(`cannot upgrade unregistered entity type: ${def.name}`, {
+        known: [...this.#entities.keys()].sort(),
+      })
+    }
+    assertSemver(def.name, def.version)
+    assertUniqueAttributeNames(def)
+
+    const verdict = compatibilityOf(current, def)
+    if (!verdict.ok) {
+      throw new ValidationError(
+        `incompatible ${verdict.bump} upgrade of "${def.name}" (${current.version} → ${def.version})`,
+        {
+          entityType: def.name,
+          bump: verdict.bump,
+          // 逐条列出来。只说"不兼容"的话，人得自己逐属性比对
+          fields: verdict.problems.map((p) => ({ path: p.attribute, message: p.reason })),
+        },
+      )
+    }
+
+    const normalized = withResolvedMaxLength(def)
+    this.#entities.set(def.name, normalized)
     this.#schemas.set(def.name, attributesSchema(normalized))
   }
 
