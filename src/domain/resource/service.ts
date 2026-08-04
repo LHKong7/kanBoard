@@ -43,6 +43,15 @@ import type { CreateResourceInput, Resource, UpdateResourceInput, Visibility } f
 import type { RelationInstance, RelationOrigin } from '../../ontology/types.ts'
 
 /**
+ * 「项目装着这个对象」这条边的类型，以及容器的实体类型。
+ *
+ * 写成常量而不是散在各处的字面量：这两个名字是 `project` 标量字段与图之间
+ * 唯一的连接点，改名时必须一处改完。
+ */
+const CONTAINS = 'contains'
+const PROJECT_TYPE = 'Project'
+
+/**
  * 调用者身份。人与 Agent 使用同一个结构——
  * 这是 ADR-0002 的硬性要求：不存在 Agent 专用路径，也就不该有 Agent 专用的调用者类型。
  */
@@ -162,6 +171,11 @@ export class ResourceService {
     const visibility = assertVisibility(input.visibility ?? 'workspace')
     const now = this.#deps.clock.now()
 
+    // project 落库前先确认它真的指向一个活着的 Project，并且本体允许把这种类型装进去。
+    // 不查的话，`project` 可以指向任何字符串——包括一个根本不存在的 id，
+    // 而接口照样回 201（docs/dogfooding-log.md #6）。
+    const container = input.project == null ? null : await this.#requireContainer(input.project, input.type)
+
     // 初始状态由生命周期决定。允许调用方指定，但必须是该状态机声明过的状态——
     // 否则对象一出生就在一个流程到不了的地方。
     const lifecycle = def.lifecycle === undefined ? null : this.#deps.workflows.byId(def.lifecycle)
@@ -219,7 +233,83 @@ export class ResourceService {
       }),
     )
 
+    if (container !== null) {
+      await this.#linkToProject(caller, container, resource, now)
+    }
+
     return resource
+  }
+
+  /**
+   * 建立 Project --contains--> resource 的边。
+   *
+   * 为什么 `create` 要自动建这条边：`project` 字段和 `contains` 边是**同一个事实的两种存储**。
+   * 只写字段不建边，对象在图里就是不可达的——自用时 26 个对象声称属于某个项目，
+   * 却没有一条边指向它们，而系统一声没吭（docs/dogfooding-log.md #6）。
+   * 靠调用方记得补边是行不通的：我自己写导入脚本时就漏了 Knowledge 那一类。
+   * 让服务层维持这个不变式，图就是"构造出来就完整"，而不是"靠纪律保持完整"。
+   *
+   * 这里**不再单独做一次授权**：调用方已经通过了 `<Type>.Create` 且被允许指定 project，
+   * 而这条边就是"放进这个项目"这件事本身。再查一次 `Project.Update` 会让
+   * "能在项目里建任务但不能改项目"的人凭空建不了任务——两次判定表达的是同一个意图。
+   */
+  async #linkToProject(
+    caller: Caller,
+    container: Resource,
+    resource: Resource,
+    now: Date,
+  ): Promise<void> {
+    const relation: RelationInstance = {
+      id: newRelationId(),
+      tenant: resource.tenant,
+      type: CONTAINS,
+      fromId: container.id,
+      toId: resource.id,
+      createdBy: 'system',
+      createdAt: now,
+      confidence: null,
+      confirmed: true,
+    }
+    const { relation: persisted, created } = await this.#deps.relations.insert(relation)
+    // 边本来就在（比如导入脚本已经手工建过）就不再发一次事件——
+    // 否则同一条边会重复触发下游自动化
+    if (!created) return
+    await this.#emit(
+      caller,
+      relationCreated({
+        tenant: resource.tenant,
+        relationId: persisted.id,
+        relationType: persisted.type,
+        fromId: persisted.fromId,
+        toId: persisted.toId,
+        createdBy: persisted.createdBy,
+        occurredAt: now,
+        traceId: caller.traceId ?? null,
+      }),
+    )
+  }
+
+  /**
+   * 确认 `project` 指向一个活着的 Project，且本体允许它装下这种类型。
+   *
+   * 类型不在 `contains` 的值域里就直接拒绝，而不是"存字段但不建边"——
+   * 后者正是产生半连接对象的做法。要让 Project 装下新类型，改本体，
+   * 不要在这里开特例（ADR-0001）。
+   */
+  async #requireContainer(projectId: string, childType: string): Promise<Resource> {
+    const container = await this.#deps.resources.findById(projectId)
+    if (container === null || container.deletedAt !== null) {
+      throw new ValidationError(`project ${projectId} does not exist`, { field: 'project' })
+    }
+    if (container.type !== PROJECT_TYPE) {
+      throw new ValidationError(
+        `project must reference a ${PROJECT_TYPE}, but ${projectId} is a ${container.type}`,
+        { field: 'project' },
+      )
+    }
+    // 复用本体的定义域/值域校验：报错文案与手工建关系时完全一致
+    this.#deps.registry.validateRelation(CONTAINS, container.type, childType)
+    return container
   }
 
   async update(caller: Caller, id: string, input: UpdateResourceInput): Promise<Resource> {
@@ -616,22 +706,26 @@ export class ResourceService {
       confirmed: origin.startsWith('agent:') ? null : true,
     }
 
-    await this.#deps.relations.insert(relation)
-    await this.#emit(
-      caller,
-      relationCreated({
-        tenant: from.tenant,
-        relationId: relation.id,
-        relationType: relation.type,
-        fromId: relation.fromId,
-        toId: relation.toId,
-        createdBy: origin,
-        occurredAt: now,
-        traceId: caller.traceId ?? null,
-      }),
-    )
+    // 返回的是**库里那一条**。这条边已经存在时，把刚构造的对象原样返回
+    // 等于给调用方一个不存在的 id（docs/dogfooding-log.md #8）
+    const { relation: persisted, created } = await this.#deps.relations.insert(relation)
+    if (created) {
+      await this.#emit(
+        caller,
+        relationCreated({
+          tenant: from.tenant,
+          relationId: persisted.id,
+          relationType: persisted.type,
+          fromId: persisted.fromId,
+          toId: persisted.toId,
+          createdBy: persisted.createdBy,
+          occurredAt: now,
+          traceId: caller.traceId ?? null,
+        }),
+      )
+    }
 
-    return relation
+    return persisted
   }
 
   /**

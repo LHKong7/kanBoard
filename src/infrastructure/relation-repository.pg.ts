@@ -1,6 +1,7 @@
 import { sql } from 'kysely'
 import type { Db } from './db/client.ts'
 import type {
+  InsertRelationResult,
   PathHit,
   RelationRepository,
   TraverseResult,
@@ -49,8 +50,8 @@ export class PgRelationRepository implements RelationRepository {
     this.#tenant = tenant
   }
 
-  async insert(relation: RelationInstance): Promise<void> {
-    await this.#db
+  async insert(relation: RelationInstance): Promise<InsertRelationResult> {
+    const inserted = await this.#db
       .insertInto('relations')
       .values({
         id: relation.id,
@@ -65,7 +66,35 @@ export class PgRelationRepository implements RelationRepository {
       })
       // 同一条边重复建立是幂等的：自动关系建立规则会反复触发，报错没有意义
       .onConflict((oc) => oc.columns(['tenant', 'from_id', 'type', 'to_id']).doNothing())
-      .execute()
+      .returningAll()
+      .executeTakeFirst()
+
+    if (inserted !== undefined) {
+      return { relation: toRelation(inserted as unknown as RelationRow), created: true }
+    }
+
+    // 冲突了。**必须**把已存在的那条查回来还给调用方——
+    // 早先这里直接把传进来的对象原样返回，于是接口回 201 并附上一个
+    // 数据库里根本不存在的 id：拿它去删会 404，事件里也带着这个不存在的 id。
+    // 幂等的意思是"再来一次结果相同"，不是"假装刚刚创建了一条"。
+    const existing = await this.#db
+      .selectFrom('relations')
+      .selectAll()
+      .where('tenant', '=', this.#tenant)
+      .where('from_id', '=', relation.fromId)
+      .where('type', '=', relation.type)
+      .where('to_id', '=', relation.toId)
+      .executeTakeFirst()
+
+    if (existing === undefined) {
+      // 冲突了却查不到：只可能是 RLS 挡住了另一个租户的同名边，
+      // 或者唯一索引与这里的查询条件不一致。两种都是要立刻知道的问题
+      throw new Error(
+        `relation insert conflicted but the existing edge could not be read back ` +
+          `(${relation.fromId} -${relation.type}-> ${relation.toId})`,
+      )
+    }
+    return { relation: toRelation(existing as unknown as RelationRow), created: false }
   }
 
   async remove(relationId: string): Promise<boolean> {

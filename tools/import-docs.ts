@@ -13,6 +13,10 @@ import { join } from 'node:path'
  *   docs/prd/*.md          → Knowledge
  *   PRD 里的 FR-* 表格行   → Requirement
  *   ADR 的「关联需求」     → Decision --explains--> Requirement
+ *
+ * 不需要手工建 `Project --contains-->` 那些边：写了 `project` 字段，
+ * 服务层就会维持这条不变式（docs/dogfooding-log.md #6）。
+ * 第一版这里是手工建的，也正因为是手工的，Knowledge 那一类漏掉了 16 条。
  */
 
 const AUTH = {
@@ -158,11 +162,6 @@ export async function importDocs(base: string, docsDir: string): Promise<ImportS
           },
         })
         summary.requirements.set(row.id, created.id)
-        await post(base, `/v1/resources/${project.id}/relations`, {
-          type: 'contains',
-          toId: created.id,
-        })
-        summary.relations++
       } catch (error) {
         summary.rejected.push({ what: row.id, why: String((error as Error).message) })
       }
@@ -171,7 +170,7 @@ export async function importDocs(base: string, docsDir: string): Promise<ImportS
     // 整篇文档作为一条知识。Knowledge 必须有来源关系才能发布，
     // 这里先留在 Draft——迁入的文档暂时没有可指向的来源对象
     try {
-      const created = await post(base, '/v1/resources', {
+      await post(base, '/v1/resources', {
         type: 'Knowledge',
         workspace: 'ws_projectos',
         project: project.id,
@@ -179,14 +178,6 @@ export async function importDocs(base: string, docsDir: string): Promise<ImportS
         attributes: { title, body: markdown.slice(0, 200_000), confidence: 100 },
       })
       summary.knowledge++
-      // 第一版漏了这条边，16 条知识就那么漂着，系统一声没吭
-      // （docs/dogfooding-log.md #6）。`project` 字段只是个标量，
-      // 不构成图上的边——要能从项目遍历到它，必须真的建关系。
-      await post(base, `/v1/resources/${project.id}/relations`, {
-        type: 'contains',
-        toId: created.id,
-      })
-      summary.relations++
     } catch (error) {
       summary.rejected.push({ what: `Knowledge: ${title}`, why: String((error as Error).message) })
     }
@@ -214,11 +205,6 @@ export async function importDocs(base: string, docsDir: string): Promise<ImportS
         },
       })
       summary.decisions.set(heading.number, created.id)
-      await post(base, `/v1/resources/${project.id}/relations`, {
-        type: 'contains',
-        toId: created.id,
-      })
-      summary.relations++
 
       // 决策接受了就推进状态。Superseded 的 ADR 也要如实反映
       const clean = status.replace(/[*~]/g, '').trim()

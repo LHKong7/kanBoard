@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type pg from 'pg'
 import type { FastifyInstance } from 'fastify'
-import { assertNotSuperuser, setupTestDb, truncateAll } from '../helpers/db.ts'
+import { assertNotSuperuser, queryAsTenant, setupTestDb, truncateAll } from '../helpers/db.ts'
 import { buildServer } from '../../src/api/server.ts'
 import { buildDefaultRegistry } from '../../src/ontology/defaults.ts'
 import { buildDefaultWorkflowRegistry } from '../../src/workflow/defaults.ts'
@@ -511,5 +511,160 @@ describe('agent-inferred relations (FR-ONT-006)', () => {
     const b = await create('Task', { title: 'b' })
     const res = await relate(a, 'blockedBy', b)
     expect(res.json()).toMatchObject({ createdBy: 'human', confirmed: true, confidence: null })
+  })
+})
+
+/**
+ * `project` 字段与 contains 边的一致性（docs/dogfooding-log.md #6）。
+ *
+ * 「这个对象属于哪个项目」被存了两份：标量字段与图上的边。
+ * 此前没有任何东西让两份保持一致——自用一轮之后，26 个对象声称属于某个项目，
+ * 在图里却完全不可达，而系统一声没吭。这组用例锁住的是：
+ * **写了 project 就一定能在图上走到它**。
+ */
+describe('project containment is maintained, not left to discipline (dogfooding #6)', () => {
+  async function createIn(
+    project: string | null,
+    type: string,
+    attributes: Record<string, unknown>,
+  ) {
+    return app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: asAdmin,
+      payload: { type, workspace: 'ws_platform', ...(project === null ? {} : { project }), attributes },
+    })
+  }
+
+  it('creates the containment edge when project is set', async () => {
+    const project = await create('Project', { key: 'PX', name: 'Platform' })
+    const res = await createIn(project, 'Task', { title: 'inside the project' })
+    expect(res.statusCode).toBe(201)
+
+    const relations = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${res.json().id}/relations?direction=in&type=contains`,
+      headers: asAdmin,
+    })
+    const items = relations.json().items as Array<{ fromId: string; createdBy: string }>
+    expect(items).toHaveLength(1)
+    expect(items[0]?.fromId).toBe(project)
+    // 系统维持的不变式，不是某个人手工建的
+    expect(items[0]?.createdBy).toBe('system')
+  })
+
+  it('makes the object reachable from the project by traversal', async () => {
+    // 这才是重点：边存在不是目的，能从项目走到它才是
+    const project = await create('Project', { key: 'PY', name: 'Reachable' })
+    const knowledge = (await createIn(project, 'Knowledge', { title: 'k', body: 'b' })).json().id
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:traverse',
+      headers: asAdmin,
+      payload: { start: project, follow: ['contains'], maxDepth: 2 },
+    })
+    const ids = (res.json().items as Array<{ id: string }>).map((h) => h.id)
+    expect(ids).toContain(knowledge)
+  })
+
+  it('rejects a project that does not exist', async () => {
+    // 以前这里回 201：project 是一个没有任何约束的字符串
+    const res = await createIn('prj_00000000000000000000000000', 'Task', { title: 't' })
+    expect(res.statusCode).toBe(422)
+    expect(res.json().message).toMatch(/does not exist/)
+  })
+
+  it('rejects a project that is not actually a Project', async () => {
+    const notAProject = await create('Task', { title: 'just a task' })
+    const res = await createIn(notAProject, 'Task', { title: 't' })
+    expect(res.statusCode).toBe(422)
+    expect(res.json().message).toMatch(/must reference a Project/)
+  })
+
+  it('rejects a type the ontology will not let a Project contain', async () => {
+    // 存字段但不建边就是在制造半连接对象。本体不允许就直接拒绝，
+    // 要让 Project 装下新类型，去改本体（ADR-0001）
+    const project = await create('Project', { key: 'PZ', name: 'Strict' })
+    const res = await createIn(project, 'Agent', {
+      name: 'coder',
+      principal: 'agent://coder@1.0.0',
+    })
+    expect(res.statusCode).toBe(422)
+    expect(res.json().message).toMatch(/contains/)
+  })
+
+  it('leaves the object unlinked when no project is given', async () => {
+    const res = await createIn(null, 'Task', { title: 'standalone' })
+    expect(res.statusCode).toBe(201)
+    const relations = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${res.json().id}/relations?direction=both`,
+      headers: asAdmin,
+    })
+    expect(relations.json().items).toHaveLength(0)
+  })
+
+  it('emits a RelationCreated event for the edge it created', async () => {
+    // 悄悄插一条边、不发事件，等于让自动化和下游消费者看不到它
+    const project = await create('Project', { key: 'PE', name: 'Events' })
+    const task = (await createIn(project, 'Task', { title: 'watched' })).json().id
+
+    const events = await queryAsTenant<{ event_type: string; payload: Record<string, unknown> }>(
+      pool,
+      TENANT,
+      `SELECT event_type, payload FROM outbox_events WHERE event_type = 'RelationCreated'`,
+    )
+    expect(
+      events.some((e) => e.payload['toId'] === task && e.payload['relationType'] === 'contains'),
+    ).toBe(true)
+  })
+})
+
+/**
+ * 重复建边是幂等的，但幂等不等于可以谎报（docs/dogfooding-log.md #8）。
+ *
+ * 唯一索引 + `ON CONFLICT DO NOTHING` 保证了自动化规则反复触发不会报错，
+ * 但此前服务层把**刚构造的对象**原样返回：接口回 201，附带一个
+ * 数据库里根本不存在的 id，事件里也带着它。
+ */
+describe('creating the same edge twice returns the edge that exists', () => {
+  it('returns the persisted relation, not a fabricated one', async () => {
+    const story = await create('Story', { title: 's' })
+    const task = await create('Task', { title: 't' })
+
+    const first = await relate(story, 'decomposedInto', task)
+    const second = await relate(story, 'decomposedInto', task)
+    expect(first.statusCode).toBe(201)
+    expect(second.statusCode).toBe(201)
+
+    // 同一条边，同一个 id
+    expect(second.json().id).toBe(first.json().id)
+
+    // 而且这个 id 真的能用——以前拿第二次的 id 去删会 404
+    const removed = await app.inject({
+      method: 'DELETE',
+      url: `/v1/relations/${second.json().id}`,
+      headers: asAdmin,
+    })
+    expect(removed.statusCode).toBe(204)
+  })
+
+  it('does not emit a second RelationCreated event for the same edge', async () => {
+    // 重复发事件会让下游自动化对同一条边跑两遍
+    const story = await create('Story', { title: 's2' })
+    const task = await create('Task', { title: 't2' })
+    await relate(story, 'decomposedInto', task)
+    await relate(story, 'decomposedInto', task)
+
+    const events = await queryAsTenant<{ payload: Record<string, unknown> }>(
+      pool,
+      TENANT,
+      `SELECT payload FROM outbox_events WHERE event_type = 'RelationCreated'`,
+    )
+    const forThisEdge = events.filter(
+      (e) => e.payload['fromId'] === story && e.payload['toId'] === task,
+    )
+    expect(forThisEdge).toHaveLength(1)
   })
 })

@@ -93,8 +93,21 @@ export interface ResourceRepository {
   history(resourceId: string, page: Page): Promise<PageResult<HistoryEntry>>
 }
 
+/**
+ * 插入关系的结果。
+ *
+ * `created: false` 表示这条边本来就在，返回的是**库里那一条**而不是刚构造的对象。
+ * 重复建边是幂等的（自动化规则会反复触发），但幂等不等于可以谎报：
+ * 早先这里回的是传进来的对象，接口于是返回 201 并附上一个数据库里
+ * 不存在的 id——拿它去删会 404（docs/dogfooding-log.md #8）。
+ */
+export type InsertRelationResult = {
+  relation: RelationInstance
+  created: boolean
+}
+
 export interface RelationRepository {
-  insert(relation: RelationInstance): Promise<void>
+  insert(relation: RelationInstance): Promise<InsertRelationResult>
   remove(relationId: string): Promise<boolean>
   findById(relationId: string): Promise<RelationInstance | null>
   /** direction=out 查 from_id，in 查 to_id；both 合并 */
