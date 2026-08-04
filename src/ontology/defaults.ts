@@ -410,6 +410,26 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
     domain: ['Release'],
     range: ['Task'],
   },
+  /**
+   * 任务排进了哪个 Sprint（FR-AI-004 的"一键应用"就是建这条边）。
+   *
+   * 和 `shippedIn` 分开：**"计划在这个迭代做"和"实际在这个版本发了"
+   * 是两件事**，而且经常对不上——那个差值正是 Velocity 想说的东西。
+   * 复用一条边的话，一个被挪到下个迭代的任务会看起来像是发布过了。
+   */
+  {
+    name: 'plannedIn',
+    inverse: 'plans',
+    acyclic: true,
+    domain: ['Task'],
+    range: ['Sprint'],
+  },
+  {
+    name: 'plans',
+    inverse: 'plannedIn',
+    domain: ['Sprint'],
+    range: ['Task'],
+  },
   {
     name: 'shippedIn',
     inverse: 'ships',

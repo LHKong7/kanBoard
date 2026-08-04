@@ -110,6 +110,19 @@ describe('sprint candidates must be feasible (FR-AI-004)', () => {
     expect(result.offenders.join()).toMatch(/not in this sprint/)
   })
 
+  it('does not flag a dependency that is already done', () => {
+    // 依赖不在待排清单里 = 它已经交付了（或不归这个 sprint 管）。
+    // 这条最初漏了，而它不是边角情况：真实 backlog 几乎每条都依赖着
+    // 已交付的东西，于是那个版本会把**几乎每一份方案**判成非法。
+    // 是写排程器（sprint-planner.ts）的时候撞出来的
+    const withShipped: PlannedTask[] = [{ id: 'task_new', points: 3, dependsOn: ['shipped_last_sprint'] }]
+    const result = validateSprintPlan(
+      { id: 'plan_1', capacity: 10, taskIds: ['task_new'] },
+      withShipped,
+    )
+    expect(result.ok).toBe(true)
+  })
+
   it('flags a task the planner invented', () => {
     const result = validateSprintPlan(plan({ taskIds: ['task_ghost'] }), tasks)
     expect(result.ok).toBe(false)

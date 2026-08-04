@@ -156,6 +156,13 @@ export function validateSprintPlan(
   const position = new Map(plan.taskIds.map((id, i) => [id, i]))
   for (const id of plan.taskIds) {
     for (const dep of byId.get(id)?.dependsOn ?? []) {
+      // 依赖**根本不在待排清单里** = 它已经做完了（或不归这个 sprint 管）。
+      //
+      // 这一条最初漏了，而它不是边角情况：真实的 backlog 几乎每一条都
+      // 依赖着已经交付的东西，于是那个版本会把**几乎每一份方案**判成非法。
+      // 是写排程器的时候撞出来的——生成侧和判定侧一起写，
+      // 才会有人真的去问"这条规则在真实数据上成立吗"。
+      if (!byId.has(dep)) continue
       const at = position.get(dep)
       if (at === undefined) {
         offenders.push(`${id} depends on ${dep}, which is not in this sprint`)
