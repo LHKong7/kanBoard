@@ -370,8 +370,8 @@ describe('管理关系', () => {
   })
 
   it('建立关系后守卫得到满足，Story 可以进入 Ready', async () => {
-    // Story → Ready 要求存在 decomposedInto。没有建关系的入口，
-    // 这个守卫在界面上就是永远满足不了的
+    // Story → Ready 要求 decomposedInto **与** acceptedBy（FR-DOM-004）。
+    // 没有建关系的入口，这两个守卫在界面上就是永远满足不了的
     await page.selectOption('#relType', 'decomposedInto')
     await page.waitForFunction(() => {
       const select = document.querySelector('#relTarget') as HTMLSelectElement | null
@@ -380,6 +380,36 @@ describe('管理关系', () => {
     await page.click('#modalSubmit')
     await page.waitForSelector('.rel-row')
 
+    // 只有任务、没有验收标准时仍然进不去——这一条是 FR-DOM-004 的界面证据
+    const beforeAcceptance = page.locator('.transition', { hasText: 'Ready' })
+    assert.equal(await beforeAcceptance.isDisabled(), true)
+
+    const storyId =
+      (await page.locator('.card:has-text("要拆任务的故事")').getAttribute('data-id')) ?? ''
+    await page.evaluate(
+      async ([id, auth]) => {
+        const headers = { 'content-type': 'application/json', ...(auth as Record<string, string>) }
+        const acceptance = await fetch('/v1/resources', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            type: 'Acceptance',
+            workspace: 'ws_default',
+            attributes: { given: '有一个故事', when: '开始执行', then: '有可判定的完成标准' },
+          }),
+        }).then((r) => r.json())
+        await fetch(`/v1/resources/${id}/relations`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ type: 'acceptedBy', toId: acceptance.id }),
+        })
+      },
+      [storyId, AUTH] as const,
+    )
+
+    await openBoard('Story')
+    await page.click(`.card[data-id="${storyId}"]`)
+    await page.waitForSelector('.drawer-body .section')
     const ready = page.locator('.transition', { hasText: 'Ready' })
     assert.equal(await ready.isDisabled(), false)
   })
@@ -392,7 +422,14 @@ describe('管理关系', () => {
     )
     assert.ok(storyId !== '', '没能从抽屉里读到 Story id')
 
-    await page.locator('.rel-row .link-btn.danger').first().click()
+    // 两条关系都删掉。加上 FR-DOM-004 之后 Ready 需要两条，
+    // 只删一条时报出来的是"另一条还缺"——断言仍然会过，但测的不是这件事
+    for (;;) {
+      const rows = page.locator('.rel-row .link-btn.danger')
+      if ((await rows.count()) === 0) break
+      await rows.first().click()
+      await page.waitForTimeout(150)
+    }
     await page.waitForFunction(
       () => document.querySelector('.rel-list') === null,
       undefined,
@@ -402,7 +439,7 @@ describe('管理关系', () => {
     const ready = page.locator('.transition', { hasText: 'Ready' })
     assert.equal(await ready.isDisabled(), true)
     const why = await ready.locator('.why').textContent()
-    assert.match(why ?? '', /decomposedInto/)
+    assert.match(why ?? '', /decomposedInto|acceptedBy/)
   })
 })
 
@@ -467,6 +504,13 @@ describe('自动化在界面上看得见', () => {
         type: 'Task', workspace: 'ws_default', attributes: { title: '子任务', assignee: 'user://bob' },
       })
       await post(`/v1/resources/${story.id}/relations`, { type: 'decomposedInto', toId: task.id })
+      // FR-DOM-004：没有验收标准的 Story 进不了 Ready
+      const acceptance = await post('/v1/resources', {
+        type: 'Acceptance',
+        workspace: 'ws_default',
+        attributes: { given: '有一张账单', when: '点击导出', then: '得到一份 PDF' },
+      })
+      await post(`/v1/resources/${story.id}/relations`, { type: 'acceptedBy', toId: acceptance.id })
       await post(`/v1/resources/${story.id}/transitions`, { to: 'Ready' })
       await post(`/v1/resources/${task.id}/transitions`, { to: 'Doing' })
       return { story: story.id }

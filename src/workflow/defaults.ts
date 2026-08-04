@@ -112,8 +112,16 @@ export const STORY_LIFECYCLE: Lifecycle = {
     { name: 'Draft' },
     {
       name: 'Ready',
-      // FR-DOM-004：没有拆出任务的 Story 不算就绪
-      requires: [{ kind: 'hasRelation', type: 'decomposedInto', direction: 'out' }],
+      requires: [
+        // 没有拆出任务的 Story 不算就绪
+        { kind: 'hasRelation', type: 'decomposedInto', direction: 'out' },
+        // FR-DOM-004：没有验收标准就不能进入执行。
+        //
+        // 这一条以前**不存在**——那时 Ready 只查 decomposedInto，
+        // 而代码注释却写着"FR-DOM-004"。引用了需求编号却做的是别的事，
+        // 比不写注释更糟：它让人以为这条需求已经落地了。
+        { kind: 'hasRelation', type: 'acceptedBy', direction: 'out' },
+      ],
     },
     { name: 'InProgress', entryActions: [{ kind: 'stampNow', path: 'startedAt' }] },
     { name: 'Review' },
@@ -180,6 +188,30 @@ export const KNOWLEDGE_LIFECYCLE: Lifecycle = {
     { from: ['Published'], to: 'NeedsReview' },
     { from: ['NeedsReview'], to: 'Published' },
     { from: ['Draft', 'Published', 'NeedsReview'], to: 'Archived' },
+  ],
+}
+
+/**
+ * 验收标准自己也有生命周期（FR-DOM-004）。
+ *
+ * 需要 `Agreed` 这一档，是因为"写下来了"和"双方认可"是两回事：
+ * 只要求存在一条验收标准的话，一句随手写的空话也能满足门槛。
+ */
+export const ACCEPTANCE_LIFECYCLE: Lifecycle = {
+  id: 'acceptance-default',
+  entityType: 'Acceptance',
+  initial: 'Draft',
+  states: [
+    { name: 'Draft' },
+    { name: 'Agreed', description: '双方认可这条标准；此后 Story 才可以进入执行' },
+    { name: 'Verified', entryActions: [{ kind: 'stampNow', path: 'verifiedAt' }], terminal: true },
+    { name: 'Withdrawn', terminal: true },
+  ],
+  transitions: [
+    { from: ['Draft'], to: 'Agreed' },
+    { from: ['Agreed'], to: 'Draft', description: '标准本身要改' },
+    { from: ['Agreed'], to: 'Verified' },
+    { from: ['Draft', 'Agreed'], to: 'Withdrawn' },
   ],
 }
 
@@ -287,6 +319,7 @@ export const DEFAULT_LIFECYCLES: readonly Lifecycle[] = [
   AGENT_LIFECYCLE,
   AGENT_RUN_LIFECYCLE,
   NOTIFICATION_LIFECYCLE,
+  ACCEPTANCE_LIFECYCLE,
 ]
 
 export function buildDefaultWorkflowRegistry(): WorkflowRegistry {

@@ -218,21 +218,54 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'readAt', kind: 'datetime', derived: true },
     ],
   },
+  {
+    name: 'Acceptance',
+    version: '1.0.0',
+    context: 'Requirement',
+    lifecycle: 'acceptance-default',
+    description:
+      '验收标准（FR-DOM-004）。**是一个对象，不是 Story 上的一段文本**——' +
+      '因为它要能被单独确认、被测试用例引用、被查询"哪些验收还没过"。' +
+      '塞进 Story 的一个 richtext 字段里，这三件事一件也做不到。',
+    attributes: [
+      // given / when / then 分成三个字段而不是一段自由文本：
+      // 一条读起来像验收标准、其实没有可判定条件的描述，
+      // 是需求评审里最常见也最贵的一种含糊
+      { name: 'given', kind: 'text', required: true, description: '前置条件' },
+      { name: 'when', kind: 'text', required: true, description: '触发动作' },
+      { name: 'then', kind: 'text', required: true, description: '可观察的结果' },
+      { name: 'verifiedBy', kind: 'string', description: '由哪个测试用例 / 谁验证' },
+      { name: 'verifiedAt', kind: 'datetime', derived: true },
+    ],
+  },
 ]
 
 export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
+  {
+    // Story ──acceptedBy──▶ Acceptance
+    name: 'acceptedBy',
+    inverse: 'acceptanceFor',
+    domain: ['Requirement', 'Story'],
+    range: ['Acceptance'],
+  },
+  {
+    name: 'acceptanceFor',
+    inverse: 'acceptedBy',
+    domain: ['Acceptance'],
+    range: ['Requirement', 'Story'],
+  },
   {
     name: 'contains',
     inverse: 'containedIn',
     transitive: true,
     domain: ['Project'],
-    range: ['Requirement', 'Story', 'Task', 'Decision', 'Knowledge'],
+    range: ['Requirement', 'Story', 'Task', 'Decision', 'Knowledge', 'Acceptance'],
   },
   {
     name: 'containedIn',
     inverse: 'contains',
     transitive: true,
-    domain: ['Requirement', 'Story', 'Task', 'Decision', 'Knowledge'],
+    domain: ['Requirement', 'Story', 'Task', 'Decision', 'Knowledge', 'Acceptance'],
     range: ['Project'],
   },
   {

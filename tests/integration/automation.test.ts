@@ -98,13 +98,22 @@ async function drainOutbox(maxRounds = 6): Promise<number> {
   return processed
 }
 
-/** 一个 Story 带两个 Task，Story 已就绪 */
+/** 一个 Story 带两个 Task 与一条验收标准，Story 已就绪 */
 async function seedStoryWithTasks(): Promise<{ story: string; taskA: string; taskB: string }> {
   const story = await create('Story', { title: 'invoice pdf' })
   const taskA = await create('Task', { title: 'render', assignee: 'user://bob' })
   const taskB = await create('Task', { title: 'upload', assignee: 'user://carol' })
   await relate(story, 'decomposedInto', taskA)
   await relate(story, 'decomposedInto', taskB)
+  // FR-DOM-004：没有验收标准的 Story 进不了 Ready。
+  // 这个 fixture 原本没有这一条，加上守卫之后六个用例一起红——
+  // 正是这条守卫此前不存在的证据
+  const acceptance = await create('Acceptance', {
+    given: '有一张已确认的账单',
+    when: '用户点击导出',
+    then: '得到一份 PDF，金额与账单一致',
+  })
+  await relate(story, 'acceptedBy', acceptance)
   await move(story, 'Ready')
   await drainOutbox()
   return { story, taskA, taskB }
@@ -585,5 +594,71 @@ describe('the rest of the action catalogue (FR-WF-005)', () => {
     const failed = outcomes.find((o) => o.action === 'createEntity')
     expect(failed?.status).toBe('failed')
     expect(await listOf('Knowledge')).toHaveLength(0)
+  })
+})
+
+/**
+ * 验收标准是进入执行的前提（FR-DOM-004）。
+ *
+ * 这条需求此前**没有实现**，而 `STORY_LIFECYCLE` 的注释写着 "FR-DOM-004"——
+ * 它守的是 `decomposedInto`（有没有拆出任务），和验收标准毫无关系。
+ * 引用了需求编号却做的是别的事，比不写注释更糟：
+ * 它让人以为这条已经落地，于是没人会再去看。
+ */
+describe('a story needs acceptance criteria to enter execution (FR-DOM-004)', () => {
+  const acceptance = () =>
+    create('Acceptance', { given: '前置', when: '动作', then: '可观察的结果' })
+
+  it('refuses Ready without one, and says which relation is missing', async () => {
+    const story = await create('Story', { title: '没有验收标准的' })
+    await relate(story, 'decomposedInto', await create('Task', { title: 't' }))
+
+    const res = await move(story, 'Ready')
+    expect(res.statusCode).toBe(409)
+    expect(res.json().message).toMatch(/acceptedBy/)
+    expect(await statusOf(story)).toBe('Draft')
+  })
+
+  it('allows Ready once one is attached', async () => {
+    const story = await create('Story', { title: '有验收标准的' })
+    await relate(story, 'decomposedInto', await create('Task', { title: 't' }))
+    await relate(story, 'acceptedBy', await acceptance())
+
+    expect((await move(story, 'Ready')).statusCode).toBe(200)
+  })
+
+  it('still requires tasks — acceptance alone is not enough', async () => {
+    // 两条守卫是并列的，不是二选一
+    const story = await create('Story', { title: '只有验收标准' })
+    await relate(story, 'acceptedBy', await acceptance())
+
+    const res = await move(story, 'Ready')
+    expect(res.statusCode).toBe(409)
+    expect(res.json().message).toMatch(/decomposedInto/)
+  })
+
+  it('keeps given / when / then as separate required fields', async () => {
+    // 分成三个字段而不是一段自由文本：一条读起来像验收标准、
+    // 其实没有可判定条件的描述，是需求评审里最贵的那种含糊
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: asAdmin,
+      payload: { type: 'Acceptance', workspace: 'ws_platform', attributes: { given: '只有前置' } },
+    })
+    expect(res.statusCode).toBe(422)
+    expect(JSON.stringify(res.json())).toMatch(/when|then/)
+  })
+
+  it('refuses to attach an acceptance to a Task', async () => {
+    // 关系的 domain / range 由本体管着，不靠调用方自觉
+    const task = await create('Task', { title: 't' })
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/resources/${task}/relations`,
+      headers: asAdmin,
+      payload: { type: 'acceptedBy', toId: await acceptance() },
+    })
+    expect(res.statusCode).toBe(422)
   })
 })

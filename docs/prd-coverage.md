@@ -10,12 +10,12 @@
 | ARCH 架构 | 9 | 8 | 缺 FR-ARCH-011 全链路 `AbortSignal` 可取消 |
 | IAM 权限 | 13 | 9 | ⚠️ 缺口未逐条核对，见下 |
 | WF 工作流 | 9 | 8 | 见下；缺 FR-WF-006 外部事件触发 |
-| DOM 领域 | 8 | 4 | 聚合与不变量部分落在服务层，未按 7 个 BC 拆分 |
+| DOM 领域 | 8 | 5 | 见下 |
 | AGT Agent | 11 | 9 | 见 [Agent 层状态](agent-status.md)；工具调用经网关（FR-AGT-011 强化） |
 | DASH 指标 | 9 | 7 | 见下 |
 | AI 能力 | 12 | 1 | 只有运行时骨架；具体能力（WBS、拆分、估点…）未做 |
 | CON 连接器 | 12 | 8 | 契约与网关已交付；具体集成（GitHub/Jira/MCP/Browser）未做 |
-| **合计** | **102** | **73** | |
+| **合计** | **102** | **74** | |
 
 ## 这份表本身有多可信
 
@@ -35,9 +35,15 @@
 
 这四行的备注是**照着印象写的**，不是照着需求编号核的。
 所以：**已逐条核对的只有 WF、RES、ARCH、DASH 四个模块**，
-其余六行（IAM / DOM / AGT / AI / CON / ONT）的数字还没有重新对过编号，
+其余五行（IAM / AGT / AI / CON / ONT）的数字还没有重新对过编号，
 应当当作有待核对。已经确认缺失的具体条目：FR-IAM-012 blastRadius 熔断
 （代码里搜不到）、FR-ARCH-011 `AbortSignal`（同样搜不到）。
+
+核对 DOM 时抓到了这份表最坏的一种错：**代码引用了需求编号，做的却是别的事**。
+`STORY_LIFECYCLE` 里写着 "FR-DOM-004"，守的是"有没有拆出任务"，
+而 FR-DOM-004 说的是"必须含结构化 Acceptance"——Story 上根本没有这个字段，
+本体里也没有 Acceptance 这个类型。一句写错了编号的注释比没有注释更糟：
+它让人以为这条需求已经落地，于是不会有人再去看。现在它真的实现了。
 
 写在这里而不是悄悄改掉数字，是因为这份文档唯一的用处就是可信。
 一个被改对了但没人知道曾经错过的进度表，下次还会错。
@@ -83,6 +89,19 @@ RES 这一行此前记的是 **11/12，缺「FR-RES-010 事件订阅 / Webhook �
 然后就不做了。`tests/integration/endpoint-inventory.test.ts` 把实际路由树
 和一份写死的清单逐条比对——加一条路由就会红，那时必须回答
 "人也走这条路吗"。种过一条 `POST /v1/agents/:id/run` 验证它会触发。
+
+## Domain 细分
+
+| ID | 状态 |
+| --- | --- |
+| FR-DOM-003 Requirement 三级 Epic/Feature/Story | ✅ `level` 枚举 + 本体校验 |
+| FR-DOM-004 Story 必须含结构化 Acceptance 才能进入执行 | ✅ Acceptance 是一等对象；Ready 守卫要求 `acceptedBy` |
+| FR-DOM-006 Task 的 assignee 支持 User 与 Agent | ✅ 同一套分配与权限流程 |
+| FR-DOM-008 Knowledge 必须有来源引用 | ✅ Published 守卫要求 `derivedFrom` |
+| FR-DOM-002 跨 BC 仅通过事件或只读引用 | ✅ 自动化规则带 `owningContext`；分层检查挡住直接写 |
+| FR-DOM-001 7 个 BC 的聚合与不变量 | ❌ 不变量在服务层，未按 BC 拆分目录 |
+| FR-DOM-005 Dependency 环检测 | ❌ 代码里搜不到 |
+| FR-DOM-007 Release 只允许包含 Done 的 Task | ❌ 没有 Release 类型 |
 
 ## Dashboard 细分
 
