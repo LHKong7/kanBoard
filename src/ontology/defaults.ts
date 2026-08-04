@@ -76,6 +76,19 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'assignee', kind: 'string', description: 'user://… 或 agent://…' },
       { name: 'estimate', kind: 'float' },
       { name: 'blockReason', kind: 'text', description: '进入 Blocked 状态时必填' },
+      {
+        name: 'ciStatus',
+        kind: 'enum',
+        // 三档，和 CiVerdict 一一对应（src/domain/execution/ci.ts）。
+        // 用 enum 而不是 string：GitHub 的九种结论收敛成三种是一次**决定**，
+        // 让它在本体里也是三种，别处就没法悄悄多写一个值进来
+        values: ['passing', 'failing', 'pending'],
+        // 由 CI 回写，不该出现在人填的表单里。
+        // 让人手填的话，这个字段说的就不再是 CI 说过什么了——
+        // 而它唯一的用处就是转述 CI 说过什么
+        derived: true,
+        description: 'CI 结论（FR-CON-006 回写）',
+      },
       { name: 'startedAt', kind: 'datetime', derived: true },
       { name: 'completedAt', kind: 'datetime', derived: true },
     ],

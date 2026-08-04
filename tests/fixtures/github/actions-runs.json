@@ -1,0 +1,61 @@
+{
+  "total_count": 3,
+  "workflow_runs": [
+    {
+      "id": 30946873364,
+      "name": "CI",
+      "node_id": "WFR_kwLOTrOFJ88AAAAHNJPQFA",
+      "head_branch": "claude/projectos-ai-native-system-bgh4p5",
+      "head_sha": "b1d41acb55624b640a2fc2b11c5bb66904139635",
+      "path": ".github/workflows/ci.yml",
+      "run_number": 47,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "failure",
+      "workflow_id": 326228066,
+      "url": "https://api.github.com/repos/LHKong7/kanBoard/actions/runs/30946873364",
+      "html_url": "https://github.com/LHKong7/kanBoard/actions/runs/30946873364",
+      "created_at": "2026-08-04T20:13:28Z",
+      "updated_at": "2026-08-04T20:14:10Z",
+      "run_attempt": 1,
+      "run_started_at": "2026-08-04T20:13:28Z"
+    },
+    {
+      "id": 30943881435,
+      "name": "CI",
+      "node_id": "WFR_kwLOTrOFJ88AAAAHNGYo2w",
+      "head_branch": "claude/projectos-ai-native-system-bgh4p5",
+      "head_sha": "416dc1fefa9ed44c79e05694eaeda59b4071957e",
+      "path": ".github/workflows/ci.yml",
+      "run_number": 43,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "workflow_id": 326228066,
+      "url": "https://api.github.com/repos/LHKong7/kanBoard/actions/runs/30943881435",
+      "html_url": "https://github.com/LHKong7/kanBoard/actions/runs/30943881435",
+      "created_at": "2026-08-04T19:34:12Z",
+      "updated_at": "2026-08-04T19:36:00Z",
+      "run_attempt": 1,
+      "run_started_at": "2026-08-04T19:34:12Z"
+    },
+    {
+      "id": 30947805555,
+      "name": "CI",
+      "node_id": "WFR_kwLOTrOFJ88AAAAHNKIJcw",
+      "head_branch": "claude/projectos-ai-native-system-bgh4p5",
+      "head_sha": "3a78954cec189e71a9ac9375e357b2a0aefca073",
+      "path": ".github/workflows/ci.yml",
+      "run_number": 48,
+      "event": "push",
+      "status": "in_progress",
+      "workflow_id": 326228066,
+      "url": "https://api.github.com/repos/LHKong7/kanBoard/actions/runs/30947805555",
+      "html_url": "https://github.com/LHKong7/kanBoard/actions/runs/30947805555",
+      "created_at": "2026-08-04T20:25:44Z",
+      "updated_at": "2026-08-04T20:25:48Z",
+      "run_attempt": 1,
+      "run_started_at": "2026-08-04T20:25:44Z"
+    }
+  ]
+}

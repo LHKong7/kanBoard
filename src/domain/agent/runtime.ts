@@ -7,6 +7,8 @@ import { DEFAULT_AI_POLICY, prepareEgress } from './egress.ts'
 import type { AiPolicy, DataClassification, EgressRecord } from './egress.ts'
 import type { AgentMemory, MemoryEntry } from './memory.ts'
 import { assembleContext } from './context.ts'
+import { requireEvidence } from '../ai/capabilities.ts'
+import type { Verdict } from '../ai/capabilities.ts'
 import { agentSpecFrom, DEFAULT_RUN_BUDGET } from './types.ts'
 import type { CallInput, CallResult } from '../connector/types.ts'
 import type {
@@ -385,6 +387,22 @@ export class AgentRuntime {
         }
       }
 
+      // 产出闸（FR-AI-006）。风险条目必须指得出触发它的实体。
+      //
+      // 放在这里而不是放过去让本体校验拦：本体只知道"有没有这个字段"，
+      // 拦下来的错误信息是"缺少必填属性"。而模型需要读懂的是
+      // **为什么**——一条没有证据的风险读起来像洞察，跟进时无从下手，
+      // 没人能判断它是不是编的。所以把话说清楚，让它下一步能改对。
+      const gate = evidenceGate(proposal)
+      if (!gate.ok) {
+        await record('guardrail', `产出被拒：${gate.reason}`, {
+          type: proposal.resourceType,
+          offenders: gate.offenders,
+        })
+        history.push({ thought: response.thought, observation: `产出被拒：${gate.reason}` })
+        continue
+      }
+
       let createdId: string | null = null
       if (MAY_WRITE[spec.mode]) {
         try {
@@ -567,6 +585,31 @@ function overBudget(
 
 export function isAgentPrincipal(principal: string): boolean {
   return principal.startsWith('agent://')
+}
+
+/**
+ * 哪些产出类型必须带证据（FR-AI-006）。
+ *
+ * 只列 `Risk`，不是"先做一个再说"。**每加一种类型都是在收紧模型能产出什么**，
+ * 而收紧得没有依据就会变成挡路：一条 Task 不需要"证据"字段，
+ * 硬要求它带，结果是所有人在那个字段里填 "N/A"。
+ *
+ * FR-AI-006 点名的就是风险识别。别的需求要别的闸时再加，
+ * 加的时候要能说出是哪一条需求要求的。
+ */
+const EVIDENCE_REQUIRED = new Set(['Risk'])
+
+/** 风险条目要指得出触发它的实体（FR-AI-006） */
+function evidenceGate(proposal: { resourceType: string; attributes: Record<string, unknown> }): Verdict {
+  if (!EVIDENCE_REQUIRED.has(proposal.resourceType)) {
+    return { ok: true, reason: 'no evidence required for this type', offenders: [] }
+  }
+  const raw = proposal.attributes['evidence']
+  // 只认字符串数组。一个 `evidence: "看起来很危险"` 的字段
+  // 满足"有这个字段"，却什么也指不到——而那正是这条需求要挡的东西
+  const evidence = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []
+  const title = String(proposal.attributes['title'] ?? proposal.resourceType)
+  return requireEvidence([{ id: title, statement: title, evidence }])
 }
 
 export { MAY_WRITE, NEEDS_REVIEW }
