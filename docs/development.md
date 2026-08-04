@@ -137,6 +137,7 @@ GET  /v1/resources/{id}/transitions   # 当前可用迁移，含未就绪的与�
 | 卡片能做什么动作 | `GET /v1/resources/:id/transitions` |
 | 新建表单的字段 | `GET /v1/ontology/entity-types` |
 | 哪些字段不让人填 | 本体属性上的 `derived` 标记 |
+| 建关系时能选哪些类型 | 本体的定义域（`domain`） |
 
 在前端写死状态名、动作列表或字段清单，等于把业务语义搬到了 UI 层
 （违反 [ADR-0001](adr/0001-ontology-first.md) 的 P1.4）。

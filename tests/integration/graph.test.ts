@@ -165,6 +165,145 @@ describe('relations (FR-ONT-003/006)', () => {
   })
 })
 
+describe('relation removal and confirmation', () => {
+  it('removes a relation and reports it gone', async () => {
+    const { req, story } = await seedChain()
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${req}/relations?direction=out&type=implementedBy`,
+      headers: asAdmin,
+    })
+    const relationId = listed.json().items[0].id
+
+    const del = await app.inject({
+      method: 'DELETE',
+      url: `/v1/relations/${relationId}`,
+      headers: asAdmin,
+    })
+    expect(del.statusCode).toBe(204)
+
+    const after = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${req}/relations?direction=out&type=implementedBy`,
+      headers: asAdmin,
+    })
+    expect(after.json().items).toHaveLength(0)
+    // 对象本身不受影响：删的是边，不是节点
+    const stillThere = await app.inject({ method: 'GET', url: `/v1/resources/${story}`, headers: asAdmin })
+    expect(stillThere.statusCode).toBe(200)
+  })
+
+  it('refuses to remove a relation the caller cannot update the source of', async () => {
+    const { req } = await seedChain()
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${req}/relations?direction=out&type=implementedBy`,
+      headers: asAdmin,
+    })
+    const relationId = listed.json().items[0].id
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/v1/relations/${relationId}`,
+      headers: { ...asAdmin, 'x-principal': 'user://guest', 'x-roles': 'Guest' },
+    })
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('returns 404 for an unknown relation', async () => {
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/v1/relations/relation_00000000000000000000000000',
+      headers: asAdmin,
+    })
+    expect(res.statusCode).toBe(404)
+  })
+})
+
+describe('confirming agent-inferred relations (FR-ONT-006)', () => {
+  const asAgent = {
+    'x-principal': 'agent://knowledge@1.0.0',
+    'x-tenant': TENANT,
+    'x-roles': 'AIAgent',
+    'x-capabilities': 'Knowledge.Update,Knowledge.Read,Task.Read',
+  }
+
+  async function inferredRelation(): Promise<{ knowledge: string; relationId: string }> {
+    const knowledge = await create('Knowledge', { title: 'k', body: 'b' })
+    const task = await create('Task', { title: 't' })
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/resources/${knowledge}/relations`,
+      headers: asAgent,
+      payload: { type: 'derivedFrom', toId: task, confidence: 0.8 },
+    })
+    return { knowledge, relationId: res.json().id as string }
+  }
+
+  it('confirms a pending relation', async () => {
+    const { relationId } = await inferredRelation()
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/relations/${relationId}/confirmation`,
+      headers: asAdmin,
+      payload: { confirmed: true },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().confirmed).toBe(true)
+  })
+
+  it('a rejected relation stops satisfying guards and stops being traversed', async () => {
+    // 否决 ≠ 删除：记录留着（它是负样本），但不再产生任何效力
+    const { knowledge, relationId } = await inferredRelation()
+
+    const before = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${knowledge}/transitions`,
+      headers: asAdmin,
+    })
+    expect((before.json().items as { to: string; ready: boolean }[]).find((t) => t.to === 'Published')?.ready).toBe(true)
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/relations/${relationId}/confirmation`,
+      headers: asAdmin,
+      payload: { confirmed: false },
+    })
+
+    const after = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${knowledge}/transitions`,
+      headers: asAdmin,
+    })
+    const published = (after.json().items as { to: string; ready: boolean; blockedBy: string | null }[]).find(
+      (t) => t.to === 'Published',
+    )
+    expect(published?.ready).toBe(false)
+    expect(published?.blockedBy).toMatch(/derivedFrom/)
+
+    // 记录仍在，只是被标记为否决
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${knowledge}/relations?direction=out`,
+      headers: asAdmin,
+    })
+    expect(listed.json().items[0].confirmed).toBe(false)
+  })
+
+  it('refuses to confirm a human-created relation', async () => {
+    const a = await create('Task', { title: 'a' })
+    const b = await create('Task', { title: 'b' })
+    const created = await relate(a, 'blockedBy', b)
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/relations/${created.json().id}/confirmation`,
+      headers: asAdmin,
+      payload: { confirmed: false },
+    })
+    expect(res.statusCode).toBe(422)
+  })
+})
+
 describe('graph traversal (FR-ONT-004, FR-RES-007)', () => {
   it('walks the requirement chain down to tasks', async () => {
     const { req, story, task } = await seedChain()

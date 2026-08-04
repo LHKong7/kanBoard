@@ -22,6 +22,15 @@ const state = {
   /** @type {Set<string>} */ dropReady: new Set(),
   /** @type {Map<string,string>} */ dropBlocked: new Map(),
   /** @type {string|null} */ draggingId: null,
+  /** @type {any[]} */ relationTypes: [],
+  /**
+   * 正在编辑的对象。
+   *
+   * 定时刷新必须避开它：正在填的表单被重新渲染，输入就没了。
+   * 这是"自动刷新"最容易伤到人的地方，而且伤得很隐蔽——
+   * 用户会以为是自己手滑。
+   */
+  /** @type {{id: string, version: number}|null} */ editing: null,
 }
 
 const el = {
@@ -65,7 +74,6 @@ function saveIdentity(identity) {
 
 function headers() {
   return {
-    'content-type': 'application/json',
     'x-principal': state.identity.principal,
     // v1 单租户运行（ADR-0005），界面上不出现租户概念
     'x-tenant': 'default',
@@ -83,7 +91,14 @@ function headers() {
  * 「attribute "assignee" must be set」比「操作失败」有用得多。
  */
 async function api(path, init = {}) {
-  const res = await fetch(path, { ...init, headers: { ...headers(), ...(init.headers ?? {}) } })
+  // content-type 只在真的有请求体时才带。
+  // 无 body 却声明 application/json 会被服务端当成"空的 JSON"而报 500——
+  // DELETE 就是这么炸的。
+  const contentType = init.body === undefined ? {} : { 'content-type': 'application/json' }
+  const res = await fetch(path, {
+    ...init,
+    headers: { ...headers(), ...contentType, ...(init.headers ?? {}) },
+  })
   if (res.status === 204) return null
   const text = await res.text()
   const body = text === '' ? null : JSON.parse(text)
@@ -115,12 +130,14 @@ function toast(title, detail = '', kind = 'ok') {
 
 async function bootstrap() {
   saveIdentity(state.identity)
-  const [types, flows] = await Promise.all([
+  const [types, flows, relations] = await Promise.all([
     api('/v1/ontology/entity-types'),
     api('/v1/workflows'),
+    api('/v1/ontology/relation-types'),
   ])
   state.entityTypes = types.items
   state.lifecycles = flows.items
+  state.relationTypes = relations.items
 
   // 只展示有生命周期的类型：没有状态机的对象没有列可分
   const boardable = state.entityTypes.filter((t) => lifecycleFor(t.name) !== undefined)
@@ -369,7 +386,7 @@ async function openDrawer(id) {
     el.drawerBody.replaceChildren(
       sectionTransitions(id, transitions.items),
       sectionAttributes(item),
-      sectionRelations(id, relations.items),
+      sectionRelations(item, relations.items),
       sectionHistory(history.items),
     )
   } catch (error) {
@@ -429,7 +446,17 @@ function sectionTransitions(id, transitions) {
 function sectionAttributes(item) {
   const section = document.createElement('div')
   section.className = 'section'
-  section.append(heading('属性'))
+
+  const head = document.createElement('div')
+  head.className = 'section-head'
+  head.append(heading('属性'))
+  const editBtn = document.createElement('button')
+  editBtn.className = 'link-btn'
+  editBtn.id = 'editAttrsBtn'
+  editBtn.textContent = '编辑'
+  editBtn.onclick = () => startEditing(item)
+  head.append(editBtn)
+  section.append(head)
 
   const dl = document.createElement('dl')
   dl.className = 'kv'
@@ -457,13 +484,24 @@ function sectionAttributes(item) {
   return section
 }
 
-function sectionRelations(id, relations) {
+function sectionRelations(item, relations) {
+  const id = item.id
   const section = document.createElement('div')
   section.className = 'section'
-  section.append(heading(`关系（${relations.length}）`))
+
+  const head = document.createElement('div')
+  head.className = 'section-head'
+  head.append(heading(`关系（${relations.length}）`))
+  const addBtn = document.createElement('button')
+  addBtn.className = 'link-btn'
+  addBtn.id = 'addRelationBtn'
+  addBtn.textContent = '+ 关联'
+  addBtn.onclick = () => void openRelationModal(item)
+  head.append(addBtn)
+  section.append(head)
 
   if (relations.length === 0) {
-    section.append(hint('暂无关系', '', true))
+    section.append(hint('暂无关系', '守卫常常要求某种关系存在，可以从这里建立', true))
     return section
   }
 
@@ -473,6 +511,8 @@ function sectionRelations(id, relations) {
     const outgoing = r.fromId === id
     const otherId = outgoing ? r.toId : r.fromId
     const row = document.createElement('div')
+    row.className = 'rel-row'
+    row.dataset['relationId'] = r.id
 
     const label = document.createElement('span')
     label.textContent = `${outgoing ? '→' : '←'} ${r.type} `
@@ -483,15 +523,146 @@ function sectionRelations(id, relations) {
 
     row.append(label, link)
 
-    // Agent 推断的关系标注置信度与待确认状态（FR-ONT-006）
+    // Agent 推断的关系标注置信度，并提供确认 / 否决（FR-ONT-006）
     if (r.confidence !== null) {
       row.append(chip(`置信 ${Math.round(r.confidence * 100)}%`, r.confirmed === null ? 'warn' : ''))
     }
+    if (r.confirmed === null) {
+      row.append(relAction('确认', () => void confirmRelation(id, r.id, true)))
+      row.append(relAction('否决', () => void confirmRelation(id, r.id, false)))
+    } else if (r.confirmed === false) {
+      row.append(chip('已否决', 'warn'))
+    }
+
+    row.append(relAction('删除', () => void removeRelation(id, r.id), 'danger'))
     list.append(row)
   }
 
   section.append(list)
   return section
+}
+
+function relAction(text, onClick, variant = '') {
+  const btn = document.createElement('button')
+  btn.className = `link-btn ${variant}`.trim()
+  btn.textContent = text
+  btn.onclick = onClick
+  return btn
+}
+
+async function removeRelation(ownerId, relationId) {
+  try {
+    await api(`/v1/relations/${relationId}`, { method: 'DELETE' })
+    toast('关系已删除')
+    await openDrawer(ownerId)
+  } catch (error) {
+    toast('删除失败', String(error.message), 'error')
+  }
+}
+
+async function confirmRelation(ownerId, relationId, confirmed) {
+  try {
+    await api(`/v1/relations/${relationId}/confirmation`, {
+      method: 'POST',
+      body: JSON.stringify({ confirmed }),
+    })
+    // 否决不是删除：被否决的推断是负样本，删掉就丢了
+    toast(confirmed ? '已确认' : '已否决，该关系不再参与遍历与守卫')
+    await openDrawer(ownerId)
+  } catch (error) {
+    toast('操作失败', String(error.message), 'error')
+  }
+}
+
+/**
+ * 建立关系。
+ *
+ * 可选的关系类型由**本体的定义域**决定：当前对象类型能做起点的关系才列出来。
+ * 让用户从全部关系类型里挑，然后被 422 打回来，是把本体知识留给了用户去记。
+ */
+async function openRelationModal(item) {
+  const candidates = state.relationTypes.filter((r) => r.domain.includes(item.type))
+  if (candidates.length === 0) {
+    toast('没有可用的关系类型', `本体里没有以 ${item.type} 为起点的关系`, 'error')
+    return
+  }
+
+  el.modalTitle.textContent = `为 ${item.type} 建立关系`
+  el.modalForm.replaceChildren()
+
+  const typeField = document.createElement('div')
+  typeField.className = 'field'
+  const typeLabel = document.createElement('label')
+  typeLabel.textContent = '关系类型'
+  typeLabel.htmlFor = 'relType'
+  const typeSelect = document.createElement('select')
+  typeSelect.id = 'relType'
+  for (const r of candidates) {
+    const option = document.createElement('option')
+    option.value = r.name
+    option.textContent = `${r.name} → ${r.range.join(' / ')}`
+    typeSelect.append(option)
+  }
+  typeField.append(typeLabel, typeSelect)
+
+  const targetField = document.createElement('div')
+  targetField.className = 'field'
+  const targetLabel = document.createElement('label')
+  targetLabel.textContent = '目标对象'
+  targetLabel.htmlFor = 'relTarget'
+  const targetSelect = document.createElement('select')
+  targetSelect.id = 'relTarget'
+  const targetHint = document.createElement('div')
+  targetHint.className = 'hint'
+  targetField.append(targetLabel, targetSelect, targetHint)
+
+  /** 按所选关系的值域拉候选对象 */
+  const loadTargets = async () => {
+    const def = candidates.find((r) => r.name === typeSelect.value)
+    targetSelect.replaceChildren()
+    targetHint.textContent = '加载中…'
+    const options = []
+    for (const type of def?.range ?? []) {
+      const result = await api('/v1/resources:query', {
+        method: 'POST',
+        body: JSON.stringify({ type, page: { size: 50 } }),
+      })
+      for (const candidate of result.items) {
+        if (candidate.id === item.id) continue // 自环被数据库约束挡住，不如先别列出来
+        options.push(candidate)
+      }
+    }
+    for (const candidate of options) {
+      const option = document.createElement('option')
+      option.value = candidate.id
+      const title = candidate.attributes.title ?? candidate.attributes.name ?? candidate.id
+      option.textContent = `${candidate.type} · ${title}`
+      targetSelect.append(option)
+    }
+    // 只取最近 50 条：真正的搜索要等 M2，这里如实说明而不是假装列全了
+    targetHint.textContent =
+      options.length === 0 ? '没有可选对象' : `列出每种类型最近 50 条，共 ${options.length} 个候选`
+  }
+
+  typeSelect.onchange = () => void loadTargets()
+  el.modalForm.append(typeField, targetField)
+  await loadTargets()
+
+  el.modalSubmit.onclick = async () => {
+    try {
+      await api(`/v1/resources/${item.id}/relations`, {
+        method: 'POST',
+        body: JSON.stringify({ type: typeSelect.value, toId: targetSelect.value }),
+      })
+      closeModal()
+      toast('关系已建立')
+      await openDrawer(item.id)
+    } catch (error) {
+      toast('建立失败', String(error.message), 'error')
+    }
+  }
+
+  el.backdrop.hidden = false
 }
 
 function sectionHistory(entries) {
@@ -546,6 +717,114 @@ function fmt(value) {
 function formatTime(iso) {
   const date = new Date(iso)
   return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+/**
+ * 就地编辑属性。
+ *
+ * 表单复用 `fieldFor`——和新建走同一个生成器。两份表单生成器迟早会长歪，
+ * 而"新建能填的字段"和"编辑能改的字段"本来就该是同一套。
+ */
+function startEditing(item) {
+  const def = state.entityTypes.find((t) => t.name === item.type)
+  if (def === undefined) return
+
+  // 记下版本号：保存时带上，服务端据此判断这期间有没有被别人改过
+  state.editing = { id: item.id, version: item.version }
+
+  const section = document.createElement('div')
+  section.className = 'section'
+  section.id = 'editForm'
+  section.append(heading(`编辑 ${item.type}`))
+
+  const editable = def.attributes.filter((a) => a.derived !== true)
+  for (const attr of editable) {
+    const field = fieldFor(attr)
+    const input = /** @type {HTMLInputElement} */ (field.querySelector(`#f_${attr.name}`))
+    const current = item.attributes[attr.name]
+    if (input !== null && current !== undefined && current !== null) {
+      if (attr.kind === 'bool') input.checked = current === true
+      else if (attr.kind === 'datetime') input.value = String(current).slice(0, 16)
+      else if (attr.kind === 'json') input.value = JSON.stringify(current)
+      else input.value = String(current)
+    }
+    section.append(field)
+  }
+
+  // derived 字段只读展示：它们由状态机写入，让人改会造成
+  // "改了但下一次迁移又被覆盖"，那种不一致比不让改更让人困惑
+  const derived = def.attributes.filter((a) => a.derived === true && item.attributes[a.name] != null)
+  if (derived.length > 0) {
+    const note = document.createElement('div')
+    note.className = 'hint'
+    note.textContent = `由系统写入，不可编辑：${derived.map((a) => a.name).join('、')}`
+    section.append(note)
+  }
+
+  const actions = document.createElement('div')
+  actions.className = 'form-actions'
+
+  const save = document.createElement('button')
+  save.className = 'btn primary'
+  save.id = 'saveAttrsBtn'
+  save.textContent = '保存'
+  save.onclick = () => void saveEditing(item, editable)
+
+  const cancel = document.createElement('button')
+  cancel.className = 'btn ghost'
+  cancel.id = 'cancelAttrsBtn'
+  cancel.textContent = '取消'
+  cancel.onclick = () => {
+    state.editing = null
+    void openDrawer(item.id)
+  }
+
+  actions.append(save, cancel)
+  section.append(actions)
+
+  // 只替换属性区，保留迁移/关系/历史：编辑属性时那些信息仍然有用，
+  // 尤其是"还差什么才能推进"——它往往正是要改这个字段的原因
+  const sections = [...el.drawerBody.children]
+  el.drawerBody.replaceChildren(
+    sections[0] ?? document.createElement('div'),
+    section,
+    ...sections.slice(2),
+  )
+}
+
+async function saveEditing(item, editableAttrs) {
+  for (const node of el.drawerBody.querySelectorAll('.field-error')) node.remove()
+  const attributes = collectForm(editableAttrs)
+
+  // derived 字段必须原样带回：attributes 是整体替换而非合并，
+  // 漏掉它们等于顺手把 startedAt 之类的时间戳删了
+  const def = state.entityTypes.find((t) => t.name === item.type)
+  for (const attr of def?.attributes ?? []) {
+    if (attr.derived === true && item.attributes[attr.name] != null) {
+      attributes[attr.name] = item.attributes[attr.name]
+    }
+  }
+
+  try {
+    await api(`/v1/resources/${item.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ expectedVersion: state.editing?.version ?? item.version, attributes }),
+    })
+    state.editing = null
+    toast('已保存')
+    await openDrawer(item.id)
+    await refresh()
+  } catch (error) {
+    if (error.code === 'version_conflict') {
+      // 并发冲突绝不能静默覆盖：说清发生了什么，并把最新内容摆到面前。
+      // 直接重试等于让后写的人默默抹掉先写的人的修改。
+      state.editing = null
+      toast('保存失败：这条记录已被他人修改', '已重新载入最新内容，请确认后再改', 'error')
+      await openDrawer(item.id)
+      return
+    }
+    showFormErrors(error, el.drawerBody)
+  }
 }
 
 // ── 新建（表单由本体生成） ─────────────────────────
@@ -691,24 +970,24 @@ function collectForm(attrs) {
 }
 
 /** 把服务端返回的字段级错误标到对应输入框上（FR-ONT-002 的收益兑现处） */
-function showFormErrors(error) {
-  for (const node of el.modalForm.querySelectorAll('.field-error')) node.remove()
+function showFormErrors(error, container = el.modalForm) {
+  for (const node of container.querySelectorAll('.field-error')) node.remove()
 
   const fields = error.details?.fields
   if (!Array.isArray(fields)) {
-    toast('创建失败', String(error.message), 'error')
+    toast('操作失败', String(error.message), 'error')
     return
   }
 
   for (const field of fields) {
-    const wrap = el.modalForm.querySelector(`[data-name="${CSS.escape(field.path)}"]`)
+    const wrap = container.querySelector(`[data-name="${CSS.escape(field.path)}"]`)
     const message = document.createElement('div')
     message.className = 'field-error'
     message.textContent = field.message
-    if (wrap === null) el.modalForm.append(message)
+    if (wrap === null) container.append(message)
     else wrap.append(message)
   }
-  toast('创建失败', '有字段未通过本体校验', 'error')
+  toast('操作失败', '有字段未通过本体校验', 'error')
 }
 
 // ── 身份切换 ────────────────────────────────────────
@@ -821,6 +1100,10 @@ document.addEventListener('keydown', (event) => {
  */
 setInterval(async () => {
   if (document.hidden || state.activeType === '') return
+  // 正在编辑就别刷：重新渲染会把用户填了一半的内容清掉。
+  // 自动刷新的价值不值得用"输入突然消失"来换。
+  if (state.editing !== null) return
+  if (!el.backdrop.hidden) return
   el.pollDot.classList.add('active')
   try {
     await refresh()

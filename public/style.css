@@ -278,6 +278,33 @@ body {
 .drawer-body { padding: 16px; overflow-y: auto; flex: 1; }
 
 .section { margin-bottom: 22px; }
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.link-btn {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.link-btn:hover { text-decoration: underline; }
+.link-btn.danger { color: var(--danger); }
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+#editForm { display: flex; flex-direction: column; gap: 12px; }
+
 .section h3 {
   font-size: 11px;
   text-transform: uppercase;
@@ -326,7 +353,9 @@ body {
 .timeline-item .change { color: var(--text); }
 .timeline-item .reason { color: var(--text-dim); font-style: italic; }
 
-.rel-list { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.rel-list { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.rel-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rel-row a { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rel-list a { color: var(--accent); text-decoration: none; cursor: pointer; }
 .rel-list a:hover { text-decoration: underline; }
 

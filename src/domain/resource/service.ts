@@ -21,6 +21,7 @@ import {
 import { newRelationId, newResourceId } from '../../platform/id.ts'
 import {
   relationCreated,
+  relationRemoved,
   resourceCreated,
   resourceDeleted,
   resourceStatusChanged,
@@ -642,6 +643,90 @@ export class ResourceService {
    *
    * 返回时翻转成**请求的方向**，让调用方看到的形状和存储方向无关。
    */
+  /**
+   * 删除一条关系。
+   *
+   * 授权按**起点对象**的 Update 权限判定：关系是起点对象的一部分。
+   * 用一个单独的 `Relation.Delete` 能力会让权限模型多一层，
+   * 而实际上"能不能改这个 Task"和"能不能改它的关系"从来是同一个问题。
+   */
+  async unrelate(caller: Caller, relationId: string): Promise<void> {
+    const relation = await this.#deps.relations.findById(relationId)
+    if (relation === null || relation.tenant !== caller.subject.tenant) {
+      throw new NotFoundError(relationId)
+    }
+
+    const from = await this.#requireLive(relation.fromId)
+    await this.#authorize(
+      caller,
+      `${from.type}.Update`,
+      {
+        tenant: from.tenant,
+        workspace: from.workspace,
+        project: from.project ?? undefined,
+        id: from.id,
+        type: from.type,
+      },
+      from.owner,
+      from.type,
+    )
+
+    const removed = await this.#deps.relations.remove(relationId)
+    if (!removed) throw new NotFoundError(relationId)
+
+    const now = this.#deps.clock.now()
+    await this.#emit(
+      caller,
+      relationRemoved({
+        tenant: from.tenant,
+        relationId,
+        relationType: relation.type,
+        fromId: relation.fromId,
+        toId: relation.toId,
+        removedBy: caller.subject.principal,
+        occurredAt: now,
+        traceId: caller.traceId ?? null,
+      }),
+    )
+  }
+
+  /**
+   * 确认或否决一条 Agent 推断的关系（FR-ONT-006）。
+   *
+   * 否决后这条边不参与遍历，也不满足守卫——等同于不存在，但保留记录：
+   * 被否决的推断是训练与评估的负样本，直接删掉就丢了。
+   */
+  async confirmRelation(caller: Caller, relationId: string, confirmed: boolean): Promise<RelationInstance> {
+    const relation = await this.#deps.relations.findById(relationId)
+    if (relation === null || relation.tenant !== caller.subject.tenant) {
+      throw new NotFoundError(relationId)
+    }
+    if (!relation.createdBy.startsWith('agent:')) {
+      throw new ValidationError('only agent-inferred relations need confirmation', {
+        createdBy: relation.createdBy,
+      })
+    }
+
+    const from = await this.#requireLive(relation.fromId)
+    await this.#authorize(
+      caller,
+      `${from.type}.Update`,
+      {
+        tenant: from.tenant,
+        workspace: from.workspace,
+        project: from.project ?? undefined,
+        id: from.id,
+        type: from.type,
+      },
+      from.owner,
+      from.type,
+    )
+
+    const ok = await this.#deps.relations.setConfirmed(relationId, confirmed)
+    if (!ok) throw new NotFoundError(relationId)
+    return { ...relation, confirmed }
+  }
+
   async relationsOf(
     caller: Caller,
     id: string,

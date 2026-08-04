@@ -87,6 +87,10 @@ export const pathSchema = z.object({
   maxDepth: z.number().int().min(1).max(10).default(6),
 })
 
+export const confirmRelationSchema = z.object({
+  confirmed: z.boolean(),
+})
+
 export const relationDirectionSchema = z.enum(['out', 'in', 'both']).default('out')
 
 export type TransitionBody = z.infer<typeof transitionSchema>

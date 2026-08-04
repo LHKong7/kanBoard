@@ -233,6 +233,154 @@ describe('可用动作由工作流引擎给出', () => {
   })
 })
 
+describe('编辑属性', () => {
+  it('编辑表单只列可编辑属性，并回填当前值', async () => {
+    await openBoard('Task')
+    await page.click('#newBtn')
+    await page.waitForSelector('#f_title')
+    await page.fill('#f_title', '可编辑的任务')
+    await page.fill('#f_description', '初始描述')
+    await page.click('#modalSubmit')
+    await page.waitForSelector('.card:has-text("可编辑的任务")')
+
+    await page.click('.card:has-text("可编辑的任务")')
+    await page.waitForSelector('#editAttrsBtn')
+    await page.click('#editAttrsBtn')
+    await page.waitForSelector('#editForm')
+
+    // 当前值被回填，用户不必重新输入没打算改的内容
+    assert.equal(await page.inputValue('#f_title'), '可编辑的任务')
+    assert.equal(await page.inputValue('#f_description'), '初始描述')
+    // derived 字段不在表单里，只作为只读说明出现
+    assert.equal(await page.locator('#editForm #f_startedAt').count(), 0)
+  })
+
+  it('保存后看板与详情都更新', async () => {
+    await page.fill('#f_title', '改过标题的任务')
+    await page.fill('#f_assignee', 'user://bob')
+    await page.click('#saveAttrsBtn')
+
+    // 等**内容**出现，而不是等某个结构选择器：
+    // 旧的 section 在重渲染前还留在 DOM 里，等结构会立刻通过，什么都没验到
+    await page.waitForFunction(() =>
+      document.querySelector('.drawer-body')?.textContent?.includes('改过标题的任务') === true,
+    )
+
+    await page.click('#drawerClose')
+    await page.waitForSelector('.card:has-text("改过标题的任务")')
+  })
+
+  it('补上 assignee 之后，原先被守卫拦住的迁移变为可执行', async () => {
+    // 编辑功能真正的价值：它让用户能自己满足守卫，而不是去开 curl
+    await page.click('.card:has-text("改过标题的任务")')
+    await page.waitForSelector('.transition')
+    const doing = page.locator('.transition', { hasText: 'Doing' })
+    assert.equal(await doing.isDisabled(), false)
+  })
+
+  it('并发冲突不静默覆盖，而是重新载入并说明', async () => {
+    await openBoard('Task')
+    await page.click('.card:has-text("改过标题的任务")')
+    await page.waitForSelector('#editAttrsBtn')
+    await page.click('#editAttrsBtn')
+    await page.waitForSelector('#editForm')
+
+    // 模拟他人在此期间改了同一条记录
+    const id = await page.locator('.card:has-text("改过标题的任务")').getAttribute('data-id')
+    await page.evaluate(
+      async ([resourceId, auth]) => {
+        const headers = { 'content-type': 'application/json', ...(auth as Record<string, string>) }
+        const current = await fetch(`/v1/resources/${resourceId}`, { headers }).then((r) => r.json())
+        await fetch(`/v1/resources/${resourceId}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            expectedVersion: current.version,
+            attributes: { ...current.attributes, description: '别人写的' },
+          }),
+        })
+      },
+      [id, AUTH] as const,
+    )
+
+    // 清掉此前残留的提示：错误提示会停留 6.5 秒，
+    // 上一个用例的 toast 还在时，断言可能取到旧的那条
+    await page.evaluate(() => {
+      for (const node of document.querySelectorAll('.toast')) node.remove()
+    })
+
+    await page.fill('#f_description', '我写的')
+    await page.click('#saveAttrsBtn')
+    await page.waitForSelector('.toast.error')
+
+    const toast = await page.locator('.toast.error').textContent()
+    assert.match(toast ?? '', /已被他人修改/)
+
+    // 对方的修改必须还在——静默覆盖是这里最不能接受的失败方式
+    const drawer = await page.locator('.drawer-body').textContent()
+    assert.match(drawer ?? '', /别人写的/)
+  })
+})
+
+describe('管理关系', () => {
+  it('可选关系类型由本体的定义域决定', async () => {
+    await openBoard('Story')
+    await page.click('#newBtn')
+    await page.waitForSelector('#f_title')
+    await page.fill('#f_title', '要拆任务的故事')
+    await page.click('#modalSubmit')
+    await page.waitForSelector('.card:has-text("要拆任务的故事")')
+
+    await page.click('.card:has-text("要拆任务的故事")')
+    await page.waitForSelector('#addRelationBtn')
+    await page.click('#addRelationBtn')
+    await page.waitForSelector('#relType')
+
+    const options = await page.locator('#relType option').allTextContents()
+    // Story 能做起点的关系：decomposedInto、implements
+    assert.ok(options.some((o) => o.startsWith('decomposedInto')))
+    assert.ok(options.some((o) => o.startsWith('implements')))
+    // contains 的定义域是 Project，不该出现
+    assert.ok(!options.some((o) => o.startsWith('contains')))
+  })
+
+  it('建立关系后守卫得到满足，Story 可以进入 Ready', async () => {
+    // Story → Ready 要求存在 decomposedInto。没有建关系的入口，
+    // 这个守卫在界面上就是永远满足不了的
+    await page.selectOption('#relType', 'decomposedInto')
+    await page.waitForFunction(() => {
+      const select = document.querySelector('#relTarget') as HTMLSelectElement | null
+      return select !== null && select.options.length > 0
+    })
+    await page.click('#modalSubmit')
+    await page.waitForSelector('.rel-row')
+
+    const ready = page.locator('.transition', { hasText: 'Ready' })
+    assert.equal(await ready.isDisabled(), false)
+  })
+
+  it('删除关系后守卫重新变为不满足', async () => {
+    // 记住当前对象再操作：靠上一个用例留下的抽屉状态会让失败信息
+    // 指向错误的地方——上一轮就是这样
+    const storyId = await page.evaluate(
+      () => document.querySelector('.drawer-body')?.textContent?.match(/story_[0-9A-HJKMNP-TV-Z]{26}/)?.[0] ?? '',
+    )
+    assert.ok(storyId !== '', '没能从抽屉里读到 Story id')
+
+    await page.locator('.rel-row .link-btn.danger').first().click()
+    await page.waitForFunction(
+      () => document.querySelector('.rel-list') === null,
+      undefined,
+      { timeout: 10_000 },
+    )
+
+    const ready = page.locator('.transition', { hasText: 'Ready' })
+    assert.equal(await ready.isDisabled(), true)
+    const why = await ready.locator('.why').textContent()
+    assert.match(why ?? '', /decomposedInto/)
+  })
+})
+
 describe('权限是 PDP 过滤的结果，不是界面藏了按钮', () => {
   it('Guest 看不到任何可执行迁移', async () => {
     await openBoard('Task')

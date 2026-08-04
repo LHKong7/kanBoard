@@ -21,6 +21,7 @@ import {
   createResourceSchema,
   pathSchema,
   querySchema,
+  confirmRelationSchema,
   relateSchema,
   relationDirectionSchema,
   resourceIdSchema,
@@ -276,6 +277,22 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       }),
     )
     return reply.status(201).send({ ...relation, createdAt: relation.createdAt.toISOString() })
+  })
+
+  app.delete('/v1/relations/:id', async (request, reply) => {
+    const id = (request.params as { id: string }).id
+    await inTenant(request, (service, caller) => service.unrelate(caller, id))
+    return reply.status(204).send()
+  })
+
+  // 确认 / 否决 Agent 推断的关系（FR-ONT-006）
+  app.post('/v1/relations/:id/confirmation', async (request) => {
+    const id = (request.params as { id: string }).id
+    const body = confirmRelationSchema.parse(request.body)
+    const relation = await inTenant(request, (service, caller) =>
+      service.confirmRelation(caller, id, body.confirmed),
+    )
+    return { ...relation, createdAt: relation.createdAt.toISOString() }
   })
 
   app.post('/v1/graph:action', async (request, reply) => {

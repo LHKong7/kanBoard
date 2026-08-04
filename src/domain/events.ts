@@ -113,6 +113,34 @@ export function resourceDeleted(args: {
   }
 }
 
+export function relationRemoved(args: {
+  tenant: string
+  relationId: string
+  relationType: string
+  fromId: string
+  toId: string
+  removedBy: string
+  occurredAt: Date
+  traceId?: string | null
+}): DomainEvent {
+  return {
+    type: 'RelationRemoved',
+    tenant: args.tenant,
+    // 以 fromId 为主体：订阅方关心的是"这个对象少了一条关系"
+    resourceId: args.fromId,
+    resourceType: 'Relation',
+    payload: {
+      relationId: args.relationId,
+      relationType: args.relationType,
+      fromId: args.fromId,
+      toId: args.toId,
+      removedBy: args.removedBy,
+    },
+    occurredAt: args.occurredAt,
+    traceId: args.traceId ?? null,
+  }
+}
+
 export function relationCreated(args: {
   tenant: string
   relationId: string
