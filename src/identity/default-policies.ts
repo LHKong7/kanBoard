@@ -81,6 +81,82 @@ export function defaultPolicies(tenant: string): Policy[] {
       description: 'Todo → Doing 需要它',
     },
     {
+      // Runner 的结算：把 token 用量、成本、终止原因写回 Run。
+      //
+      // 刻意只给 `AgentRun.Update` 而不是 `*.Update`：这是运行时的记账，
+      // 不是"自动化可以改任何东西"的通行证。写得越窄，
+      // 将来看到审计里出现别的 Update 时才知道那不正常。
+      id: 'pol-system-settle-run',
+      effect: 'Allow',
+      subject: 'system://internal',
+      action: 'AgentRun.Update',
+      scope: { kind: 'tenant', tenant },
+      description: 'Agent Runner 回写用量与终止原因（FR-AGT-012/014）',
+    },
+
+    // ── Agent（ADR-0003：最低权限 + 事后可审计） ────────────
+    //
+    // Agent 要动一次手，必须**两道闸门同时放行**：
+    //
+    //   ① 能力：`ROLE_CAPABILITIES.AIAgent` 是空集，所以能力只能来自
+    //      该 Agent 自己声明里的 `capabilities`（PRD 07 §3）。
+    //      这一道回答"**这个** Agent 被配置成能做什么"。
+    //   ② 策略：下面这几条。回答"在**这个租户**里，Agent 这类主体
+    //      被允许做什么"。
+    //
+    // 缺哪一道都不行，而且顺序上 ① 先判——所以只写策略不写声明的话，
+    // Agent 会在第 ④ 步就被拒，策略根本走不到。两道闸门的分工是：
+    // 声明按 Agent 收紧，策略按租户封顶，Deny 则是两者都配不掉的地板。
+    {
+      id: 'pol-agent-read',
+      effect: 'Allow',
+      subject: 'role:AIAgent',
+      action: '*.Read',
+      scope: { kind: 'tenant', tenant },
+      description: '租户允许 Agent 读；具体读得到什么由它自己的能力声明决定',
+    },
+    {
+      id: 'pol-agent-run-transition',
+      effect: 'Allow',
+      subject: 'role:AIAgent',
+      action: 'AgentRun.Transition',
+      scope: { kind: 'tenant', tenant },
+      description: 'Agent 推进自己那次 Run 的状态；采纳产出另有 Deny 挡着',
+    },
+    {
+      id: 'pol-agent-draft',
+      effect: 'Allow',
+      subject: 'role:AIAgent',
+      action: '*.Create',
+      scope: { kind: 'tenant', tenant },
+      description:
+        '租户层面允许 Agent 产出草稿。能产出**哪些类型**由 Agent 声明里的 ' +
+        'capabilities 与 mayPropose 共同收窄，这里不做类型级的白名单——' +
+        '否则每加一种可产出类型都要改一次全局策略',
+    },
+    {
+      // Agent 不批准自己的产出。
+      //
+      // 少了这条，人机协作模式就只是个摆设：给 Agent 声明上
+      // `AgentRun.*` 就能让它自己走 AwaitingReview → Succeeded，
+      // "人工审阅"这一步凭空消失。写成 Deny 才配不掉。
+      id: 'pol-agent-no-self-approve',
+      effect: 'Deny',
+      subject: 'role:AIAgent',
+      action: 'AgentRun.Approve',
+      scope: { kind: 'tenant', tenant },
+      description: 'FR-AGT-009：产出的采纳权归人',
+    },
+    {
+      // 不可逆操作永远要人（docs/prd/05-agent-runtime.md §4）
+      id: 'pol-agent-no-delete',
+      effect: 'Deny',
+      subject: 'role:AIAgent',
+      action: '*.Delete',
+      scope: { kind: 'tenant', tenant },
+    },
+
+    {
       id: 'pol-system-no-delete',
       effect: 'Deny',
       subject: 'system://internal',

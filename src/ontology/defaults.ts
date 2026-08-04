@@ -109,16 +109,86 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
     ],
   },
   {
+    name: 'AgentRun',
+    version: '1.0.0',
+    context: 'AI',
+    lifecycle: 'agentrun-default',
+    description:
+      '一次 Agent 执行（FR-AGT-007）。它是**领域对象**而不是后台任务记录：' +
+      '既然要能被授权、被审计、被回放，就该和别的对象走同一条 API 与同一套权限。',
+    attributes: [
+      { name: 'goal', kind: 'text', required: true, description: '这次要达成什么' },
+      {
+        name: 'agent',
+        kind: 'ref',
+        target: 'Agent',
+        required: true,
+        description: '哪个 Agent 执行；它的 principal 决定这次 Run 的身份',
+      },
+      {
+        name: 'subject',
+        kind: 'ref',
+        description: '这次 Run 围绕哪个对象展开，Context 从它开始沿图装配（FR-AGT-004）',
+      },
+      {
+        name: 'mode',
+        kind: 'enum',
+        values: ['Suggest', 'Draft', 'ExecuteWithReview', 'Autonomous'],
+        required: true,
+        description: '人机协作模式（FR-AGT-009）。不可逆操作无论哪种模式都要人工确认',
+      },
+      { name: 'trigger', kind: 'enum', values: ['human', 'event', 'schedule', 'agent'], required: true },
+      // 预算是**输入**不是统计：写在 Run 上，执行时按它熔断（FR-AGT-012）
+      { name: 'maxTokens', kind: 'int', description: '本次 Run 的 token 上限；缺省用 Agent 定义里的值' },
+      { name: 'maxSteps', kind: 'int', description: '本次 Run 的步数上限，防止推理循环' },
+      { name: 'tokensUsed', kind: 'int', derived: true },
+      { name: 'costUsd', kind: 'float', derived: true },
+      { name: 'stepCount', kind: 'int', derived: true },
+      { name: 'outcome', kind: 'text', derived: true, description: '终止原因：完成、超预算、被拒、出错' },
+      { name: 'startedAt', kind: 'datetime', derived: true },
+      { name: 'finishedAt', kind: 'datetime', derived: true },
+    ],
+  },
+  {
     name: 'Agent',
-    version: '1.1.0',
+    version: '1.2.0',
     context: 'AI',
     lifecycle: 'agent-default',
-    description: 'Agent 是一等身份主体，同样是领域对象（ADR-0003）',
+    description:
+      'Agent 是一等身份主体，同样是领域对象（ADR-0003）。' +
+      '它的行为由**声明**决定而不是由代码分支决定（FR-AGT-001/002）：' +
+      '运行时读下面这些属性，并不知道自己在跑哪个 Agent。',
     attributes: [
       { name: 'name', kind: 'string', required: true },
       { name: 'principal', kind: 'string', required: true, description: 'agent://<name>@<version>' },
       { name: 'ownerTeam', kind: 'string' },
       { name: 'capabilities', kind: 'json', description: '显式授予的 Capability 列表；默认为空' },
+      { name: 'system', kind: 'text', description: '角色设定与规则，送给模型的 system 段' },
+      {
+        name: 'tier',
+        kind: 'enum',
+        values: ['tier-low', 'tier-mid', 'tier-high'],
+        description: '模型档位（FR-AGT-013）。换供应商只改这里，领域层不认识具体厂商',
+      },
+      {
+        name: 'mode',
+        kind: 'enum',
+        values: ['Suggest', 'Draft', 'ExecuteWithReview', 'Autonomous'],
+        description: '默认协作模式；单次 Run 可以覆盖它（FR-AGT-009）',
+      },
+      {
+        name: 'contextRelations',
+        kind: 'json',
+        description: 'Context 从 subject 出发沿哪些关系装配（FR-AGT-004）',
+      },
+      {
+        name: 'mayPropose',
+        kind: 'json',
+        description:
+          '允许提议写回的类型清单。**空表示只能给建议**——' +
+          '能写什么由声明决定，不由模型的输出决定',
+      },
+      { name: 'maxTokensPerRun', kind: 'int', description: '单次 Run 的 token 上限（FR-AGT-012）' },
     ],
   },
 ]

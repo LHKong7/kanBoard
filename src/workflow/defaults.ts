@@ -213,6 +213,41 @@ export const AGENT_LIFECYCLE: Lifecycle = {
   ],
 }
 
+/**
+ * 一次 Agent 执行的生命周期（FR-AGT-007 / FR-AGT-009）。
+ *
+ * `AwaitingReview` 是这台状态机存在的理由。人机协作的四种模式里，
+ * 只有 Autonomous 允许直接落到 Succeeded；其余三种必须先停在这一站等人。
+ * 把"等人"做成一个**状态**而不是一个布尔字段，好处是它自动获得了
+ * 看板上的一列、可用迁移列表、以及完整的历史记录——
+ * 也就是说"有多少产出正在等人看"这个问题不需要额外做报表。
+ */
+export const AGENT_RUN_LIFECYCLE: Lifecycle = {
+  id: 'agentrun-default',
+  entityType: 'AgentRun',
+  initial: 'Queued',
+  states: [
+    { name: 'Queued' },
+    { name: 'Running', entryActions: [{ kind: 'stampNow', path: 'startedAt' }] },
+    { name: 'AwaitingReview' },
+    { name: 'Succeeded', entryActions: [{ kind: 'stampNow', path: 'finishedAt' }], terminal: true },
+    { name: 'Failed', entryActions: [{ kind: 'stampNow', path: 'finishedAt' }], terminal: true },
+    { name: 'Cancelled', entryActions: [{ kind: 'stampNow', path: 'finishedAt' }], terminal: true },
+  ],
+  transitions: [
+    { from: ['Queued'], to: 'Running' },
+    // 直接完成：Autonomous 模式，以及无需产出评审的 Run
+    { from: ['Running'], to: 'Succeeded' },
+    { from: ['Running'], to: 'AwaitingReview' },
+    // 采纳产出。人的动作，因此要一个人才有的能力——
+    // 让 Agent 自己批准自己的产出，人机协作模式就只是个摆设
+    { from: ['AwaitingReview'], to: 'Succeeded', capability: 'AgentRun.Approve' },
+    { from: ['AwaitingReview'], to: 'Failed', capability: 'AgentRun.Approve' },
+    { from: ['Running'], to: 'Failed' },
+    { from: ['Queued', 'Running', 'AwaitingReview'], to: 'Cancelled' },
+  ],
+}
+
 export const DEFAULT_LIFECYCLES: readonly Lifecycle[] = [
   TASK_LIFECYCLE,
   REQUIREMENT_LIFECYCLE,
@@ -221,6 +256,7 @@ export const DEFAULT_LIFECYCLES: readonly Lifecycle[] = [
   KNOWLEDGE_LIFECYCLE,
   PROJECT_LIFECYCLE,
   AGENT_LIFECYCLE,
+  AGENT_RUN_LIFECYCLE,
 ]
 
 export function buildDefaultWorkflowRegistry(): WorkflowRegistry {

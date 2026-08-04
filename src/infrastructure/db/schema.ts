@@ -106,8 +106,23 @@ export type GrantsTable = {
   revoked_at: Date | null
 }
 
+export type AgentRunStepsTable = {
+  seq_id: Generated<number>
+  tenant: string
+  run_id: string
+  seq: number
+  kind: string
+  summary: string
+  detail: JSONColumnType<Record<string, unknown>, string, string>
+  tokens_used: number
+  /** NUMERIC 经 pg 驱动回来是字符串，读出后再转数字；直接当 number 会得到 "0.000100" */
+  cost_usd: ColumnType<string, string | number, string | number>
+  occurred_at: Date
+}
+
 export type Database = {
   resources: ResourcesTable
+  agent_run_steps: AgentRunStepsTable
   relations: RelationsTable
   resource_history: ResourceHistoryTable
   outbox_events: OutboxEventsTable
