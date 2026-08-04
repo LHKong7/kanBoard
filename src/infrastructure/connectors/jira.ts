@@ -174,6 +174,7 @@ export async function readAllPages(
   const pageSize = options.pageSize ?? 100
   const maxPages = options.maxPages ?? 1000
   const all: JiraIssue[] = []
+  const seenKeys = new Set<string>()
   let startAt = 0
   let total: number | null = null
 
@@ -181,6 +182,27 @@ export async function readAllPages(
     const response = await fetchPage(startAt)
     const issues = response.issues ?? []
     if (total === null) total = response.total ?? null
+
+    // **同一条 issue 回来第二次，就说明分页没在推进。**
+    // 这条是把演练跑到真 HTTP 上之后才逼出来的：一个忽略 startAt、
+    // 每次都返回第一页的服务器，会让上面那个"条数对不对得上 total"的
+    // 检查**顺利通过**——因为它累加到 total 条就停了，
+    // 而那 total 条是同一条记录复制了 total 遍。
+    //
+    // 迁移里"数据翻倍"和"数据丢失"一样糟，而且更难发现：
+    // 对账会说"一条不少"。
+    for (const issue of issues) {
+      if (seenKeys.has(issue.key)) {
+        throw new DomainError(
+          'bad_gateway',
+          `Jira returned "${issue.key}" twice; pagination is not advancing (startAt=${startAt})`,
+          502,
+          { key: issue.key, startAt, read: all.length },
+        )
+      }
+      seenKeys.add(issue.key)
+    }
+
     all.push(...issues)
     if (issues.length === 0) break
     startAt += issues.length
@@ -198,4 +220,122 @@ export async function readAllPages(
     )
   }
   return all
+}
+
+/**
+ * 真的去 Jira 读写的 `SyncSource`（FR-CON-007）。
+ *
+ * 上面那些是翻译规则，这里是**真的发 HTTP**。分开是因为翻译规则
+ * 离线就能完整验证，而这一层要的是一个在监听的端口——
+ * 演练跑在这条路径上，而不是跑在一个内存里的假源上，
+ * 差别在于分页、认证头、错误映射、字段裁剪这几段**只有走过才算数**。
+ *
+ * ⚠️ 报文形状来自 Jira 的公开文档，不是实测抓的
+ * （GitHub 那个连接器用的是从本仓库 CI 真抓下来的报文，两者不是一个成色）。
+ * 也就是说：**整条管线验到位了，"Jira 真的长这样吗"没有。**
+ */
+export type JiraSourceOptions2 = JiraSourceOptions & {
+  /** 形如 `https://acme.atlassian.net` */
+  baseUrl: string
+  /** JQL，决定搬哪些。**必填**：默认搬全站是个能把人吓死的默认值 */
+  jql: string
+  /** 邮箱 + API token。Basic 认证，由网关注入，用完即弃 */
+  auth?: { email: string; token: string }
+  pageSize?: number
+  timeoutMs?: number
+}
+
+export class JiraSource {
+  readonly #options: JiraSourceOptions2
+  /** 翻译时发现的问题。演练报告要读它 */
+  readonly problems: TranslationProblem[] = []
+
+  constructor(options: JiraSourceOptions2) {
+    this.#options = options
+  }
+
+  async readAll(): Promise<readonly ExternalRecord[]> {
+    const issues = await readAllPages(
+      (startAt) => this.#searchPage(startAt),
+      { pageSize: this.#options.pageSize ?? 50 },
+    )
+    const { records, problems } = translateIssues(issues, this.#options)
+    // 累积而不是覆盖：一次演练会分阶段跑好几遍，
+    // 每一遍的问题都该留在报告里
+    this.problems.push(...problems)
+    return records
+  }
+
+  async write(externalId: string, fields: Record<string, unknown>): Promise<void> {
+    // 反向映射：ProjectOS 的属性名换回 Jira 的字段名。
+    // 没有映射的字段**不回写**——往源系统里写一个它不认识的字段，
+    // 轻则报错，重则被某个自定义字段悄悄接住
+    const byTo = new Map(this.#options.fields.map((f) => [f.to, f.from]))
+    const payload: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(fields)) {
+      const jiraField = byTo.get(key)
+      if (jiraField === undefined) continue
+      payload[jiraField] = value
+    }
+    if (Object.keys(payload).length === 0) return
+    await this.#send('PUT', `/rest/api/3/issue/${encodeURIComponent(externalId)}`, {
+      fields: payload,
+    })
+  }
+
+  async #searchPage(startAt: number): Promise<JiraSearchResponse> {
+    const params = new URLSearchParams({
+      jql: this.#options.jql,
+      startAt: String(startAt),
+      maxResults: String(this.#options.pageSize ?? 50),
+      // 只取要用的字段。不限定的话每条 issue 会带回几十 KB，
+      // 其中大部分是我们不映射、因此也不该看到的内容
+      fields: [...this.#options.fields.map((f) => f.from), 'status', 'updated'].join(','),
+    })
+    return (await this.#send('GET', `/rest/api/3/search?${params.toString()}`, null)) as JiraSearchResponse
+  }
+
+  async #send(method: string, path: string, body: unknown): Promise<unknown> {
+    const headers: Record<string, string> = { accept: 'application/json' }
+    if (this.#options.auth !== undefined) {
+      const { email, token } = this.#options.auth
+      headers['authorization'] = `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`
+    }
+    if (body !== null) headers['content-type'] = 'application/json'
+
+    let response: Response
+    try {
+      response = await fetch(`${this.#options.baseUrl.replace(/\/$/, '')}${path}`, {
+        method,
+        headers,
+        ...(body === null ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(this.#options.timeoutMs ?? 20_000),
+      })
+    } catch (error) {
+      throw new DomainError('unavailable', `jira request failed: ${reason(error)}`, 503)
+    }
+
+    const text = await response.text()
+    if (!response.ok) {
+      // 迁移期间 4xx 和 5xx 要分开：前者是我们发错了（JQL 写错、字段名不对），
+      // 后者是对面不稳。混成一个错误的话，一次持续几小时的迁移
+      // 会在两种完全不同的问题上给出同一句话
+      throw new DomainError(
+        response.status >= 500 ? 'bad_gateway' : 'invalid_request',
+        `jira ${method} ${path.split('?')[0]} → ${response.status}`,
+        response.status >= 500 ? 502 : response.status,
+        { body: text.slice(0, 500) },
+      )
+    }
+    if (text === '') return {}
+    try {
+      return JSON.parse(text)
+    } catch {
+      throw new DomainError('bad_gateway', 'jira returned a non-JSON body', 502)
+    }
+  }
+}
+
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

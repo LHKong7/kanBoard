@@ -144,7 +144,28 @@ describe('pagination cannot silently truncate (FR-CON-007)', () => {
     ).rejects.toThrow(/refusing to migrate a partial set/)
   })
 
-  it('stops instead of looping forever when the source keeps handing back the same page', async () => {
+  it('stops after a bounded number of pages even when every page looks new', async () => {
+    // 重复检测挡的是"卡住的分页"，挡不住一个源源不断吐出**新** key 的源
+    // （没有 total、页页都满）。那种情况下 maxPages 是最后一道闸——
+    // 没有它，一次迁移会一直读到内存耗尽
+    let calls = 0
+    const all = await readAllPages(
+      async () => {
+        calls++
+        return { issues: [issue({ summary: `s${calls}` }, `K-${calls}`)], maxResults: 1 }
+      },
+      { maxPages: 4 },
+    )
+    expect(calls).toBe(4)
+    expect(all).toHaveLength(4)
+  })
+
+  it('refuses a source whose pagination never advances', async () => {
+    // 每次都返回第一页的服务器，会让"条数对不对得上 total"那个检查
+    // **顺利通过**——因为它累加到 total 条就停了，而那 total 条是
+    // 同一条复制了 total 遍。迁移里"数据翻倍"和"数据丢失"一样糟，
+    // 而且更难发现：对账会说一条不少。
+    // 这条是把演练跑到真 HTTP 上之后才逼出来的
     let calls = 0
     await expect(
       readAllPages(
@@ -154,7 +175,8 @@ describe('pagination cannot silently truncate (FR-CON-007)', () => {
         },
         { maxPages: 5 },
       ),
-    ).rejects.toThrow(/999/)
-    expect(calls).toBe(5)
+    ).rejects.toThrow(/twice; pagination is not advancing/)
+    // 第二页就发现了，不会真的翻满 5 次
+    expect(calls).toBe(2)
   })
 })

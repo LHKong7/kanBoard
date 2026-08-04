@@ -61,6 +61,11 @@
       "name": "分页不封顶",
       "from": "for (let page = 0; page < maxPages; page++) {",
       "to": "for (let page = 0; page < 3; page++) {"
+    },
+    {
+      "name": "分页不查重复，同一页回来两次也照收",
+      "from": "      if (seenKeys.has(issue.key)) {",
+      "to": "      if (false) {"
     }
   ]
 }
