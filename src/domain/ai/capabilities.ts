@@ -200,25 +200,6 @@ export function validateCandidates(
   }
 }
 
-// ── FR-AI-006：每条风险可点击到触发它的实体 ──────────────────
-
-export type EvidencedItem = { id: string; statement: string; evidence: readonly string[] }
-
-/**
- * 每一条都必须指得出证据实体。
- *
- * 没有证据的风险条目是这类产出里最没用也最常见的东西：
- * 读起来像洞察，跟进时无从下手，而且没人能判断它是不是模型编的。
- */
-export function requireEvidence(items: readonly EvidencedItem[]): Verdict {
-  const offenders = items.filter((i) => i.evidence.length === 0).map((i) => `${i.id}: ${i.statement.slice(0, 60)}`)
-  return {
-    ok: offenders.length === 0,
-    reason: offenders.length === 0 ? `all ${items.length} items cite evidence` : 'some items cite no evidence',
-    offenders,
-  }
-}
-
 // ── FR-AI-007：无出处的内容标注为"待确认" ────────────────────
 
 /** 无出处内容的标注。写成常量，UI 与校验用的是同一个串 */

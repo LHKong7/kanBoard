@@ -299,7 +299,20 @@ export const RISK_LIFECYCLE: Lifecycle = {
     { name: 'Identified' },
     {
       name: 'Mitigating',
-      requires: [{ kind: 'attributeSet', path: 'mitigation' }, { kind: 'ownerAssigned' }],
+      requires: [
+        { kind: 'attributeSet', path: 'mitigation' },
+        { kind: 'ownerAssigned' },
+        // 风险要指得出触发它的实体（FR-AI-006）。
+        //
+        // 用**关系**而不是属性，因为验收标准的原文是"可点击"——
+        // 一个字符串数组点不动，而关系正是 UI 能渲染成链接的东西。
+        // 和 Knowledge 的来源守卫（FR-DOM-008）用的是同一套机制。
+        //
+        // 闸设在 Mitigating 而不是 Identified：**刚发现时说不清出处是正常的**，
+        // 设在入口会让人不敢登记风险，而漏登记比登记得潦草糟得多。
+        // 但要动手缓解、要占用人和时间，就得说清楚是什么让你这么判断的。
+        { kind: 'hasRelation', type: 'evidencedBy', direction: 'out' },
+      ],
     },
     { name: 'Closed', terminal: true },
     { name: 'Accepted', description: '接受这个风险，不再缓解', terminal: true },

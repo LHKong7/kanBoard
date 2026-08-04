@@ -537,6 +537,29 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
     domain: ['Task', 'Decision'],
     range: ['Knowledge'],
   },
+  /**
+   * 风险指向触发它的实体（FR-AI-006：每条风险可点击到触发它的实体）。
+   *
+   * 单开一对关系而不是复用 `derivedFrom`：语义不是一回事。
+   * Knowledge「从一次执行中提炼出来」，Risk「是被这些东西暴露出来的」。
+   * 复用的话得把 `derivedFrom` 的值域一起放宽，
+   * 而那会**顺手改掉 Knowledge 的不变量**——一次为了少写十行而做的
+   * 语义变更，事后没人会记得是这么来的。
+   */
+  {
+    name: 'evidencedBy',
+    inverse: 'evidenceFor',
+    domain: ['Risk'],
+    // 能让人判断"这个风险是真的"的东西。范围给得窄：
+    // 允许指向任意对象的话，"有证据"这件事就不再意味着什么
+    range: ['Task', 'Decision', 'Requirement', 'Sprint', 'Release'],
+  },
+  {
+    name: 'evidenceFor',
+    inverse: 'evidencedBy',
+    domain: ['Task', 'Decision', 'Requirement', 'Sprint', 'Release'],
+    range: ['Risk'],
+  },
 ]
 
 export function buildDefaultRegistry(): OntologyRegistry {

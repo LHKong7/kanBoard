@@ -755,3 +755,77 @@ describe('acyclic relations (FR-DOM-005)', () => {
     expect((await relate(knowledge, 'derivedFrom', decision)).statusCode).toBe(201)
   })
 })
+
+/**
+ * 风险要指得出触发它的实体（FR-AI-006）。
+ *
+ * 这一条的第一版实现是错的，值得记下来：它是 Agent 运行时里的一个
+ * 产出闸，检查 `attributes.evidence` 空不空。两处错——
+ * Risk 的本体里根本没有这个属性（于是那个闸会拒掉**每一条**风险提议），
+ * 而且一个字符串数组**点不动**。「可点击到实体」在这个系统里的意思是关系。
+ *
+ * 现在它是 Risk 生命周期上的守卫，和 Knowledge 的来源守卫同一套机制，
+ * 于是它对**所有**风险生效——Agent 建的和人建的一视同仁。
+ */
+describe('a risk must point at what triggered it (FR-AI-006)', () => {
+  async function riskReadyFor(to: string) {
+    const risk = await create('Risk', {
+      description: '导出接口可能超时',
+      probability: 'high',
+      impact: 'high',
+      mitigation: '加一层缓存',
+    })
+    // Mitigating 还要求 owner
+    await app.inject({
+      method: 'PATCH',
+      url: `/v1/resources/${risk}`,
+      headers: { ...asAdmin, 'if-match': `"1"` },
+      payload: { owner: 'user://bob' },
+    })
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${risk}/transitions`,
+      headers: asAdmin,
+    })
+    const target = (res.json().items as { to: string; ready: boolean; blockedBy: string | null }[]).find(
+      (t) => t.to === to,
+    )
+    return { risk, target }
+  }
+
+  it('will not start mitigating a risk with no evidence, and says which relation is missing', async () => {
+    const { target } = await riskReadyFor('Mitigating')
+    expect(target?.ready).toBe(false)
+    // 说得出缺的是什么。只说"守卫未满足"的话，人只能去读源码
+    expect(target?.blockedBy).toMatch(/evidencedBy/)
+  })
+
+  it('lets it through once it cites an entity', async () => {
+    const { risk } = await riskReadyFor('Mitigating')
+    const task = await create('Task', { title: '导出任务' })
+    expect((await relate(risk, 'evidencedBy', task)).statusCode).toBe(201)
+
+    const after = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${risk}/transitions`,
+      headers: asAdmin,
+    })
+    const target = (after.json().items as { to: string; ready: boolean }[]).find((t) => t.to === 'Mitigating')
+    expect(target?.ready).toBe(true)
+  })
+
+  it('still lets a risk be logged without evidence — the gate is on acting, not on noticing', async () => {
+    // 闸设在入口会让人不敢登记风险，而漏登记比登记得潦草糟得多
+    const { target } = await riskReadyFor('Accepted')
+    expect(target?.ready).toBe(true)
+  })
+
+  it('does not let a risk cite something that cannot be evidence', async () => {
+    const { risk } = await riskReadyFor('Mitigating')
+    const other = await create('Risk', {
+      description: '另一条', probability: 'low', impact: 'low',
+    })
+    // 值域给得窄是有意的：允许指向任意对象的话，"有证据"就不再意味着什么
+    expect((await relate(risk, 'evidencedBy', other)).statusCode).toBeGreaterThanOrEqual(400)
+  })
+})

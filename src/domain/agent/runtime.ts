@@ -7,8 +7,6 @@ import { DEFAULT_AI_POLICY, prepareEgress } from './egress.ts'
 import type { AiPolicy, DataClassification, EgressRecord } from './egress.ts'
 import type { AgentMemory, MemoryEntry } from './memory.ts'
 import { assembleContext } from './context.ts'
-import { requireEvidence } from '../ai/capabilities.ts'
-import type { Verdict } from '../ai/capabilities.ts'
 import { agentSpecFrom, DEFAULT_RUN_BUDGET } from './types.ts'
 import type { CallInput, CallResult } from '../connector/types.ts'
 import type {
@@ -387,22 +385,6 @@ export class AgentRuntime {
         }
       }
 
-      // 产出闸（FR-AI-006）。风险条目必须指得出触发它的实体。
-      //
-      // 放在这里而不是放过去让本体校验拦：本体只知道"有没有这个字段"，
-      // 拦下来的错误信息是"缺少必填属性"。而模型需要读懂的是
-      // **为什么**——一条没有证据的风险读起来像洞察，跟进时无从下手，
-      // 没人能判断它是不是编的。所以把话说清楚，让它下一步能改对。
-      const gate = evidenceGate(proposal)
-      if (!gate.ok) {
-        await record('guardrail', `产出被拒：${gate.reason}`, {
-          type: proposal.resourceType,
-          offenders: gate.offenders,
-        })
-        history.push({ thought: response.thought, observation: `产出被拒：${gate.reason}` })
-        continue
-      }
-
       let createdId: string | null = null
       if (MAY_WRITE[spec.mode]) {
         try {
@@ -588,28 +570,19 @@ export function isAgentPrincipal(principal: string): boolean {
 }
 
 /**
- * 哪些产出类型必须带证据（FR-AI-006）。
+ * FR-AI-006（风险可点击到触发它的实体）**不在这一层**。
  *
- * 只列 `Risk`，不是"先做一个再说"。**每加一种类型都是在收紧模型能产出什么**，
- * 而收紧得没有依据就会变成挡路：一条 Task 不需要"证据"字段，
- * 硬要求它带，结果是所有人在那个字段里填 "N/A"。
+ * 这里曾经有一个产出闸，检查 `attributes.evidence` 是不是空的。它是错的，
+ * 而且错得挺典型，值得留一句：
  *
- * FR-AI-006 点名的就是风险识别。别的需求要别的闸时再加，
- * 加的时候要能说出是哪一条需求要求的。
+ *   1. Risk 的本体里根本没有 `evidence` 这个属性，于是那个闸会拒掉
+ *      **每一条**风险提议——一个把功能彻底关掉的"校验"。
+ *   2. 就算加上这个属性，一个字符串数组也**点不动**。
+ *      "可点击到实体"在这个系统里的意思是**关系**，不是属性。
+ *
+ * 正确的位置是 Risk 生命周期上的 `hasRelation: derivedFrom` 守卫，
+ * 和 Knowledge 那条（FR-DOM-008）用的是同一套机制。
+ * 好处不只是对：它对**所有**风险生效，不管是 Agent 建的还是人建的。
  */
-const EVIDENCE_REQUIRED = new Set(['Risk'])
-
-/** 风险条目要指得出触发它的实体（FR-AI-006） */
-function evidenceGate(proposal: { resourceType: string; attributes: Record<string, unknown> }): Verdict {
-  if (!EVIDENCE_REQUIRED.has(proposal.resourceType)) {
-    return { ok: true, reason: 'no evidence required for this type', offenders: [] }
-  }
-  const raw = proposal.attributes['evidence']
-  // 只认字符串数组。一个 `evidence: "看起来很危险"` 的字段
-  // 满足"有这个字段"，却什么也指不到——而那正是这条需求要挡的东西
-  const evidence = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []
-  const title = String(proposal.attributes['title'] ?? proposal.resourceType)
-  return requireEvidence([{ id: title, statement: title, evidence }])
-}
 
 export { MAY_WRITE, NEEDS_REVIEW }

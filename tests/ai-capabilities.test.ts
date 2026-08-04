@@ -5,7 +5,6 @@ import {
   actionableItems,
   markUnverified,
   MIN_SPRINT_CANDIDATES,
-  requireEvidence,
   UNVERIFIED_MARK,
   usableRecommendations,
   validateCandidates,
@@ -131,26 +130,6 @@ describe('sprint candidates must be feasible (FR-AI-004)', () => {
     const result = validateCandidates([plan(), bad], tasks)
     expect(result.ok).toBe(false)
     expect(result.offenders.join()).toContain('plan_bad')
-  })
-})
-
-// ── FR-AI-006 ────────────────────────────────────────────────
-describe('every discovered risk cites its evidence (FR-AI-006)', () => {
-  it('accepts items that point at entities', () => {
-    const result = requireEvidence([
-      { id: 'r1', statement: '导出接口可能超时', evidence: ['task_1', 'task_2'] },
-    ])
-    expect(result.ok).toBe(true)
-  })
-
-  it('rejects an unevidenced risk and quotes it', () => {
-    // 读起来像洞察，跟进时无从下手，而且没人能判断是不是模型编的
-    const result = requireEvidence([
-      { id: 'r1', statement: '有证据的', evidence: ['task_1'] },
-      { id: 'r2', statement: '团队士气可能下降', evidence: [] },
-    ])
-    expect(result.ok).toBe(false)
-    expect(result.offenders.join()).toContain('团队士气')
   })
 })
 
