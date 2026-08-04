@@ -177,7 +177,36 @@ POST /v1/resources {"type":"Task","project":"prj_…","attributes":{…}}
   不会再发一次 `RelationCreated`。幂等的意思是"再来一次结果相同"，
   不是"假装刚刚创建了一条"。
 
-### 7. 检索走服务端，不要在前端过滤
+### 7. 读用 GET，写和复杂查询用 POST
+
+```bash
+GET /v1/resources?type=Requirement&text=状态机&labels=WF&size=50
+```
+
+这条路径存在的唯一理由是**让视图有 URL**：分享、收藏、前进后退、HTTP 缓存，
+少了它一样都做不到（[自用日志 #5](dogfooding-log.md)）。
+"把搜索结果发给同事"是最基本的协作动作。
+
+| | GET `/v1/resources` | POST `/v1/resources:query` |
+| --- | --- | --- |
+| 类型 / 工作区 / 项目 / 负责人 | ✅ | ✅ |
+| 状态 / 标签 / 检索词 / 分页 | ✅ | ✅ |
+| `attributes` 任意匹配 | ❌ | ✅ |
+| 有 URL 可分享 | ✅ | ❌ |
+
+两者调用**同一个** `service.query`，行为不会分叉。前端读数据一律走 GET——
+自己都不用那条可分享的路径，加它就没有意义。
+
+几个细节：
+
+- 列表参数两种写法都收：`?labels=a&labels=b` 与 `?labels=a,b` 等价。
+- **标签是"与"语义**（底层是数组包含 `@>`），不是"或"。容易想反。
+- 查询串同样 `.strict()`：`?stauts=Done` 直接 400 并指名参数，
+  不会静默忽略后返回全部结果。
+- `includeDeleted` 是 `'true'|'false'` 枚举而不是布尔强转——
+  `z.coerce.boolean()` 会把字符串 `"false"` 判为真。
+
+### 8. 检索走服务端，不要在前端过滤
 
 ```bash
 POST /v1/resources:query
@@ -203,7 +232,7 @@ POST /v1/resources:query
 而用户以为搜的是全部。`tests/ui/board.test.ts` 里有一条用例直接检查
 请求体带没带 `filter.text`。
 
-### 8. UI 不硬编码业务语义
+### 9. UI 不硬编码业务语义
 
 `public/` 是三个文件的原生页面，没有构建工具。它遵守一条规则：
 
@@ -219,12 +248,12 @@ POST /v1/resources:query
 （违反 [ADR-0001](adr/0001-ontology-first.md) 的 P1.4）。
 需要"某个字段不显示"时，改本体，不要改前端的 if。
 
-### 9. 自动化不享有特权
+### 10. 自动化不享有特权
 
 自动化以 `system://internal` 身份调用和人**完全相同的** `transition()`。
 它的权限刻意很窄（只能推进状态和读取），`*.Delete` 是显式 Deny。
 
-### 10. 审计不写在业务事务里
+### 11. 审计不写在业务事务里
 
 授权被拒时业务事务会回滚。审计如果在同一个事务里，被拒绝的尝试就一起消失了——
 而那恰恰是最需要留痕的。服务层把审计记录收集在内存，

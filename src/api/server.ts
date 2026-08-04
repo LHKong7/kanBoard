@@ -366,7 +366,10 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     if (error instanceof ZodError) {
       return reply.status(400).send({
         error: 'invalid_request',
-        message: 'request body failed validation',
+        // 不说"body"：同一个处理器也接住查询串的校验错误，
+        // 而"request body failed validation"会把人送去检查一个根本没有的请求体。
+        // 具体位置在 details 的 path 里
+        message: 'request failed validation',
         details: error.issues.flatMap(issueDetails),
       })
     }

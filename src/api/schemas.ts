@@ -80,7 +80,7 @@ export const querySchema = z.object({
 }).strict()
 
 /**
- * `GET /v1/resources` 的查询串。
+ * `GET /v1/resources` 的查询串（FR-RES-017）。
  *
  * 为什么在 `POST :query` 之外还要一条 GET（docs/dogfooding-log.md #5）：
  * 只有 POST 的话，**看板上任何一个视图都没有 URL**——分享不了、收藏不了、

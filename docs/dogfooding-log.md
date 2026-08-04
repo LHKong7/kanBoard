@@ -194,7 +194,7 @@ hint: Must have CREATE privilege on current database to create this extension.
 - 修复：加 `MIGRATE_DATABASE_URL`（不设则退回 `DATABASE_URL`，本地开发一条命令照旧）
   和 `PROJECTOS_SKIP_MIGRATE`，让 API 能以只有 DML 权限的角色运行。
 
-#### 5 · 读数据得用 POST —— 未修
+#### 5 · 读数据得用 POST —— 已修
 
 第一反应写的是 `GET /v1/resources?type=Requirement&limit=1`，得到 404。
 列表只有 `POST /v1/resources:query`。
@@ -202,10 +202,25 @@ hint: Must have CREATE privilege on current database to create this extension.
 这是 AIP 自定义方法的既定代价（[ADR-0002](adr/0002-unified-resource-model.md)），
 不是 bug。但代价是真实的：**看板的任何一个视图都没有 URL**，
 分享不了、收藏不了、浏览器前进后退不工作、HTTP 缓存完全用不上。
-等到有搜索之后这条会更痛——「搜索结果发给同事」是最基本的协作动作。
+有了搜索之后这条更痛——「搜索结果发给同事」是最基本的协作动作。
 
-留在这里，是因为该在设计层面回答而不是打补丁：要么给常用查询加 GET 投影，
-要么接受 UI 自己维护视图状态。
+- 修复：加 `GET /v1/resources`，覆盖**放得进查询串的那部分**
+  （类型 / 工作区 / 项目 / 负责人 / 状态 / 标签 / 检索词 / 分页）。
+  `attributes` 的任意匹配留在 POST——把嵌套 JSON 塞进查询串是这类接口变丑的起点，
+  而且它本来也不是分享场景。
+- 两条路径调用**同一个** `service.query`，行为不可能分叉。
+- 查询串同样 `.strict()`：`?stauts=Done` 直接 400 并指名参数，
+  而不是静默忽略后返回全部结果——又是 #1 那个坑的同一张脸。
+  `includeDeleted` 用 `'true'|'false'` 枚举而不是布尔强转，
+  因为 `z.coerce.boolean()` 会把字符串 `"false"` 判为真。
+- UI 改成走 GET，并把类型与搜索词写进地址栏：粘一条链接过来就是同一个视图。
+  切换类型进历史，输入搜索用 `replaceState`——否则退出一个看板要按二十次后退。
+- **自己不用那条可分享的路径，加它就没有意义**，所以前端读数据一律走 GET。
+
+顺带治好了一个偶发性变红的用例，而且它是真的：
+`renderTabs` 是同步的、`refresh()` 是异步的，于是标签页已经切到新类型时
+列还是旧类型的，`waitForSelector('.column')` 立刻命中旧列。
+视图现在由 URL 决定，测试直接用 URL 导航就没有这个中间态了。
 
 #### 6 · 没有关系的对象无声地漂着 —— 已修
 
@@ -289,7 +304,7 @@ POST /v1/resources {"type":"Task","project":"prj_00000000000000000000000000",…
 ### 结论
 
 一次迭代，最初记下 **7 处绕开**；修的过程中顺着线索又挖出 2 处
-（#6b、#6c），合计 9 处，**修掉 7 处**。
+（#6b、#6c），合计 9 处，**修掉 8 处**——只剩 #7。
 
 值得注意的是这些里面**没有一处是「功能没做完」**——
 状态机、权限、租户隔离、图查询都按设计工作了。
@@ -318,5 +333,5 @@ POST /v1/resources {"type":"Task","project":"prj_00000000000000000000000000",…
 
 1. ~~**搜索**（#3）~~ —— ✅ 已交付
 2. ~~**孤儿与必需关系**（#6）~~ —— ✅ 已交付，并牵出 #6b / #6c
-3. **读路径的 GET 投影**（#5）——没有 URL 就没有协作
+3. ~~**读路径的 GET 投影**（#5）~~ —— ✅ 已交付
 4. **文本属性的长度上限**（#7）——每个客户端各猜一个数，截断方式必然不一致
