@@ -325,6 +325,30 @@ export const RISK_LIFECYCLE: Lifecycle = {
   ],
 }
 
+/**
+ * 一次推荐的一生（FR-AI-009）。
+ *
+ * 三个状态，两个终态。**`Dismissed` 必须存在**：没有它，
+ * 点击率的分母就只能是"推过的总数"，而那个数字混着还没来得及看的那些，
+ * 于是刚上线时点击率永远很低，看数的人会以为推荐做得很差。
+ */
+export const RECOMMENDATION_LIFECYCLE: Lifecycle = {
+  id: 'recommendation-default',
+  entityType: 'Recommendation',
+  initial: 'Shown',
+  states: [
+    // 没有 entryActions：初始状态是创建时直接落的，不走迁移，
+    // 写在这里的动作永远不会执行。展示时刻用资源自带的 createdAt
+    { name: 'Shown' },
+    { name: 'Clicked', entryActions: [{ kind: 'stampNow', path: 'respondedAt' }], terminal: true },
+    { name: 'Dismissed', entryActions: [{ kind: 'stampNow', path: 'respondedAt' }], terminal: true },
+  ],
+  transitions: [
+    { from: ['Shown'], to: 'Clicked' },
+    { from: ['Shown'], to: 'Dismissed' },
+  ],
+}
+
 export const BUDGET_LIFECYCLE: Lifecycle = {
   id: 'budget-default',
   entityType: 'Budget',
@@ -532,6 +556,7 @@ export const DEFAULT_LIFECYCLES: readonly Lifecycle[] = [
   SPRINT_LIFECYCLE,
   MILESTONE_LIFECYCLE,
   RISK_LIFECYCLE,
+  RECOMMENDATION_LIFECYCLE,
   BUDGET_LIFECYCLE,
 ]
 

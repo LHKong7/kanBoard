@@ -251,6 +251,26 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
     ],
   },
   {
+    name: 'Recommendation',
+    version: '1.0.0',
+    context: 'Knowledge',
+    lifecycle: 'recommendation-default',
+    description:
+      '一次主动推荐（FR-AI-009）。做成**领域对象**而不是一条埋点日志，' +
+      '是为了让"点击率可统计"这件事不需要新的写路径：' +
+      '推荐被点了没有，就是这个对象现在处于哪个状态，' +
+      '而点击率就是一次普通的分组计数（和别的指标同一条路径）。',
+    attributes: [
+      { name: 'reason', kind: 'text', required: true, description: '为什么推这条给你。说不出理由的推荐不该出现' },
+      { name: 'score', kind: 'float', description: '排序分。留着是为了事后能复算排序' },
+      // **没有 shownAt**：资源本来就有 `createdAt`，而一条推荐被创建的时刻
+      // 就是它被展示的时刻。加一个同义的字段，代价是它永远填不上——
+      // entry action 只在**迁移进入**某状态时运行，而初始状态是创建时直接落的，
+      // 不走迁移。那就又是一个"看起来配置好了、实际什么也不做"的字段
+      { name: 'respondedAt', kind: 'datetime', derived: true },
+    ],
+  },
+  {
     name: 'Sprint',
     version: '1.0.0',
     context: 'Execution',
@@ -409,6 +429,38 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
     acyclic: true,
     domain: ['Release'],
     range: ['Task'],
+  },
+  /**
+   * 推荐指向被推的那条知识（FR-AI-009）。
+   *
+   * 出处不需要单独记：Knowledge 本身就必须有 `derivedFrom`（FR-DOM-008），
+   * 顺着这条边再走一步就到了。**同一件事只表达一次**，
+   * 否则两处迟早不一致，而不一致的那份会被当成真的。
+   */
+  {
+    name: 'recommends',
+    inverse: 'recommendedBy',
+    domain: ['Recommendation'],
+    range: ['Knowledge'],
+  },
+  {
+    name: 'recommendedBy',
+    inverse: 'recommends',
+    domain: ['Knowledge'],
+    range: ['Recommendation'],
+  },
+  /** 推荐是在看哪个对象的时候给出的。没有它就没法回答"这条推荐当时合不合适" */
+  {
+    name: 'recommendedFor',
+    inverse: 'gotRecommendations',
+    domain: ['Recommendation'],
+    range: ['Task', 'Story', 'Requirement', 'Decision'],
+  },
+  {
+    name: 'gotRecommendations',
+    inverse: 'recommendedFor',
+    domain: ['Task', 'Story', 'Requirement', 'Decision'],
+    range: ['Recommendation'],
   },
   /**
    * 任务排进了哪个 Sprint（FR-AI-004 的"一键应用"就是建这条边）。

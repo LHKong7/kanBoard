@@ -148,6 +148,27 @@ export const DEFAULT_METRICS: readonly MetricDef[] = [
 
   // ── Knowledge 视角 ────────────────────────────────────
   {
+    id: 'knowledge.recommendations.click-through',
+    title: '知识推荐 · 点击率',
+    scope: 'project',
+    // 分母是**已经有人表态的**推荐（Clicked + Dismissed），不是推过的总数。
+    // 用总数的话，刚推出去还没来得及看的那些会压低分子，
+    // 于是每次刚推完一批点击率就掉——而那只说明推得及时，不说明推得差
+    definition: 'Clicked / 已表态的推荐（Clicked + Dismissed）',
+    filter: { type: 'Recommendation', status: ['Clicked', 'Dismissed'] },
+    ratio: { numerator: { status: ['Clicked'] } },
+    direction: 'higher-is-better',
+  },
+  {
+    id: 'knowledge.recommendations.by-status',
+    title: '知识推荐 · 响应分布',
+    scope: 'project',
+    definition: '推荐按当前状态分组。Shown 长期居高说明推的位置没人看',
+    filter: { type: 'Recommendation' },
+    groupBy: 'status',
+    direction: 'neutral',
+  },
+  {
     id: 'knowledge.by-status',
     title: '知识状态分布',
     scope: 'knowledge',
