@@ -717,6 +717,24 @@ describe('the Project and Team metric sets (FR-DASH-001/002)', () => {
     expect(body.total).toBe(2)
   })
 
+  it('drills into one owner of a workload distribution', async () => {
+    // 按 owner 分组的指标点开某一格时，收窄条件也得是 owner。
+    // 少一个分支就会退回"不收窄"，于是点谁都看到全部
+    await create('Task', { title: 'A', assignee: 'user://bob' })
+    const dist = (await metric('team.tasks.by-owner')).json()
+    const bucket = dist.groups[0]
+    const detail = (await items('team.tasks.by-owner', `?group=${encodeURIComponent(bucket.key)}`)).json()
+    expect(detail.items).toHaveLength(bucket.count)
+  })
+
+  it('drills into one project of a project-grouped metric', async () => {
+    const project = await create('Project', { key: 'PD', name: 'D' })
+    await create('Risk', { description: 'r', probability: 'low', impact: 'low' }, { project })
+    await create('Risk', { description: 'r2', probability: 'low', impact: 'low' })
+    const detail = (await items('project.risks.open', `?project=${project}`)).json()
+    expect(detail.items).toHaveLength(1)
+  })
+
   it('drills down from a Project metric like any other', async () => {
     const risk = await create('Risk', { description: 'r', probability: 'low', impact: 'low' })
     const detail = (await items('project.risks.open')).json()

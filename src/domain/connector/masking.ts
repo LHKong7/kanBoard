@@ -40,7 +40,11 @@ function walk(value: unknown, piiContext: boolean): unknown {
       if (SECRET_KEYS.test(key)) {
         out[key] = '[redacted]'
       } else if (piiContext || PII_KEYS.test(key)) {
-        out[key] = typeof v === 'string' ? maskValue(v) : walk(v, piiContext)
+        // 往下递归时**把 pii 标记带下去**（第二个参数是 true 不是 piiContext）。
+        // 带的是原来的标记的话，`{email: {work: "a@example.com"}}` 里
+        // 那个地址会原样流出去——键名已经说明整棵子树是个人信息了，
+        // 而这条路径正是这个模块存在的理由。这个缺陷是被用例抓出来的
+        out[key] = typeof v === 'string' ? maskValue(v) : walk(v, true)
       } else {
         out[key] = walk(v, piiContext)
       }

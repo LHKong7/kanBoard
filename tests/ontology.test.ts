@@ -219,3 +219,43 @@ describe('attribute length bounds are part of the ontology (dogfooding #7)', () 
     ).toThrow()
   })
 })
+
+/**
+ * 注册表的查询与报错路径。
+ *
+ * 这些分支决定了拼错一个类型名时会得到什么。得到 "unknown type" 四个字
+ * 的话，使用者要去翻源码才知道正确写法——而正确写法系统自己知道。
+ */
+describe('the registry says what it knows when asked for something it does not', () => {
+  const registry = buildDefaultRegistry()
+
+  it('lists the known relation types on a typo', () => {
+    try {
+      registry.relationType('decomposedInot')
+      expect.unreachable('should have thrown')
+    } catch (error) {
+      const details = (error as { details: { known: string[] } }).details
+      expect(details.known).toContain('decomposedInto')
+    }
+  })
+
+  it('reports an unknown entity type by name', () => {
+    expect(() => registry.validateAttributes('Taks', {})).toThrow(/unknown entity type: Taks/)
+  })
+
+  it('answers hasEntityType without throwing', () => {
+    // 调用方用它来先问再取；抛异常的话这个用法就不成立了
+    expect(registry.hasEntityType('Task')).toBe(true)
+    expect(registry.hasEntityType('Nope')).toBe(false)
+  })
+
+  it('reports transitivity from the declaration', () => {
+    expect(registry.isTransitive('contains')).toBe(true)
+    expect(registry.isTransitive('blockedBy')).toBe(false)
+  })
+
+  it('enumerates both catalogues', () => {
+    expect(registry.entityTypes().length).toBeGreaterThan(0)
+    expect(registry.relationTypes().length).toBeGreaterThan(0)
+  })
+})

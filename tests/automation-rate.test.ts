@@ -207,6 +207,42 @@ describe('Levenshtein 本身', () => {
     expect(levenshtein('', 'abc')).toBe(3)
     expect(levenshtein('same', 'same')).toBe(0)
   })
+
+  it('两个方向的空串都处理', () => {
+    // 只处理一边的话，删光正文这种最常见的大改会算错
+    expect(levenshtein('abc', '')).toBe(3)
+    expect(levenshtein('', '')).toBe(0)
+  })
+
+  it('和参数顺序无关', () => {
+    // 实现里会把短的那个换到前面。换错了距离就不对称，
+    // 而不对称的编辑距离会让同一次修改按方向算出两个幅度
+    expect(levenshtein('kitten', 'sitting')).toBe(levenshtein('sitting', 'kitten'))
+    expect(levenshtein('a', 'abcdef')).toBe(levenshtein('abcdef', 'a'))
+  })
+})
+
+describe('非文本字段的比较', () => {
+  it('数字改了就是改了，不按长度稀释', () => {
+    // 权重取 1：否则一个数字字段的改动会被一段长正文淹没
+    expect(editRatio({ storyPoint: 3 }, { storyPoint: 5 })).toBeGreaterThan(0)
+    expect(editRatio({ storyPoint: 3 }, { storyPoint: 3 })).toBe(0)
+  })
+
+  it('结构相同的对象算作没变', () => {
+    expect(editRatio({ tags: ['a', 'b'] }, { tags: ['a', 'b'] })).toBe(0)
+    expect(editRatio({ tags: ['a'] }, { tags: ['a', 'b'] })).toBeGreaterThan(0)
+  })
+
+  it('删掉一个字段算作该字段被完全改写', () => {
+    // 只处理"新增"不处理"删除"的话，删掉整段正文会被算成没改
+    expect(editRatio({ a: 'x'.repeat(100) }, {})).toBeGreaterThan(0)
+  })
+
+  it('两边都没有这个字段时不参与加权', () => {
+    // 参与的话，权重为 0 的字段会把平均值往下拉
+    expect(editRatio({ a: undefined }, { a: undefined })).toBe(0)
+  })
 })
 
 describe('汇总公式 §2.2', () => {

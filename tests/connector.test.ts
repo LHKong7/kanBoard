@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ConnectorGateway, isAllowed } from '../src/domain/connector/gateway.ts'
+import { ConnectorGateway, isAllowed, isRetryable } from '../src/domain/connector/gateway.ts'
 import { maskByClassification, maskValue } from '../src/domain/connector/masking.ts'
 import { DEFAULT_LIMITS } from '../src/domain/connector/types.ts'
 import type {
@@ -368,5 +368,71 @@ describe('the catalogue describes what is callable', () => {
     await expect(gateway.invoke(caller(), call({ operation: 'nope' }))).rejects.toThrow(
       /has no operation/,
     )
+  })
+})
+
+
+/**
+ * 脱敏的递归路径与重试判定。
+ *
+ * 这两处出错的方向都很难被发现：脱敏漏一层，敏感值照样流进
+ * Agent 上下文和 Run 轨迹；重试判错，一个 4xx 会被撞三遍。
+ */
+describe('masking walks the whole structure', () => {
+  it('masks a secret key nested inside an array of objects', () => {
+    // 只处理顶层的话，`{items:[{apiKey}]}` 这种最常见的响应形状会漏
+    const out = maskByClassification(
+      { items: [{ apiKey: 'sk-live-123', name: '正常字段' }] },
+      'internal',
+    ) as { items: { apiKey: string; name: string }[] }
+    expect(out.items[0]?.apiKey).toBe('[redacted]')
+    expect(out.items[0]?.name).toBe('正常字段')
+  })
+
+  it('keeps null and undefined as they are', () => {
+    // 变成 "[redacted]" 的话，调用方分不清"没有这个值"和"有但不给你"
+    const out = maskByClassification({ a: null, b: undefined }, 'pii') as Record<string, unknown>
+    expect(out['a']).toBeNull()
+    expect(out['b']).toBeUndefined()
+  })
+
+  it('masks a pii-named field even when the call is not pii-classified', () => {
+    const out = maskByClassification({ email: 'a@example.com' }, 'internal') as { email: string }
+    expect(out.email).not.toBe('a@example.com')
+    expect(out.email).toContain('@example.com')
+  })
+
+  it('masks non-string pii values by recursing rather than leaving them', () => {
+    const out = maskByClassification({ email: { work: 'a@example.com' } }, 'internal') as {
+      email: { work: string }
+    }
+    expect(out.email.work).not.toBe('a@example.com')
+  })
+
+  it('redacts everything at secret level, structure included', () => {
+    // 这类数据没有"部分可见"的安全说法
+    expect(maskByClassification({ anything: [1, 2] }, 'secret')).toBe('[redacted:secret]')
+  })
+})
+
+describe('retry decides by status, not by hope', () => {
+  it('retries 5xx and 429, not 4xx', () => {
+    // 4xx 重试等于用三倍流量撞同一堵墙，还会把限流撞得更死
+    expect(isRetryable(new DomainError('x', 'boom', 500))).toBe(true)
+    expect(isRetryable(new DomainError('x', 'slow down', 429))).toBe(true)
+    expect(isRetryable(new DomainError('x', 'bad request', 400))).toBe(false)
+    expect(isRetryable(new DomainError('x', 'forbidden', 403))).toBe(false)
+  })
+
+  it('reads a plain status property when it is not a DomainError', () => {
+    // 适配器抛出来的常常是别人的错误对象
+    expect(isRetryable({ status: 503 })).toBe(true)
+    expect(isRetryable({ status: 404 })).toBe(false)
+  })
+
+  it('retries an error with no status at all', () => {
+    // 连接被重置这类错误没有状态码。默认重试是对的：
+    // 默认不重试会把一次网络抖动变成一次业务失败
+    expect(isRetryable(new Error('ECONNRESET'))).toBe(true)
   })
 })

@@ -386,14 +386,26 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
     // 一个项目装着自己，会让传递闭包查询直接转不出来
     acyclic: true,
     domain: ['Project'],
-    range: ['Requirement', 'Story', 'Task', 'Decision', 'Knowledge', 'Acceptance'],
+    range: [
+      'Requirement', 'Story', 'Task', 'Decision', 'Knowledge', 'Acceptance',
+      // Project BC 与 Execution BC 的其余对象也归项目所有——
+      // 漏掉的话，一条风险 / 一个里程碑没法归到任何项目下，
+      // 而项目视角的指标全部按 project 收窄
+      'Risk', 'Milestone', 'Budget', 'Sprint', 'Release',
+    ],
   },
   {
     name: 'containedIn',
     inverse: 'contains',
     transitive: true,
     acyclic: true,
-    domain: ['Requirement', 'Story', 'Task', 'Decision', 'Knowledge', 'Acceptance'],
+    domain: [
+      'Requirement', 'Story', 'Task', 'Decision', 'Knowledge', 'Acceptance',
+      // Project BC 与 Execution BC 的其余对象也归项目所有——
+      // 漏掉的话，一条风险 / 一个里程碑没法归到任何项目下，
+      // 而项目视角的指标全部按 project 收窄
+      'Risk', 'Milestone', 'Budget', 'Sprint', 'Release',
+    ],
     range: ['Project'],
   },
   {

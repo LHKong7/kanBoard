@@ -24,15 +24,23 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
-      // 迁移是 SQL，入口只是接线——两者都不是逻辑，
-      // 算进分母只会稀释掉真正该被覆盖的地方
-      exclude: ['src/main.ts', 'src/**/migrations/**'],
+      // 迁移是 SQL，入口只是接线——两者都不是逻辑。
+      // 后三个是**纯类型文件**（零个运行期导出），按构造就不可能被覆盖：
+      // 留在分母里只会稀释掉真正该被覆盖的地方。
+      // 加新文件到这个清单之前先确认它真的没有运行期代码
+      exclude: [
+        'src/main.ts',
+        'src/**/migrations/**',
+        'src/domain/resource/ports.ts',
+        'src/infrastructure/db/schema.ts',
+        'src/workflow/types.ts',
+      ],
       reporter: ['text-summary'],
       thresholds: {
         statements: 90,
         lines: 90,
         functions: 93,
-        branches: 80,
+        branches: 85,
       },
     },
   },

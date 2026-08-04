@@ -307,3 +307,124 @@ describe('PDP · the AIAgent role is an empty set, not a shortcut', () => {
     expect(d.reason).toMatch(/lacks capability/)
   })
 })
+
+/**
+ * 条件与 Ask 的求值细节。
+ *
+ * 这几条分支决定了"策略写了条件，条件到底有没有被求值"。
+ * 没被覆盖的话，一条写了 mfa/分级限制的策略可能根本不生效，
+ * 而它在策略列表里看着完全正常。
+ */
+describe('PDP · policy conditions are actually evaluated', () => {
+  it('refuses when MFA is required and absent, and says so', () => {
+    const p: Policy[] = [
+      {
+        id: 'pol-mfa',
+        effect: 'Allow',
+        subject: '*',
+        action: 'Task.Delete',
+        scope: { kind: 'tenant', tenant: TENANT },
+        condition: { mfa: true },
+      },
+    ]
+    const d = decide({ subject: user('user://rd'), action: 'Task.Delete', resource }, p)
+    expect(d.effect).toBe('Deny')
+    expect(d.reason).toMatch(/requires MFA/)
+  })
+
+  it('allows once MFA is present', () => {
+    const p: Policy[] = [
+      {
+        id: 'pol-mfa',
+        effect: 'Allow',
+        subject: '*',
+        action: 'Task.Delete',
+        scope: { kind: 'tenant', tenant: TENANT },
+        condition: { mfa: true },
+      },
+    ]
+    const d = decide(
+      { subject: user('user://rd'), action: 'Task.Delete', resource, context: { mfa: true } },
+      p,
+    )
+    expect(d.effect).toBe('Allow')
+  })
+
+  it('refuses a forbidden data classification', () => {
+    const p: Policy[] = [
+      {
+        id: 'pol-class',
+        effect: 'Allow',
+        subject: '*',
+        action: 'Task.Read',
+        scope: { kind: 'tenant', tenant: TENANT },
+        condition: { classificationNotIn: ['secret'] },
+      },
+    ]
+    const denied = decide(
+      { subject: user('user://rd'), action: 'Task.Read', resource, context: { classification: 'secret' } },
+      p,
+    )
+    expect(denied.effect).toBe('Deny')
+    expect(denied.reason).toMatch(/classification/)
+
+    // 没有分级信息时这条限制不适用——不该把未标注的数据一律当成机密
+    const allowed = decide({ subject: user('user://rd'), action: 'Task.Read', resource }, p)
+    expect(allowed.effect).toBe('Allow')
+  })
+
+  it('prefers Ask over Allow when both apply', () => {
+    // 条件更严的那条应当胜出。反过来的话，加一条 Ask 策略等于没加
+    const p: Policy[] = [
+      {
+        id: 'pol-allow',
+        effect: 'Allow',
+        subject: '*',
+        action: 'Task.Update',
+        scope: { kind: 'tenant', tenant: TENANT },
+      },
+      {
+        id: 'pol-ask',
+        effect: 'Ask',
+        subject: '*',
+        action: 'Task.Update',
+        scope: { kind: 'tenant', tenant: TENANT },
+      },
+    ]
+    const d = decide({ subject: user('user://rd'), action: 'Task.Update', resource }, p)
+    expect(d.effect).toBe('Ask')
+    expect(d.matchedPolicy).toBe('pol-ask')
+  })
+
+  it('falls through to Allow when the Ask policy’s own condition fails', () => {
+    // Ask 自己的条件不满足时它不该生效，否则一条永远不适用的 Ask
+    // 会把操作永久卡住
+    const p: Policy[] = [
+      {
+        id: 'pol-allow',
+        effect: 'Allow',
+        subject: '*',
+        action: 'Task.Update',
+        scope: { kind: 'tenant', tenant: TENANT },
+      },
+      {
+        id: 'pol-ask-owner-only',
+        effect: 'Ask',
+        subject: '*',
+        action: 'Task.Update',
+        scope: { kind: 'tenant', tenant: TENANT },
+        condition: { ownerOnly: true },
+      },
+    ]
+    const d = decide(
+      {
+        subject: user('user://rd'),
+        action: 'Task.Update',
+        resource,
+        context: { resourceOwner: 'user://someone-else' },
+      },
+      p,
+    )
+    expect(d.effect).toBe('Allow')
+  })
+})

@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyActions,
+  assertValidInitialStatus,
   availableTransitions,
   resolveTransition,
   WorkflowRegistry,
 } from '../src/workflow/engine.ts'
 import { buildDefaultWorkflowRegistry, TASK_LIFECYCLE } from '../src/workflow/defaults.ts'
-import { evaluateGuard } from '../src/workflow/guards.ts'
+import { describe as describeGuard, evaluateGuard } from '../src/workflow/guards.ts'
 import { TransitionError } from '../src/platform/errors.ts'
 import type { Guard, GuardContext, Lifecycle, RelatedRef, TransitionDef } from '../src/workflow/types.ts'
 
@@ -74,6 +75,111 @@ describe('guards give a usable reason, not just false (FR-WF-003)', () => {
   })
 })
 
+/**
+ * 守卫的其余几种（FR-DOM-001：不变量要有用例覆盖）。
+ *
+ * 这些是**不变量的原语**——七个上下文的聚合全靠它们表达。
+ * 原语上的分支没被覆盖，意味着某种不变量的判定从来没被验证过，
+ * 而它出错的样子是"这个守卫好像没生效"。
+ */
+describe('the remaining guard kinds', () => {
+  it('attributeEquals names both the expected and the actual value', () => {
+    const g: Guard = { kind: 'attributeEquals', path: 'level', value: 'Story' }
+    expect(evaluateGuard(g, ctx({ attributes: { level: 'Story' } })).ok).toBe(true)
+
+    const bad = evaluateGuard(g, ctx({ attributes: { level: 'Epic' } }))
+    expect(bad.ok).toBe(false)
+    // 只说"不等于期望值"，使用者还得自己去查现在是什么
+    expect(bad.ok === false && bad.reason).toContain('"Epic"')
+    expect(bad.ok === false && bad.reason).toContain('"Story"')
+  })
+
+  it('attributeEquals reports a missing attribute as null, not undefined', () => {
+    // undefined 在错误信息里读起来像"程序出错了"，null 读起来像"没填"
+    const result = evaluateGuard({ kind: 'attributeEquals', path: 'x', value: 1 }, ctx())
+    expect(result.ok === false && result.reason).toContain('null')
+  })
+
+  it('attributeIn lists the allowed values', () => {
+    const g: Guard = { kind: 'attributeIn', path: 'severity', values: ['P0', 'P1'] }
+    expect(evaluateGuard(g, ctx({ attributes: { severity: 'P0' } })).ok).toBe(true)
+
+    const bad = evaluateGuard(g, ctx({ attributes: { severity: 'P3' } }))
+    expect(bad.ok).toBe(false)
+    expect(bad.ok === false && bad.reason).toContain('["P0","P1"]')
+  })
+
+  it('ownerAssigned rejects an unowned object', () => {
+    expect(evaluateGuard({ kind: 'ownerAssigned' }, ctx()).ok).toBe(true)
+    const result = evaluateGuard({ kind: 'ownerAssigned' }, ctx({ owner: null }))
+    expect(result.ok).toBe(false)
+  })
+
+  it('not inverts, and says what should not have held', () => {
+    const inner: Guard = { kind: 'attributeSet', path: 'blockReason' }
+    expect(evaluateGuard({ kind: 'not', of: inner }, ctx()).ok).toBe(true)
+
+    const result = evaluateGuard(
+      { kind: 'not', of: inner },
+      ctx({ attributes: { blockReason: '等接口' } }),
+    )
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.reason).toContain('blockReason')
+  })
+
+  it('hasRelation checks the incoming direction too', () => {
+    // 只查出边的话，"必须被某个东西引用"这类不变量表达不出来
+    const g: Guard = { kind: 'hasRelation', type: 'decomposedInto', direction: 'in' }
+    expect(evaluateGuard(g, ctx({ incomingRelationTypes: new Set(['decomposedInto']) })).ok).toBe(
+      true,
+    )
+    expect(evaluateGuard(g, ctx({ outgoingRelationTypes: new Set(['decomposedInto']) })).ok).toBe(
+      false,
+    )
+  })
+
+  it('all passes only when every part does', () => {
+    const g: Guard = {
+      kind: 'all',
+      of: [
+        { kind: 'attributeSet', path: 'a' },
+        { kind: 'attributeSet', path: 'b' },
+      ],
+    }
+    expect(evaluateGuard(g, ctx({ attributes: { a: 1, b: 2 } })).ok).toBe(true)
+    expect(evaluateGuard(g, ctx({ attributes: { a: 1 } })).ok).toBe(false)
+  })
+
+  it('any passes as soon as one does', () => {
+    const g: Guard = {
+      kind: 'any',
+      of: [
+        { kind: 'attributeSet', path: 'a' },
+        { kind: 'attributeSet', path: 'b' },
+      ],
+    }
+    expect(evaluateGuard(g, ctx({ attributes: { b: 2 } })).ok).toBe(true)
+  })
+
+  it('describes every kind in words the UI can show', () => {
+    // 这些字符串会出现在"这条迁移需要什么"里。少一种就是一句空白
+    const kinds: Guard[] = [
+      { kind: 'attributeSet', path: 'a' },
+      { kind: 'attributeEquals', path: 'a', value: 1 },
+      { kind: 'attributeIn', path: 'a', values: ['x'] },
+      { kind: 'hasRelation', type: 'r', direction: 'out' },
+      { kind: 'allRelatedIn', type: 'r', direction: 'out', states: ['Done'] },
+      { kind: 'ownerAssigned' },
+      { kind: 'all', of: [{ kind: 'ownerAssigned' }] },
+      { kind: 'any', of: [{ kind: 'ownerAssigned' }] },
+      { kind: 'not', of: { kind: 'ownerAssigned' } },
+    ]
+    for (const guard of kinds) {
+      expect(describeGuard(guard), guard.kind).toBeTruthy()
+    }
+  })
+})
+
 describe('lifecycle registration rejects self-contradictory definitions', () => {
   it('rejects an initial state that is not declared', () => {
     const registry = new WorkflowRegistry()
@@ -99,6 +205,47 @@ describe('lifecycle registration rejects self-contradictory definitions', () => 
         transitions: [{ from: ['A'], to: 'B' }],
       }),
     ).toThrow(/transition to unknown state "B"/)
+  })
+
+  it('rejects duplicate state names', () => {
+    // 重名的状态会让"这个对象在哪一步"没有确定答案：
+    // 两个 Done 各自有各自的守卫和 entry action
+    expect(() =>
+      new WorkflowRegistry().register({
+        id: 'x',
+        entityType: 'X',
+        initial: 'A',
+        states: [{ name: 'A' }, { name: 'A' }],
+        transitions: [],
+      }),
+    ).toThrow(/duplicate states/)
+  })
+
+  it('rejects a transition from an unknown state', () => {
+    // 到不了的边不是无害的：它会出现在"可用迁移"里，然后点了没反应
+    expect(() =>
+      new WorkflowRegistry().register({
+        id: 'x',
+        entityType: 'X',
+        initial: 'A',
+        states: [{ name: 'A' }],
+        transitions: [{ from: ['Nowhere'], to: 'A' }],
+      }),
+    ).toThrow(/transition from unknown state "Nowhere"/)
+  })
+
+  it('refuses to register the same lifecycle id twice', () => {
+    // 第二次注册静默覆盖的话，"我改了流程但线上跑的是另一份"
+    const registry = new WorkflowRegistry()
+    const lifecycle = {
+      id: 'dup',
+      entityType: 'X',
+      initial: 'A',
+      states: [{ name: 'A' }],
+      transitions: [],
+    }
+    registry.register(lifecycle)
+    expect(() => registry.register(lifecycle)).toThrow(/already registered/)
   })
 
   it('rejects an outgoing transition from a terminal state', () => {
@@ -161,6 +308,26 @@ describe('lifecycle registration rejects self-contradictory definitions', () => 
         new WorkflowRegistry().register(lifecycle([{ from: ['Done'], to: 'Dropped', reopen: true }])),
       ).toThrow(/must land on a non-terminal state/)
     })
+  })
+})
+
+describe('initial status validation (creation path)', () => {
+  it('accepts a declared state', () => {
+    expect(() => assertValidInitialStatus(TASK_LIFECYCLE, 'Todo')).not.toThrow()
+    // 不必是 initial：从 Doing 建一个任务是合法的
+    expect(() => assertValidInitialStatus(TASK_LIFECYCLE, 'Doing')).not.toThrow()
+  })
+
+  it('lists the valid states when the status is not one of them', () => {
+    // "非法状态"四个字会让人去翻源码找正确写法，而系统自己知道
+    try {
+      assertValidInitialStatus(TASK_LIFECYCLE, 'Shipped')
+      expect.unreachable('should have thrown')
+    } catch (error) {
+      const details = (error as { details: { allowed: string[]; initial: string } }).details
+      expect(details.allowed).toContain('Todo')
+      expect(details.initial).toBe('Todo')
+    }
   })
 })
 

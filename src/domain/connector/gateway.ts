@@ -305,8 +305,13 @@ function hostOf(target: string): string {
   }
 }
 
-/** 值得重试的：网络抖动与服务端错误。4xx 是我们自己的问题，重试没用 */
-function isRetryable(error: unknown): boolean {
+/**
+ * 值得重试的：网络抖动与服务端错误。4xx 是我们自己的问题，重试没用。
+ *
+ * 导出是为了能被直接测。绕着重试循环去测它，就得靠时间和调用次数
+ * 反推判定结果——那种用例既慢又会偶发。
+ */
+export function isRetryable(error: unknown): boolean {
   if (error instanceof DomainError) return error.status >= 500 || error.status === 429
   const status = (error as { status?: number })?.status
   if (typeof status === 'number') return status >= 500 || status === 429
