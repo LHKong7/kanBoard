@@ -58,6 +58,11 @@ function runnerWith(
   return new AgentRunner({
     ...(connectors === undefined ? {} : { connectors }),
     ...(blastRadius === undefined ? {} : { blastRadius }),
+    // AI 策略默认是**关闭**的（FR-AI-012 / ADR-0006）。
+    // 每个用例都要显式打开，正如每个真实部署都要显式配置——
+    // 缺省放行的话，一个忘了配置的租户会默默把上下文发出去
+    aiPolicy: { enabled: true, approvedProviders: ['scripted'], maxClassification: 'confidential' },
+    provider: 'scripted',
     pool,
     tenants: [TENANT],
     registry: buildDefaultRegistry(),

@@ -23,6 +23,23 @@ const PII_KEYS = /(email|e-mail|phone|mobile|tel|id[-_]?card|ssn|address|birth)/
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const DIGITS = /^\+?[\d\s-]{7,}$/
 
+/**
+ * 在**自由文本**里脱敏（ADR-0006：pii 不随出境）。
+ *
+ * 与 `maskByClassification` 分工不同：那个按**字段名**判断，
+ * 用于结构化的连接器响应；这个按**内容形状**判断，
+ * 用于已经被拍平成一段话的上下文——那时字段名早没了。
+ *
+ * 只认邮箱与长数字串。宁可少认也不要多认：把需求描述里的
+ * 版本号、端口号一律打码，模型读到的就不再是真实的上下文了。
+ */
+export function maskTextPii(text: string): string {
+  return text
+    .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, (m) => maskValue(m))
+    // 7 位以上的连续数字：手机号、身份证。带分隔符的日期不会命中
+    .replace(/(?<![\d.])\d{7,}(?![\d.])/g, (m) => maskValue(m))
+}
+
 export function maskByClassification(value: unknown, classification: DataClassification): unknown {
   // secret 级：整块都不给。这类数据没有"部分可见"的安全说法
   if (classification === 'secret') return '[redacted:secret]'

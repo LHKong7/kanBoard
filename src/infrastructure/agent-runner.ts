@@ -6,6 +6,7 @@ import { PgResourceRepository } from './resource-repository.pg.ts'
 import { PgRunStepRepository } from './run-step-repository.pg.ts'
 import { AgentRuntime } from '../domain/agent/runtime.ts'
 import { AgentMemory } from '../domain/agent/memory.ts'
+import type { AiPolicy } from '../domain/agent/egress.ts'
 import { PgEpisodicStore } from './agent-memory.pg.ts'
 import type { ConnectorInvoker } from '../domain/agent/runtime.ts'
 import type { ModelClient, RunResult } from '../domain/agent/types.ts'
@@ -46,6 +47,10 @@ export type AgentRunnerDeps = {
   clock?: Clock
   /** 单次 Run 的影响面上限（FR-IAM-012）。租户级策略，不由 Run 自己设定 */
   blastRadius?: number
+  /** 租户级 AI 策略（FR-AI-012/014）。不给就是关闭 */
+  aiPolicy?: AiPolicy
+  /** 模型供应商标识，要在 aiPolicy 的白名单里 */
+  provider?: string
   /** 每轮最多认领几个 Run */
   batchSize?: number
   onFinished?: (run: Resource, result: RunResult) => void
@@ -184,6 +189,23 @@ export class AgentRunner {
             ...(this.#deps.connectors === undefined ? {} : { connectors: this.#deps.connectors }),
             ...(this.#deps.blastRadius === undefined ? {} : { blastRadius: this.#deps.blastRadius }),
             signal: this.#aborter.signal,
+            ...(this.#deps.aiPolicy === undefined ? {} : { aiPolicy: this.#deps.aiPolicy }),
+            ...(this.#deps.provider === undefined ? {} : { provider: this.#deps.provider }),
+            // 出境记录走审计（FR-AI-014）：ADR-0006 要求全量留痕
+            onEgress: (r) => {
+              void audit.record({
+                tenant: r.tenant,
+                subject: 'system://internal',
+                onBehalfOf: null,
+                action: 'Model.Egress',
+                resourceId: r.runId,
+                resourceType: 'AgentRun',
+                decision: { effect: 'Allow', reason: `egress to ${r.provider}` },
+                runRef: r.runId,
+                occurredAt: r.occurredAt,
+                traceId: null,
+              })
+            },
             memory: new AgentMemory({
               service,
               episodic: new PgEpisodicStore(trx, tenant),

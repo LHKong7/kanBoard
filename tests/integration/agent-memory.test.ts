@@ -101,6 +101,10 @@ async function seedAndRun(goal = '拆分需求'): Promise<{ agentPrincipal: stri
     workflows: buildDefaultWorkflowRegistry(),
     policies: defaultPolicies(TENANT),
     model: new ScriptedModelClient([FINISH]),
+    // AI 出境默认关闭（FR-AI-012 / ADR-0006）。不显式打开的话，
+    // Run 会停在出境闸门上，压根走不到写记忆那一步
+    aiPolicy: { enabled: true, approvedProviders: ['scripted'], maxClassification: 'confidential' },
+    provider: 'scripted',
   }).pollOnce()
   return { agentPrincipal: 'agent://planner@1.0.0' }
 }

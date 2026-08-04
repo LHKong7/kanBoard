@@ -3,6 +3,8 @@ import type { Clock } from '../../platform/clock.ts'
 import type { Caller, ResourceService } from '../resource/service.ts'
 import type { Resource } from '../resource/resource.ts'
 import { WorkingMemory } from './memory.ts'
+import { DEFAULT_AI_POLICY, prepareEgress } from './egress.ts'
+import type { AiPolicy, DataClassification, EgressRecord } from './egress.ts'
 import type { AgentMemory, MemoryEntry } from './memory.ts'
 import { assembleContext } from './context.ts'
 import { agentSpecFrom, DEFAULT_RUN_BUDGET } from './types.ts'
@@ -77,6 +79,20 @@ export type RuntimeDeps = {
    * **不是"记忆无限"**。缺省值必须是最小的那一侧。
    */
   memory?: AgentMemory
+  /**
+   * 租户级 AI 策略（FR-AI-012/014，决策见 ADR-0006）。
+   *
+   * 不给就用 `DEFAULT_AI_POLICY`——它是**关闭**的。
+   * 缺省放行的话，一个忘了配置的租户会默默把上下文发出去，
+   * 而这正是最不该靠"记得配置"来保证的事。
+   */
+  aiPolicy?: AiPolicy
+  /** 这次要送去哪个供应商。要在白名单里 */
+  provider?: string
+  /** 本次上下文的最高数据分级。缺省按 internal 处理 */
+  classification?: DataClassification
+  /** 出境留痕（FR-AI-014） */
+  onEgress?: (record: EgressRecord) => void
   /**
    * 单次 Run 允许影响的对象数上限（FR-IAM-012 blastRadius）。
    *
@@ -211,6 +227,38 @@ export class AgentRuntime {
       if (this.#deps.signal?.aborted === true) return true
       const current = await this.#deps.service.get(caller, run.id)
       return current.status === 'Cancelled'
+    }
+
+    // ── 出境控制与注入防护（FR-AI-012/013/014，ADR-0006） ──
+    //
+    // 放在循环之前做一次：上下文在整个 Run 里不变，
+    // 每一步都重做只是白费。工具调用回来的观察另有网关脱敏
+    const policy = this.#deps.aiPolicy ?? DEFAULT_AI_POLICY
+    const provider = this.#deps.provider ?? 'unconfigured'
+    const egress = prepareEgress({
+      segments: context.segments,
+      policy,
+      provider,
+      classification: this.#deps.classification ?? 'internal',
+    })
+    context = { segments: egress.segments, truncated: context.truncated }
+    this.#deps.onEgress?.({
+      tenant: run.tenant,
+      runId: run.id,
+      provider,
+      classification: egress.highestClassification,
+      sourceIds: egress.segments.map((s) => s.sourceId),
+      segments: egress.segments.length,
+      neutralised: egress.neutralised,
+      occurredAt: this.#deps.clock.now(),
+    })
+    if (egress.neutralised > 0) {
+      // 有人往需求描述里塞了冒充系统的话。中和掉了，但必须留痕——
+      // 持续出现意味着有人在试
+      await record('guardrail', `中和了 ${egress.neutralised} 处提示注入尝试`, {
+        requirement: 'FR-AI-013',
+        neutralised: egress.neutralised,
+      })
     }
 
     // ── 推理循环 ────────────────────────────────────────
