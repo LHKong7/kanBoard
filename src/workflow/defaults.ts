@@ -183,6 +183,23 @@ export const KNOWLEDGE_LIFECYCLE: Lifecycle = {
   ],
 }
 
+/**
+ * 通知只有两个状态。
+ *
+ * 刻意不做"已归档""已忽略"：一个状态机的状态越多，
+ * 它就越需要有人去维护那些状态的含义，而通知不值得这个成本。
+ */
+export const NOTIFICATION_LIFECYCLE: Lifecycle = {
+  id: 'notification-default',
+  entityType: 'Notification',
+  initial: 'Unread',
+  states: [
+    { name: 'Unread' },
+    { name: 'Read', entryActions: [{ kind: 'stampNow', path: 'readAt' }], terminal: true },
+  ],
+  transitions: [{ from: ['Unread'], to: 'Read' }],
+}
+
 export const PROJECT_LIFECYCLE: Lifecycle = {
   id: 'project-default',
   entityType: 'Project',
@@ -269,6 +286,7 @@ export const DEFAULT_LIFECYCLES: readonly Lifecycle[] = [
   PROJECT_LIFECYCLE,
   AGENT_LIFECYCLE,
   AGENT_RUN_LIFECYCLE,
+  NOTIFICATION_LIFECYCLE,
 ]
 
 export function buildDefaultWorkflowRegistry(): WorkflowRegistry {

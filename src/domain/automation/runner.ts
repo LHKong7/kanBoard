@@ -17,12 +17,31 @@ import type { SubjectProfile } from '../../identity/types.ts'
  *    事件又可能触发自动化。没有上限的话，一条环形规则就能打满数据库。
  */
 
-/** 自动化以系统身份执行。它的权限是显式且很窄的，见 default-policies.ts */
+/**
+ * 自动化以系统身份执行。它的权限是显式且很窄的，见 default-policies.ts。
+ *
+ * 这里是**能力闸门**，策略闸门在 default-policies.ts，两道都要放行。
+ * 逐个类型地列而不是写 `*.Create`：自动化引擎是个高权限执行路径，
+ * 它不面对人类的判断力，一条写错的规则会以机器的速度把错误铺开。
+ * 将来要让某条规则创建新类型，就在这里补一行——**补这一行时人会想一想**，
+ * 而一个通配符不会给任何人这个机会。
+ */
 export const SYSTEM_SUBJECT: SubjectProfile = {
   principal: 'system://internal',
   tenant: '',
   roles: [],
-  capabilities: ['*.Transition', '*.Read', 'Task.Execute'],
+  capabilities: [
+    '*.Transition',
+    '*.Read',
+    'Task.Execute',
+    // createEntity / notify / invokeAgent 能创建的全部类型
+    'Task.Create',
+    'Notification.Create',
+    'AgentRun.Create',
+    // assign 只针对工作项。需求归谁是人的判断，不该由规则改写
+    'Task.Update',
+    'Story.Update',
+  ],
 }
 
 export function systemCaller(tenant: string, traceId: string | null, depth = 0): Caller {
@@ -131,6 +150,142 @@ export class AutomationRunner {
     switch (action.kind) {
       case 'log':
         return { ruleId: rule.id, action: 'log', status: 'applied', detail: action.message }
+
+      case 'transition': {
+        const subject = await this.#deps.service.get(caller, event.resourceId)
+        if (
+          action.onlyIfCurrentIn !== undefined &&
+          !action.onlyIfCurrentIn.includes(subject.status)
+        ) {
+          const reason = `${subject.id} is "${subject.status}", not in ${JSON.stringify(action.onlyIfCurrentIn)}`
+          return {
+            ruleId: rule.id,
+            action: action.kind,
+            status: 'skipped',
+            detail: reason,
+            // 找到了目标却没推动它，就是一次停滞。记下来（dogfooding #2）
+            declines: [{ targetId: subject.id, reason, kind: 'declined' }],
+          }
+        }
+        await this.#deps.service.transition(caller, subject.id, action.to, {
+          reason: `automation: ${rule.id}`,
+        })
+        return {
+          ruleId: rule.id,
+          action: action.kind,
+          status: 'applied',
+          detail: `${subject.id} → ${action.to}`,
+        }
+      }
+
+      case 'assign': {
+        const subject = await this.#deps.service.get(caller, event.resourceId)
+        if (subject.owner === action.to) {
+          // 已经是这个人了就别写一次历史：一条什么都没改的 history 条目
+          // 会让"这个对象被改过几次"变得不可信
+          return {
+            ruleId: rule.id,
+            action: action.kind,
+            status: 'skipped',
+            detail: `${subject.id} already owned by ${action.to}`,
+          }
+        }
+        await this.#deps.service.update(caller, subject.id, {
+          expectedVersion: subject.version,
+          owner: action.to,
+          reason: `automation: ${rule.id}`,
+        })
+        return {
+          ruleId: rule.id,
+          action: action.kind,
+          status: 'applied',
+          detail: `${subject.id} → ${action.to}`,
+        }
+      }
+
+      case 'createEntity': {
+        const subject = await this.#deps.service.get(caller, event.resourceId)
+        const attributes: Record<string, unknown> = { ...action.attributes }
+        if (action.titleFromSubject !== undefined) {
+          attributes['title'] = String(subject.attributes[action.titleFromSubject] ?? subject.id)
+        }
+        const created = await this.#deps.service.create(caller, {
+          type: action.resourceType,
+          workspace: subject.workspace,
+          project: subject.project,
+          attributes,
+        })
+        if (action.relateBack !== undefined) {
+          await this.#deps.service.relate(caller, {
+            type: action.relateBack,
+            fromId: created.id,
+            toId: subject.id,
+            origin: 'system',
+          })
+        }
+        return {
+          ruleId: rule.id,
+          action: action.kind,
+          status: 'applied',
+          detail: `created ${action.resourceType} ${created.id}`,
+        }
+      }
+
+      case 'invokeAgent': {
+        const subject = await this.#deps.service.get(caller, event.resourceId)
+        // 就是创建一个 AgentRun。AgentRunner 会取走 Queued 的那些，
+        // 于是自动化发起的 Run 和人发起的 Run 走同一条路径
+        const run = await this.#deps.service.create(caller, {
+          type: 'AgentRun',
+          workspace: subject.workspace,
+          project: subject.project,
+          attributes: {
+            goal: action.goal,
+            agent: action.agentId,
+            subject: subject.id,
+            mode: action.mode,
+            trigger: 'event',
+          },
+        })
+        return {
+          ruleId: rule.id,
+          action: action.kind,
+          status: 'applied',
+          detail: `queued AgentRun ${run.id} for ${action.agentId}`,
+        }
+      }
+
+      case 'notify': {
+        const subject = await this.#deps.service.get(caller, event.resourceId)
+        const recipient = action.recipient === 'owner' ? subject.owner : action.recipient
+        if (recipient === null || recipient === '') {
+          // 没有收件人的通知不该被安静地丢掉——它意味着一条规则
+          // 认为有人该被告知，而系统答不出是谁
+          return {
+            ruleId: rule.id,
+            action: action.kind,
+            status: 'failed',
+            detail: `no recipient: ${subject.id} has no owner`,
+          }
+        }
+        const created = await this.#deps.service.create(caller, {
+          type: 'Notification',
+          workspace: subject.workspace,
+          project: subject.project,
+          attributes: {
+            title: action.title,
+            recipient,
+            about: subject.id,
+            severity: action.severity ?? 'info',
+          },
+        })
+        return {
+          ruleId: rule.id,
+          action: action.kind,
+          status: 'applied',
+          detail: `notified ${recipient} (${created.id})`,
+        }
+      }
 
       case 'relate': {
         await this.#deps.service.relate(caller, {

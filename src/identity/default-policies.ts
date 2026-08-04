@@ -93,6 +93,54 @@ export function defaultPolicies(tenant: string): Policy[] {
       scope: { kind: 'tenant', tenant },
       description: 'Agent Runner 回写用量与终止原因（FR-AGT-012/014）',
     },
+    // ── 自动化动作需要的创建权限（FR-WF-005） ──
+    //
+    // 上面那句"不能创建"到这里为止只对没列出来的类型成立。
+    // 逐个列而不是 `*.Create`：每加一行都是一次明确的决定。
+    {
+      id: 'pol-system-automation-notify',
+      effect: 'Allow',
+      subject: 'system://internal',
+      action: 'Notification.Create',
+      scope: { kind: 'tenant', tenant },
+      description: 'notify 动作。站内通知，写坏了的代价是噪音而不是损坏',
+    },
+    {
+      id: 'pol-system-automation-create-task',
+      effect: 'Allow',
+      subject: 'system://internal',
+      action: 'Task.Create',
+      scope: { kind: 'tenant', tenant },
+      description: 'createEntity 动作，例如 P0 缺陷自动开 RCA 任务',
+    },
+    {
+      // 这一条比别的都重。自动化从此**可以花钱**：
+      // 一次 Run 会消耗 token。兜底在别处——Run 自带预算并在超限时熔断
+      // （FR-AGT-012），协作模式决定产出要不要人工复核（FR-AGT-009）。
+      // 但那些是"花多少"的上限，不是"花不花"的开关，
+      // 而这条策略就是那个开关。删掉它，自动化就再也发起不了 Agent。
+      id: 'pol-system-automation-invoke-agent',
+      effect: 'Allow',
+      subject: 'system://internal',
+      action: 'AgentRun.Create',
+      scope: { kind: 'tenant', tenant },
+      description: 'invokeAgent 动作（FR-WF-007）。自动化由此可以消耗预算',
+    },
+    {
+      id: 'pol-system-automation-assign',
+      effect: 'Allow',
+      subject: 'system://internal',
+      action: 'Task.Update',
+      scope: { kind: 'tenant', tenant },
+      description: 'assign 动作。只给工作项——需求归谁是人的判断',
+    },
+    {
+      id: 'pol-system-automation-assign-story',
+      effect: 'Allow',
+      subject: 'system://internal',
+      action: 'Story.Update',
+      scope: { kind: 'tenant', tenant },
+    },
 
     // ── Agent（ADR-0003：最低权限 + 事后可审计） ────────────
     //

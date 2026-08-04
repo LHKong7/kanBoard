@@ -191,6 +191,33 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'maxTokensPerRun', kind: 'int', description: '单次 Run 的 token 上限（FR-AGT-012）' },
     ],
   },
+  {
+    name: 'Notification',
+    version: '1.0.0',
+    // 归到 Execution：通知在这个系统里全部由工作发生的事情引发
+    // （自动化、SLA 超时）。它不完美——通知本质上是跨上下文的平台关注点——
+    // 但 PRD 的 7 个 BC 是固定的，硬加第 8 个比放错一个更糟
+    context: 'Execution',
+    lifecycle: 'notification-default',
+    description:
+      '一条站内通知（FR-WF-005 的 notify 动作）。' +
+      '做成领域对象而不是一张旁路表：这样它天然受租户隔离与资源级权限约束，' +
+      '能被查询、被下钻、被审计——而不是变成一条发出去就无人知晓的消息。' +
+      'IM 与邮件属于 Connector 层，这里只负责站内这一路。',
+    attributes: [
+      { name: 'title', kind: 'string', required: true },
+      { name: 'body', kind: 'text' },
+      { name: 'recipient', kind: 'string', required: true, description: 'user:// 或 agent:// 主体' },
+      { name: 'about', kind: 'ref', description: '这条通知在说哪个对象' },
+      {
+        name: 'severity',
+        kind: 'enum',
+        values: ['info', 'warning', 'critical'],
+        description: '决定它在收件箱里排在哪儿；不影响送达',
+      },
+      { name: 'readAt', kind: 'datetime', derived: true },
+    ],
+  },
 ]
 
 export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [

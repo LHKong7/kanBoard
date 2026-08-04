@@ -19,12 +19,60 @@ export type AutomationTrigger = {
 }
 
 /**
- * 自动化动作。
+ * 自动化动作（FR-WF-005 要求 8 类全部可用）。
  *
- * 刻意只有三种，且都很窄。自动化引擎的能力越强，
- * 它就越接近"一门没有类型检查、没有测试、没有调试器的编程语言"。
+ * 每一种都刻意很窄，而且是**封闭联合**——没有表达式、没有脚本、
+ * 没有"任意字段赋值"。自动化引擎的能力越强，它就越接近
+ * "一门没有类型检查、没有测试、没有调试器的编程语言"。
+ *
+ * 所以这里增加的是**动作的种类**，不是每种动作的自由度：
+ * 想做规则表达不了的事，写代码，不要把规则语言撑大。
  */
 export type AutomationAction =
+  /** 直接迁移触发事件的那个对象 */
+  | { kind: 'transition'; to: string; onlyIfCurrentIn?: readonly string[] }
+  /** 把对象指派给某个主体（user:// 或 agent://） */
+  | { kind: 'assign'; to: string }
+  /**
+   * 创建一个领域对象。
+   *
+   * `attributes` 是**字面量**：没有插值、没有引用求值。
+   * 一旦允许 `'RCA for ' + issue.key`，就等于在规则里嵌了一门表达式语言，
+   * 而它会立刻长出运算符优先级、空值语义和一个没人写得出的错误信息。
+   * 需要引用事件里的值的，用 `titleFrom` 这类**具名**字段。
+   */
+  | {
+      kind: 'createEntity'
+      resourceType: string
+      attributes: Record<string, string | number | boolean>
+      /** 用触发对象的这个属性当标题；缺省则用 attributes.title */
+      titleFromSubject?: string
+      /** 与触发对象建立这条关系 */
+      relateBack?: string
+    }
+  /**
+   * 触发一次 Agent 执行（FR-WF-007）。
+   *
+   * 实现就是创建一个 `AgentRun`——这不是取巧：
+   * AgentRunner 本来就靠"有没有 Queued 的 AgentRun"驱动，
+   * 于是自动化发起的 Run 与人发起的 Run 走完全同一条路径，
+   * 包括权限、预算、留痕。**另开一条专用通道才是取巧。**
+   */
+  | {
+      kind: 'invokeAgent'
+      /** Agent 资源的 id */
+      agentId: string
+      goal: string
+      mode: 'Suggest' | 'Draft' | 'ExecuteWithReview' | 'Autonomous'
+    }
+  /** 发一条站内通知。IM / 邮件属于 Connector 层 */
+  | {
+      kind: 'notify'
+      /** 收件人；`owner` 表示"触发对象的 owner" */
+      recipient: string
+      title: string
+      severity?: 'info' | 'warning' | 'critical'
+    }
   /** 沿关系找到相关对象，尝试把它迁移到某状态 */
   | {
       kind: 'transitionRelated'

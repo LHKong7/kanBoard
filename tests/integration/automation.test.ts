@@ -8,6 +8,8 @@ import { buildDefaultWorkflowRegistry } from '../../src/workflow/defaults.ts'
 import { DEFAULT_AUTOMATION_RULES } from '../../src/workflow/automation.ts'
 import { defaultPolicies } from '../../src/identity/default-policies.ts'
 import { OutboxPoller } from '../../src/infrastructure/poller.ts'
+import type { AutomationRule } from '../../src/workflow/automation.ts'
+import type { AutomationOutcome } from '../../src/domain/automation/runner.ts'
 
 const TENANT = 't_acme'
 const asAdmin = {
@@ -389,5 +391,199 @@ describe('automation is denied what it should not do', () => {
     expect(deny).toBeDefined()
     expect(deny?.effect).toBe('Deny')
     expect(deny?.subject).toBe('system://internal')
+  })
+})
+
+/**
+ * 其余动作类型（FR-WF-005：8 类动作全部可用）。
+ *
+ * 每条用例都跑一台**自带规则**的 poller，因为默认规则集里没有这些动作——
+ * 用默认规则去测新动作，只会测到"默认规则没变"。
+ */
+describe('the rest of the action catalogue (FR-WF-005)', () => {
+  const pollerWith = (rules: readonly AutomationRule[]) =>
+    new OutboxPoller({
+      pool,
+      registry: buildDefaultRegistry(),
+      workflows: buildDefaultWorkflowRegistry(),
+      policies: defaultPolicies(TENANT),
+      rules,
+      tenants: [TENANT],
+    })
+
+  /** 跑到没有新事件为止，返回全部 outcome */
+  async function drainWith(rules: readonly AutomationRule[]): Promise<AutomationOutcome[]> {
+    const p = pollerWith(rules)
+    const all: AutomationOutcome[] = []
+    for (let i = 0; i < 6; i++) {
+      const result = await p.pollOnce()
+      all.push(...result.outcomes)
+      if (result.claimed === 0) break
+    }
+    return all
+  }
+
+  const onTaskDoing = (then: AutomationRule['then']): AutomationRule[] => [
+    {
+      id: 'test-rule',
+      owningContext: 'Execution',
+      when: { event: 'ResourceStatusChanged', resourceType: 'Task', toStatus: 'Doing' },
+      then,
+    },
+  ]
+
+  const listOf = async (type: string) => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/resources?type=${type}`,
+      headers: asAdmin,
+    })
+    return res.json().items as { id: string; attributes: Record<string, unknown>; status: string }[]
+  }
+
+  it('transition moves the subject itself, not only its relatives', async () => {
+    const task = await create('Task', { title: 't', assignee: 'user://bob' })
+    await move(task, 'Doing')
+    await drainWith(onTaskDoing([{ kind: 'transition', to: 'Review' }]))
+    expect(await statusOf(task)).toBe('Review')
+  })
+
+  it('transition records a decline when the subject is not in the expected state', async () => {
+    // 找到了目标却没推动它，就是一次停滞——必须问得出"为什么没动"
+    const task = await create('Task', { title: 't', assignee: 'user://bob' })
+    await move(task, 'Doing')
+    const outcomes = await drainWith(
+      onTaskDoing([{ kind: 'transition', to: 'Review', onlyIfCurrentIn: ['Testing'] }]),
+    )
+    const skipped = outcomes.find((o) => o.action === 'transition')
+    expect(skipped?.status).toBe('skipped')
+    expect(skipped?.declines?.[0]?.reason).toMatch(/not in \["Testing"\]/)
+    expect(await statusOf(task)).toBe('Doing')
+  })
+
+  it('assign changes the owner', async () => {
+    const task = await create('Task', { title: 't', assignee: 'user://bob' })
+    await move(task, 'Doing')
+    await drainWith(onTaskDoing([{ kind: 'assign', to: 'user://carol' }]))
+
+    const res = await app.inject({ method: 'GET', url: `/v1/resources/${task}`, headers: asAdmin })
+    expect(res.json().owner).toBe('user://carol')
+  })
+
+  it('assign does not write a no-op history entry', async () => {
+    // 一条什么都没改的 history 会让"这个对象被改过几次"变得不可信
+    const task = await create('Task', { title: 't', assignee: 'user://bob' })
+    await move(task, 'Doing')
+    const outcomes = await drainWith(onTaskDoing([{ kind: 'assign', to: 'user://alice' }]))
+    expect(outcomes.find((o) => o.action === 'assign')?.status).toBe('skipped')
+  })
+
+  it('createEntity creates an object and links it back', async () => {
+    const task = await create('Task', { title: '登录接口 500', assignee: 'user://bob' })
+    await move(task, 'Doing')
+    await drainWith(
+      onTaskDoing([
+        {
+          kind: 'createEntity',
+          resourceType: 'Task',
+          attributes: { title: 'RCA', assignee: 'user://bob' },
+          relateBack: 'blockedBy',
+        },
+      ]),
+    )
+
+    const tasks = await listOf('Task')
+    const rca = tasks.find((t) => t.attributes['title'] === 'RCA')
+    expect(rca).toBeDefined()
+
+    const rel = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${rca?.id}/relations`,
+      headers: asAdmin,
+    })
+    expect(rel.json().items.some((r: { toId: string }) => r.toId === task)).toBe(true)
+  })
+
+  it('createEntity can take its title from the subject, without an expression language', async () => {
+    // 规则里没有 `'RCA for ' + issue.key` 这种拼接：一旦允许表达式，
+    // 就等于在配置里嵌了一门没有类型检查也没有调试器的语言
+    const task = await create('Task', { title: '登录接口 500', assignee: 'user://bob' })
+    await move(task, 'Doing')
+    await drainWith(
+      onTaskDoing([
+        {
+          kind: 'createEntity',
+          resourceType: 'Task',
+          attributes: { assignee: 'user://bob' },
+          titleFromSubject: 'title',
+        },
+      ]),
+    )
+
+    const titles = (await listOf('Task')).map((t) => t.attributes['title'])
+    expect(titles.filter((t) => t === '登录接口 500')).toHaveLength(2)
+  })
+
+  it('invokeAgent queues a real AgentRun rather than a private side channel', async () => {
+    // 自动化发起的 Run 和人发起的 Run 必须走同一条路径，
+    // 否则权限、预算、留痕都要再实现一遍——而重新实现的那份迟早会漏
+    const agent = await create('Agent', { name: 'pm', principal: 'agent://pm@1.0.0' })
+    const task = await create('Task', { title: 't', assignee: 'user://bob' })
+    await move(task, 'Doing')
+    await drainWith(
+      onTaskDoing([{ kind: 'invokeAgent', agentId: agent, goal: '拆分这个任务', mode: 'Draft' }]),
+    )
+
+    const runs = await listOf('AgentRun')
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.status).toBe('Queued')
+    expect(runs[0]?.attributes['trigger']).toBe('event')
+    expect(runs[0]?.attributes['subject']).toBe(task)
+  })
+
+  it('notify creates an in-app notification addressed to the owner', async () => {
+    const task = await create('Task', { title: 't', assignee: 'user://bob' })
+    await move(task, 'Doing')
+    await drainWith(
+      onTaskDoing([{ kind: 'notify', recipient: 'owner', title: '任务开始了', severity: 'info' }]),
+    )
+
+    const notes = await listOf('Notification')
+    expect(notes).toHaveLength(1)
+    expect(notes[0]?.attributes['recipient']).toBe('user://alice')
+    expect(notes[0]?.attributes['about']).toBe(task)
+    expect(notes[0]?.status).toBe('Unread')
+  })
+
+  it('reports a failure when notify cannot work out who to tell', async () => {
+    // 没有收件人的通知不该被安静地丢掉：它意味着一条规则认为
+    // 有人该被告知，而系统答不出是谁
+    const task = await create('Task', { title: 't', assignee: 'user://bob' })
+    await move(task, 'Doing')
+    const outcomes = await drainWith(
+      onTaskDoing([{ kind: 'notify', recipient: '', title: '发给谁？' }]),
+    )
+    const failed = outcomes.find((o) => o.action === 'notify')
+    expect(failed?.status).toBe('failed')
+    expect(await listOf('Notification')).toHaveLength(0)
+  })
+
+  it('refuses to create a type the system principal was never granted', async () => {
+    // 能创建什么是逐个类型授出去的，不是一个 `*.Create` 通配符。
+    // 一条规则想创建没授权的类型，必须大声失败
+    const task = await create('Task', { title: 't', assignee: 'user://bob' })
+    await move(task, 'Doing')
+    const outcomes = await drainWith(
+      onTaskDoing([
+        {
+          kind: 'createEntity',
+          resourceType: 'Knowledge',
+          attributes: { title: 'k', body: 'b' },
+        },
+      ]),
+    )
+    const failed = outcomes.find((o) => o.action === 'createEntity')
+    expect(failed?.status).toBe('failed')
+    expect(await listOf('Knowledge')).toHaveLength(0)
   })
 })
