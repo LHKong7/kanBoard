@@ -22,6 +22,14 @@ export type DomainEventType =
   | 'ResourceStatusChanged'
   | 'RelationCreated'
   | 'RelationRemoved'
+  /**
+   * 外部系统送进来的事件（FR-WF-006：GitHub / CI / Kafka）。
+   *
+   * 只有一种类型，不是每个来源一种：来源与事件名放在 payload 里，
+   * 自动化规则按它们匹配。每接一个系统就往这个联合里加一个成员的话，
+   * 领域层会开始认识 GitHub——而它不该知道外面有谁。
+   */
+  | 'ExternalEvent'
 
 export function resourceCreated(args: {
   tenant: string
@@ -163,6 +171,39 @@ export function relationCreated(args: {
       toId: args.toId,
       createdBy: args.createdBy,
     },
+    occurredAt: args.occurredAt,
+    traceId: args.traceId ?? null,
+  }
+}
+
+
+/**
+ * 外部事件（FR-WF-006）。
+ *
+ * `resourceId` 是**被这件事影响的本地对象**，由入站翻译层从外部载荷里认出来。
+ * 认不出来就不该发这个事件——一个不知道在说谁的事件，
+ * 自动化引擎除了记一笔什么也做不了。
+ */
+export function externalEvent(args: {
+  tenant: string
+  /** 来源系统，如 'github' */
+  source: string
+  /** 外部事件名，如 'pull_request.closed' */
+  event: string
+  /** 关联到的本地对象 */
+  resourceId: string
+  resourceType: string
+  /** 已经过筛选的外部载荷片段。**不放原始报文**——里面可能有凭据 */
+  detail: Record<string, unknown>
+  occurredAt: Date
+  traceId?: string | null
+}): DomainEvent {
+  return {
+    type: 'ExternalEvent',
+    tenant: args.tenant,
+    resourceId: args.resourceId,
+    resourceType: args.resourceType,
+    payload: { source: args.source, event: args.event, ...args.detail },
     occurredAt: args.occurredAt,
     traceId: args.traceId ?? null,
   }

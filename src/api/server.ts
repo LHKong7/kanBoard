@@ -17,6 +17,8 @@ import { systemClock } from '../platform/clock.ts'
 import type { Clock } from '../platform/clock.ts'
 import { DomainError } from '../platform/errors.ts'
 import { newTraceId } from '../platform/id.ts'
+import { translate } from '../infrastructure/external-events.ts'
+import type { ExternalSource } from '../infrastructure/external-events.ts'
 import { parseDelegator, parseSubject } from './auth.ts'
 import {
   createResourceSchema,
@@ -55,6 +57,10 @@ export type ServerDeps = {
   lifecycles?: ReloadingWorkflowRegistry
   policies: readonly Policy[]
   clock?: Clock
+  /** 外部事件来源（FR-WF-006）。不配就没有入站端点可用 */
+  externalSources?: readonly ExternalSource[]
+  /** 外部事件归属的租户。外部系统不知道租户是什么 */
+  tenant?: string
 }
 
 /**
@@ -87,6 +93,29 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
    * 未认证的调用者不该先收到 400 的 schema 报错——那等于把请求体的结构
    * 免费告诉了没有身份的人。认证失败就是 401，什么都不透露。
    */
+  /**
+   * 留住原始报文，**只对 `/events`**（FR-WF-006）。
+   *
+   * 验签必须对原始字节做。拿解析后的对象重新序列化去验的话，
+   * 键序或空白只要差一点签名就对不上，而那种失败看起来像"密钥配错了"，
+   * 能让人查上半天。
+   *
+   * 只对入站事件留：给每个请求都挂一份报文副本，是拿全站的内存
+   * 去换一个只有一条路径需要的东西。
+   */
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
+    const raw = body as string
+    if (request.url.startsWith('/events')) {
+      ;(request as { rawBody?: string }).rawBody = raw
+    }
+    if (raw === '') return done(null, undefined)
+    try {
+      done(null, JSON.parse(raw))
+    } catch (error) {
+      done(error as Error, undefined)
+    }
+  })
+
   app.addHook('onRequest', async (request) => {
     if (!request.url.startsWith('/v1/')) return
     const subject = parseSubject(request.headers)
@@ -511,6 +540,45 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     }
 
     return reply.status(404).send({ error: 'not_found', message: `unknown custom method: ${action}` })
+  })
+
+  /**
+   * 外部事件入站（FR-WF-006）。
+   *
+   * **不走 `/v1` 的身份钩子**：GitHub 不会带 `x-principal`。
+   * 它的身份是**签名**——共享密钥证明了这个报文来自那个来源。
+   * 强行套用主体认证只会逼所有人配一个假身份头，
+   * 而那时真正的认证（验签）反倒可能被当成可选的。
+   *
+   * 翻译完就进 outbox，之后与内部事件走同一条路：
+   * 同一个自动化引擎、同样的防环深度、同样的留痕。
+   */
+  app.post('/events/:source', async (request, reply) => {
+    const sourceId = (request.params as { source: string }).source
+    const source = deps.externalSources?.find((s) => s.id === sourceId)
+    if (source === undefined) {
+      // 列出已配置的来源：拼错一个名字时，光说"没找到"要人去翻配置
+      throw new DomainError('not_found', `unknown event source: ${sourceId}`, 404, {
+        known: (deps.externalSources ?? []).map((s) => s.id),
+      })
+    }
+
+    const event = translate({
+      source,
+      tenant: deps.tenant ?? 'default',
+      // 验签必须对**原始字节**做。用解析后的对象重新序列化去验，
+      // 键序或空白只要差一点签名就对不上，而那种失败看起来像"密钥配错了"
+      rawBody: (request as { rawBody?: string }).rawBody ?? '',
+      headers: request.headers as Record<string, string | undefined>,
+      signature: firstHeader(request.headers['x-signature-256']),
+      now: clock.now(),
+      traceId: firstHeader(request.headers['x-trace-id']) ?? newTraceId(),
+    })
+
+    await withTenant(db, event.tenant, (trx: Db) => new PgOutbox(trx).emit(event))
+    // 202 而不是 200：事件收下了，自动化还没跑。
+    // 回 200 会让调用方以为副作用已经发生了
+    return reply.status(202).send({ accepted: true, event: event.payload['event'], subject: event.resourceId })
   })
 
   app.get('/health', async () => ({ status: 'ok' }))

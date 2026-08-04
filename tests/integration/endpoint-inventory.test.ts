@@ -70,6 +70,13 @@ const EXPECTED = [
   'POST /v1/resources/:id/relations',
   'POST /v1/resources/:id/transitions',
   'POST /v1/resources:action',
+  // 外部事件入站（FR-WF-006）。**不在 /v1 下，也不带主体身份**——
+  // GitHub 不会带 x-principal，它的身份是签名。
+  //
+  // 这不构成 FR-RES-011 说的"旁路端点"：它不让任何主体做主 API 做不到的事，
+  // 它做的是把外部系统的一条消息翻译成一个领域事件，
+  // 之后走的是和内部事件完全同一条路。
+  'POST /events/:source',
   'PUT /v1/workflows/:id',
   'DELETE /v1/relations/:id',
   'DELETE /v1/resources/:id',

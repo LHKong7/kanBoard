@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createHmac } from 'node:crypto'
 import { McpConnector } from '../src/infrastructure/connectors/mcp.ts'
+import {
+  GITHUB_SOURCE,
+  translate,
+  verifySignature,
+} from '../src/infrastructure/external-events.ts'
 import { ConnectorGateway } from '../src/domain/connector/gateway.ts'
 import { systemClock } from '../src/platform/clock.ts'
 import type { AuditRecord, AuditSink } from '../src/domain/resource/ports.ts'
@@ -222,5 +228,94 @@ describe('failures are reported as failures', () => {
         aborter.signal,
       ),
     ).rejects.toThrow(/cancelled/)
+  })
+})
+
+/**
+ * 入站翻译的纯函数部分（FR-WF-006）。
+ *
+ * 端到端那条链在 tests/integration/external-events.test.ts。
+ * 这里单独钉的是**翻译规则本身**——它决定了一条外部消息会变成什么，
+ * 而那正是接第二个来源时最容易改错的地方。
+ */
+describe('external event translation (FR-WF-006)', () => {
+  const secret = 's3cr3t'
+  const sign = (body: string) =>
+    `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`
+
+  const source = GITHUB_SOURCE(secret)
+  const run = (body: string, over: Record<string, unknown> = {}) =>
+    translate({
+      source,
+      tenant: 't',
+      rawBody: body,
+      headers: { 'x-github-event': 'pull_request' },
+      signature: sign(body),
+      now: new Date('2026-08-01T00:00:00Z'),
+      ...over,
+    })
+
+  const body = (over: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      action: 'closed',
+      pull_request: {
+        number: 1,
+        title: 'fix (task_01J0000000000000000000ABCD)',
+        body: '',
+        head: { ref: 'x' },
+        ...over,
+      },
+    })
+
+  it('joins the header and the payload into one event name', () => {
+    // GitHub 把类型放 header、子类型放载荷。写成声明而不是 if 分支，
+    // 接第二个来源时改的是配置
+    expect(run(body()).payload['event']).toBe('pull_request.closed')
+  })
+
+  it('derives the resource type from the id prefix', () => {
+    // 外部系统不知道我们的类型体系，也不该知道
+    expect(run(body()).resourceType).toBe('Task')
+  })
+
+  it('rejects a body that is not JSON', () => {
+    const raw = 'not json'
+    expect(() =>
+      translate({
+        source,
+        tenant: 't',
+        rawBody: raw,
+        headers: { 'x-github-event': 'pull_request' },
+        signature: sign(raw),
+        now: new Date(),
+      }),
+    ).toThrow(/not valid JSON/)
+  })
+
+  it('rejects when the event name cannot be determined', () => {
+    const raw = JSON.stringify({ pull_request: { title: 'task_01J0000000000000000000ABCD' } })
+    expect(() =>
+      translate({
+        source,
+        tenant: 't',
+        rawBody: raw,
+        headers: {},
+        signature: sign(raw),
+        now: new Date(),
+      }),
+    ).toThrow(/event name/)
+  })
+
+  it('compares signatures in constant time, and length-mismatches are just false', () => {
+    // 长度不等时 timingSafeEqual 会抛。抛出去的话，一个短签名
+    // 会变成 500 而不是 401——而 500 看起来像我们的 bug，不像有人在试探
+    expect(verifySignature(secret, 'x', 'sha256=short')).toBe(false)
+    expect(verifySignature(secret, 'x', sign('x'))).toBe(true)
+  })
+
+  it('searches each declared field in order', () => {
+    // 标题里没有就去分支名里找。少一个回退，人就得改自己的习惯来迁就系统
+    const raw = body({ title: '没有单号', head: { ref: 'feature/task_01J0000000000000000000BCDE' } })
+    expect(run(raw).resourceId).toBe('task_01J0000000000000000000BCDE')
   })
 })

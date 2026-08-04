@@ -413,5 +413,13 @@ function matches(rule: AutomationRule, event: DomainEvent): boolean {
   if (rule.when.fromStatus !== undefined && event.payload['from'] !== rule.when.fromStatus) {
     return false
   }
+  // 外部事件（FR-WF-006）。来源与事件名都在 payload 里——
+  // 领域层因此不需要认识 GitHub 是谁
+  if (rule.when.externalSource !== undefined && event.payload['source'] !== rule.when.externalSource) {
+    return false
+  }
+  if (rule.when.externalEvent !== undefined && event.payload['event'] !== rule.when.externalEvent) {
+    return false
+  }
   return true
 }

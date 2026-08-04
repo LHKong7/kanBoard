@@ -16,6 +16,10 @@ export type AutomationTrigger = {
   /** 状态变更事件专用：只在迁移到该状态时触发 */
   toStatus?: string
   fromStatus?: string
+  /** 外部事件专用（FR-WF-006）：来源系统，如 'github' */
+  externalSource?: string
+  /** 外部事件专用：事件名，如 'pull_request.closed' */
+  externalEvent?: string
 }
 
 /**
