@@ -76,27 +76,36 @@ export async function checkCoverage(path = DOC): Promise<CoverageCheck> {
       )
     }
   }
-  const declared = await mustCountsFromPrd()
+  const mustIds = await mustIdsFromPrd()
+  const breakdown = deliveredFromBreakdown(lines, mustIds)
   for (const row of rows) {
     if (row.delivered > row.must) {
       problems.push(`${row.label}: delivered ${row.delivered} exceeds Must ${row.must}`)
     }
     // 行首形如「WF 工作流」「AGT Agent」，取第一个词当模块代号
     const code = (row.label.split(/\s+/)[0] ?? '').toUpperCase()
-    const actual = declared.get(code)
+    const actual = mustIds.get(code)?.size
     if (actual === undefined) {
       problems.push(`${row.label}: no FR-${code}-* requirements found in ${PRD_DIR}`)
     } else if (actual !== row.must) {
       problems.push(`${row.label}: table says ${row.must} Must but the PRD has ${actual}`)
+    }
+
+    // 有细分表的行，数字必须和细分表对得上
+    const counted = breakdown.get(code)
+    if (counted !== undefined && counted.size !== row.delivered) {
+      problems.push(
+        `${row.label}: row says ${row.delivered} delivered but its breakdown marks ${counted.size} with ✅`,
+      )
     }
   }
 
   return { rows, stated, computed, problems }
 }
 
-/** 从 PRD 的需求表里数出每个模块的 Must 条数 */
-async function mustCountsFromPrd(dir = PRD_DIR): Promise<Map<string, number>> {
-  const counts = new Map<string, number>()
+/** 从 PRD 的需求表里读出每个模块的 Must **编号集合** */
+async function mustIdsFromPrd(dir = PRD_DIR): Promise<Map<string, Set<string>>> {
+  const ids = new Map<string, Set<string>>()
   const seen = new Set<string>()
   for (const name of await readdir(dir)) {
     if (!name.endsWith('.md')) continue
@@ -110,10 +119,57 @@ async function mustCountsFromPrd(dir = PRD_DIR): Promise<Map<string, number>> {
       const cells = (match[3] ?? '').split('|').map((c) => c.trim())
       if (cells[1] !== 'M') continue
       const code = match[2] ?? ''
-      counts.set(code, (counts.get(code) ?? 0) + 1)
+      const set = ids.get(code) ?? new Set<string>()
+      set.add(id)
+      ids.set(code, set)
     }
   }
-  return counts
+  return ids
+}
+
+/**
+ * 从「## XXX 细分」小节里数出**被标为已交付的 Must 条数**。
+ *
+ * 存在的理由是一次真实的错：IAM 那一行写成 11，而它自己的细分表
+ * 数出来是 12。原来的检查只比"合计 vs 各行"，看不见"某一行 vs 它自己的细分表"——
+ * 于是一个自相矛盾的文档照样通过。
+ *
+ * 只数 PRD 里确实是 Must 的编号：细分表里也会列 Should，
+ * 把它们算进来会让覆盖率虚高。
+ */
+function deliveredFromBreakdown(
+  lines: readonly string[],
+  mustIds: ReadonlyMap<string, Set<string>>,
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>()
+  for (const line of lines) {
+    if (!line.startsWith('|')) continue
+    const cells = line.split('|').slice(1, -1).map((c) => c.trim())
+    if (cells.length < 2) continue
+    // 状态列以 ✅ 开头才算交付。⚠️ 是"部分"，按这份文档的规矩不计入
+    if (!(cells[1] ?? '').startsWith('✅')) continue
+    for (const id of (cells[0] ?? '').matchAll(/FR-([A-Z]+)-(\d+)/g)) {
+      const code = id[1] ?? ''
+      const full = id[0]
+      if (mustIds.get(code)?.has(full) !== true) continue
+      const set = out.get(code) ?? new Set<string>()
+      set.add(full)
+      out.set(code, set)
+    }
+    // 「FR-IAM-001/002/003 …」这种连写：补上后面几个编号
+    const first = /FR-([A-Z]+)-(\d+)((?:\/\d+)+)/.exec(cells[0] ?? '')
+    if (first !== null) {
+      const code = first[1] ?? ''
+      for (const tail of (first[3] ?? '').split('/').filter(Boolean)) {
+        const full = `FR-${code}-${tail}`
+        if (mustIds.get(code)?.has(full) !== true) continue
+        const set = out.get(code) ?? new Set<string>()
+        set.add(full)
+        out.set(code, set)
+      }
+    }
+  }
+  return out
 }
 
 function toInt(cell: string | undefined): number | null {
