@@ -18,8 +18,9 @@
     "bench:run": "node --experimental-strip-types bench/run.ts",
     "test:watch": "vitest",
     "lint:layers": "depcruise src --config .dependency-cruiser.cjs",
-    "check": "pnpm typecheck && pnpm lint:layers && pnpm lint:network && pnpm test && pnpm test:ui",
-    "lint:network": "node --experimental-strip-types tools/check-no-direct-network.ts"
+    "check": "pnpm typecheck && pnpm lint:layers && pnpm lint:network && pnpm lint:coverage && pnpm test && pnpm test:ui",
+    "lint:network": "node --experimental-strip-types tools/check-no-direct-network.ts",
+    "lint:coverage": "node --experimental-strip-types tools/check-coverage-total.ts"
   },
   "dependencies": {
     "fastify": "^5.2.1",

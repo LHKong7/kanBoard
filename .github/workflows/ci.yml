@@ -41,24 +41,21 @@ jobs:
       - name: Install Chromium for UI tests
         run: pnpm exec playwright install --with-deps chromium
 
-      # 类型检查。ADR-0007 接下的债之一：TS 的类型在运行期不存在，
-      # 编译期这道关必须是零容忍的。
-      - name: Typecheck (strict)
-        run: pnpm typecheck
-
-      # 分层依赖方向（FR-ARCH-001）。
-      # 这条替代了 Go 方案里的静态分析，是架构不被侵蚀的唯一强制手段。
-      - name: Enforce layer boundaries
-        run: pnpm lint:layers
-
-      # 测试。集成测试以非超级用户连接，
-      # 因此租户隔离（ADR-0005）是真的在 RLS 下被验证的。
-      - name: Test
-        run: pnpm test
-
-      # UI 走真实浏览器。用 Node 内置 runner，原因见 tests/ui/README.md
-      - name: UI tests
-        run: pnpm test:ui
+      # 一步跑完 `pnpm check`，而不是把每条检查抄成一个 step。
+      #
+      # 抄成多个 step 读起来更清楚，代价是**两份清单会漂移**：
+      # `lint:network`（FR-CON-002 的源码扫描）加进 check 之后
+      # 一直没有补到这里来，于是那条护栏在 CI 里从来没跑过——
+      # 一条从不执行的检查和没有这条检查是一回事，
+      # 而它看起来是有的。现在 check 是唯一的清单。
+      #
+      # check = typecheck（含 tests/ 与 tools/）
+      #       + lint:layers（分层方向，FR-ARCH-001）
+      #       + lint:network（Agent 不得直连网络，FR-CON-002）
+      #       + lint:coverage（进度表的合计必须等于各行之和）
+      #       + test（集成测试以非超级用户连接，RLS 是真的在生效）
+      #       + test:ui（真实浏览器）
+      - name: Check
+        run: pnpm check
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-
