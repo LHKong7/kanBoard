@@ -185,6 +185,14 @@ describe('the catalogue is self-describing', () => {
     }
   })
 
+  it('has no duplicate metric ids', async () => {
+    // 重复的 id 会让 findMetric 永远返回第一条，
+    // 表现是"改了口径却不生效"——极难查
+    const body = (await app.inject({ method: 'GET', url: '/v1/metrics', headers: asAdmin })).json()
+    const ids = (body.items as { id: string }[]).map((m) => m.id)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
   it('says which metrics exist when the id is wrong', async () => {
     const res = await metric('project.tasks.blocekd')
     expect(res.statusCode).toBe(404)
@@ -461,5 +469,135 @@ describe('overturn window and retroactive correction (FR-DASH-016)', () => {
     // 打错的 `form=` 会被静默忽略，然后返回一个范围完全不对的数字
     const res = await rate('?form=2026-08-01T00:00:00Z')
     expect(res.statusCode).toBe(400)
+  })
+})
+
+/**
+ * Agent 视角的指标集（FR-DASH-003：8 项）。
+ *
+ * 这一组需要指标模型能做**求和 / 求平均 / 比率**——
+ * 数条数答不了"花了多少钱"。扩展的是动作种类，不是自由度：
+ * 仍然只接受属性名，不接受表达式。
+ */
+describe('the Agent metric set (FR-DASH-003)', () => {
+  async function run(attributes: Record<string, unknown>, status?: string) {
+    const agent = await create('Agent', { name: 'a', principal: 'agent://a@1.0.0' })
+    const id = await create('AgentRun', {
+      goal: 'g',
+      agent,
+      mode: 'Autonomous',
+      trigger: 'human',
+      ...attributes,
+    })
+    if (status !== undefined) {
+      for (const to of status === 'Succeeded' ? ['Running', 'Succeeded'] : ['Running', status]) {
+        await move(id, to)
+      }
+    }
+    return id
+  }
+
+  it('sums cost across runs', async () => {
+    await run({ costUsd: 1.5 })
+    await run({ costUsd: 2.25 })
+    const body = (await metric('agent.cost.total')).json()
+    expect(body.total).toBeCloseTo(3.75, 4)
+  })
+
+  it('sums tokens across runs', async () => {
+    await run({ tokensUsed: 1000 })
+    await run({ tokensUsed: 250 })
+    expect((await metric('agent.tokens.total')).json().total).toBe(1250)
+  })
+
+  it('averages latency, and reports how many runs it averaged', async () => {
+    // 平均值背后是 3 条还是 300 条，决定了它值不值得当回事
+    await run({ durationMs: 1000 })
+    await run({ durationMs: 3000 })
+    const body = (await metric('agent.latency.avg')).json()
+    expect(body.total).toBe(2000)
+    expect(body.groups.find((g: { key: string }) => g.key === 'counted').count).toBe(2)
+  })
+
+  it('skips runs that have no value rather than counting them as zero', async () => {
+    // 当成 0 的话，一批还没结算的 Run 会把平均成本悄悄拉低——
+    // 一个看起来像好消息的坏消息。
+    //
+    // 注意"属性是字符串"这种情形在这里**造不出来**：本体校验
+    // 已经把它挡在写入之前了。数据库那侧的 jsonb_typeof 过滤
+    // 防的是更早的本体版本留下的旧数据
+    await run({ costUsd: 2 })
+    await run({}) // 还没结算，没有 costUsd
+    const body = (await metric('agent.cost.total')).json()
+    expect(body.total).toBe(2)
+    expect(body.groups.find((g: { key: string }) => g.key === 'counted').count).toBe(1)
+  })
+
+  it('computes success rate over finished runs only', async () => {
+    // 把 Queued / Running 算进分母，成功率会随排队长度上下跳，
+    // 而那和成功不成功毫无关系
+    await run({}, 'Succeeded')
+    await run({}, 'Failed')
+    await run({}) // 还在 Queued，不该进分母
+
+    const body = (await metric('agent.success-rate')).json()
+    expect(body.total).toBe(0.5)
+    expect(body.groups.find((g: { key: string }) => g.key === 'denominator').count).toBe(2)
+  })
+
+  it('returns 0 rather than NaN when there is nothing to divide', async () => {
+    // NaN 在界面上是一片吓人的空白
+    expect((await metric('agent.success-rate')).json().total).toBe(0)
+    expect((await metric('agent.cost.total')).json().total).toBe(0)
+  })
+
+  it('offers all eight Agent metrics, counting the north star', async () => {
+    const catalogue = (await app.inject({ method: 'GET', url: '/v1/metrics', headers: asAdmin }))
+      .json().items as { id: string; scope: string }[]
+    const agentMetrics = catalogue.filter((m) => m.scope === 'agent')
+    // PRD §1.3 列了 8 项。目录里的这些覆盖 Cost / Token / Success Rate /
+    // Acceptance Rate / Latency / Ask Rate，Automation Rate 与 Rework Rate
+    // 走它自己的路径（形状不一样）
+    expect(agentMetrics.length).toBeGreaterThanOrEqual(6)
+    for (const id of [
+      'agent.cost.total',
+      'agent.tokens.total',
+      'agent.success-rate',
+      'agent.acceptance-rate',
+      'agent.latency.avg',
+      'agent.ask-rate',
+    ]) {
+      expect(agentMetrics.map((m) => m.id)).toContain(id)
+    }
+    const rate = await app.inject({
+      method: 'GET',
+      url: '/v1/metrics:automation-rate',
+      headers: asAdmin,
+    })
+    expect(rate.statusCode).toBe(200)
+    // Rework Rate 和它一起返回，凑满第 8 项所需的口径
+    expect(rate.json()).toHaveProperty('reworkRate')
+  })
+
+  it('drills down from an aggregate the same way as from a count', async () => {
+    await run({ costUsd: 1 })
+    const items = await app.inject({
+      method: 'GET',
+      url: '/v1/metrics/agent.cost.total/items',
+      headers: asAdmin,
+    })
+    expect(items.json().items).toHaveLength(1)
+  })
+
+  it('applies permissions to aggregates too', async () => {
+    // 少了这一步，指标就是一条绕过权限的旁路：看不到某个项目的人，
+    // 照样能从它的成本总额里推出信息
+    await run({ costUsd: 9 })
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/metrics/agent.cost.total',
+      headers: { ...asAdmin, 'x-principal': 'user://nobody', 'x-roles': 'Nobody' },
+    })
+    expect(res.statusCode).toBeGreaterThanOrEqual(400)
   })
 })

@@ -753,6 +753,28 @@ export class ResourceService {
     return this.#deps.resources.countGrouped(filter, groupBy)
   }
 
+  /**
+   * 求和 / 求平均。**和 `query` 用同一次授权**——
+   * 少了这一步，指标就成了一条绕过权限的旁路：
+   * 看不到某个项目的人，照样能从它的成本总额里推出信息。
+   */
+  async aggregate(
+    caller: Caller,
+    filter: ResourceFilter,
+    fn: 'sum' | 'avg',
+    attribute: string,
+  ): Promise<{ value: number; counted: number }> {
+    const type = filter.type
+    await this.#authorize(
+      caller,
+      type === undefined ? 'Resource.Read' : `${type}.Read`,
+      { tenant: caller.subject.tenant, workspace: filter.workspace, project: filter.project, type },
+      undefined,
+      type,
+    )
+    return this.#deps.resources.aggregate(filter, fn, attribute)
+  }
+
   async history(caller: Caller, id: string, page: Page): Promise<PageResult<import('./resource.ts').HistoryEntry>> {
     const resource = await this.get(caller, id)
     return this.#deps.resources.history(resource.id, page)

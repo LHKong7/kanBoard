@@ -111,6 +111,18 @@ export interface ResourceRepository {
    * 一个 100 万行的租户就会把进程打死——所以计数留在数据库里。
    * 过滤条件与 `query` 完全共用，指标和它的下钻明细因此不可能对不上。
    */
+  /**
+   * 对某个属性求和 / 求平均（FR-DASH-001/002/003）。
+   *
+   * 非数值的属性会被忽略而不是当成 0：把一段文本算作 0
+   * 会让平均值悄悄偏低，而没有任何迹象。返回的 `counted`
+   * 说明真正参与计算的有几条
+   */
+  aggregate(
+    filter: ResourceFilter,
+    fn: 'sum' | 'avg',
+    attribute: string,
+  ): Promise<{ value: number; counted: number }>
   countGrouped(filter: ResourceFilter, groupBy: GroupableField): Promise<GroupCount[]>
   appendHistory(entry: HistoryEntry): Promise<void>
   history(resourceId: string, page: Page): Promise<PageResult<HistoryEntry>>

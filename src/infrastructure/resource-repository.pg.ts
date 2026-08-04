@@ -330,6 +330,41 @@ export class PgResourceRepository implements ResourceRepository {
     return rows.map((r) => ({ key: r.key ?? '(none)', count: Number(r.count) }))
   }
 
+  /**
+   * 对某个属性求和 / 求平均（FR-DASH-001/002/003）。
+   *
+   * 用 `jsonb_typeof(...) = 'number'` 先筛：非数值的属性被**排除**，
+   * 而不是当成 0。当成 0 的话，一个把 costUsd 写成 "1.50" 字符串的
+   * bug 会表现为"成本突然降下来了"——一个看起来像好消息的坏消息。
+   * `counted` 报出真正参与计算的条数，好让人对得上。
+   */
+  async aggregate(
+    filter: ResourceFilter,
+    fn: 'sum' | 'avg',
+    attribute: string,
+  ): Promise<{ value: number; counted: number }> {
+    const path = sql`attributes -> ${sql.lit(attribute)}`
+    const numeric = sql<number>`(${path})::numeric`
+    const row = await this.#applyFilter(
+      this.#db.selectFrom('resources').select(() => [
+        (fn === 'sum'
+          ? sql<string | null>`sum(${numeric})`
+          : sql<string | null>`avg(${numeric})`
+        ).as('value'),
+        sql<string>`count(${numeric})`.as('counted'),
+      ]),
+      filter,
+    )
+      .where(sql<boolean>`jsonb_typeof(${path}) = 'number'`)
+      .executeTakeFirst()
+
+    return {
+      // 一条都没有时是 0 而不是 NaN/null：界面上"还没有数据"该显示成 0
+      value: row?.value == null ? 0 : Number(row.value),
+      counted: Number(row?.counted ?? 0),
+    }
+  }
+
   async appendHistory(entry: HistoryEntry): Promise<void> {
     await this.#db
       .insertInto('resource_history')

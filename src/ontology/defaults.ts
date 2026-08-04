@@ -147,6 +147,10 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'outcome', kind: 'text', derived: true, description: '终止原因：完成、超预算、被拒、出错' },
       { name: 'startedAt', kind: 'datetime', derived: true },
       { name: 'finishedAt', kind: 'datetime', derived: true },
+      // 时长在结算时算好存下来（FR-DASH-003 的 Latency）。
+      // 让指标层去减两个时间戳的话，那一层就得会解析日期、
+      // 处理缺失值、定义"还没结束算多久"——而它只该会做查询
+      { name: 'durationMs', kind: 'int', derived: true, description: '本次 Run 的耗时' },
     ],
   },
   {

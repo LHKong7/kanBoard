@@ -234,6 +234,9 @@ export class AgentRunner {
         costUsd: result.costUsd,
         stepCount: result.steps,
         outcome: describe(result),
+        // Latency（FR-DASH-003）。在这里算是因为这里知道 startedAt，
+        // 而指标层不该会解析日期、处理缺失值、定义"还没结束算多久"
+        ...durationOf(current.attributes['startedAt'], (this.#deps.clock ?? systemClock).now()),
       },
       reason: 'agent runner 结算',
     })
@@ -321,6 +324,20 @@ export class AgentRunner {
     // 关停就要等最后一次推理自然结束
     this.#aborter.abort()
   }
+}
+
+/**
+ * 本次 Run 的耗时。
+ *
+ * 拿不到起始时刻就**不写这个字段**，而不是写 0。
+ * 写 0 的话，平均时延会被一批假的零悄悄拉低——
+ * 一个看起来像性能变好了的数据缺失。
+ */
+function durationOf(startedAt: unknown, now: Date): { durationMs?: number } {
+  if (typeof startedAt !== 'string') return {}
+  const started = new Date(startedAt).getTime()
+  if (Number.isNaN(started)) return {}
+  return { durationMs: Math.max(0, now.getTime() - started) }
 }
 
 function describe(result: RunResult): string {

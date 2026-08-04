@@ -35,6 +35,22 @@ export type MetricDef = {
    * 刻意不支持任意表达式：指标要能被读懂、被复算、被质疑。
    */
   groupBy?: GroupableField
+  /**
+   * 对某个**具名属性**求和 / 求平均，而不是数条数。
+   *
+   * "花了多少钱"和"有几次 Run"是两个问题，前者数条数答不了。
+   * 仍然只接受属性名，不接受表达式——`sum(cost * 1.2 + fee)` 这种东西
+   * 一旦允许，指标就不再是"能被读懂、被复算、被质疑"的了。
+   */
+  aggregate?: { fn: 'sum' | 'avg'; attribute: string }
+  /**
+   * 比率：分子是这个更窄的条件，分母是本指标自己的 filter。
+   *
+   * 分子分母**共用一个 filter 基底**，所以不可能出现
+   * "分子统计了 8 月、分母统计了全年"这种对不上的比率——
+   * 而那种错算出来的数字看起来完全正常。
+   */
+  ratio?: { numerator: ResourceFilter }
   /** 数值越大越好还是越小越好。异常检测与趋势展示需要知道方向 */
   direction: 'higher-is-better' | 'lower-is-better' | 'neutral'
 }
@@ -140,7 +156,89 @@ export const DEFAULT_METRICS: readonly MetricDef[] = [
     groupBy: 'status',
     direction: 'neutral',
   },
+
+  // ── Agent 视角（FR-DASH-003：8 项） ────────────────────
+  //
+  // Automation Rate 是第 8 项，也是北极星。它不在这张表里——
+  // 它的形状不一样（分级分布、口径版本、临时计数），
+  // 硬塞进通用模型只会让这个模型变成什么都能装的容器。
+  // 走 `GET /v1/metrics:automation-rate`，Rework Rate 一并在那里返回。
+  {
+    id: 'agent.cost.total',
+    title: 'Agent 成本',
+    scope: 'agent',
+    definition: '全部 AgentRun 的 costUsd 之和（美元）',
+    filter: { type: 'AgentRun' },
+    aggregate: { fn: 'sum', attribute: 'costUsd' },
+    direction: 'lower-is-better',
+  },
+  {
+    id: 'agent.tokens.total',
+    title: 'Token 消耗',
+    scope: 'agent',
+    definition: '全部 AgentRun 的 tokensUsed 之和',
+    filter: { type: 'AgentRun' },
+    aggregate: { fn: 'sum', attribute: 'tokensUsed' },
+    direction: 'lower-is-better',
+  },
+  {
+    id: 'agent.success-rate',
+    title: 'Run 成功率',
+    scope: 'agent',
+    // 分母是**已经跑完的** Run。把 Queued / Running 算进分母，
+    // 成功率会随着排队长度上下跳，而那和成功不成功毫无关系
+    definition: 'Succeeded / 已进入终态的 AgentRun（Succeeded + Failed + Cancelled）',
+    filter: { type: 'AgentRun', status: ['Succeeded', 'Failed', 'Cancelled'] },
+    ratio: { numerator: { status: ['Succeeded'] } },
+    direction: 'higher-is-better',
+  },
+  {
+    id: 'agent.acceptance-rate',
+    title: '产出采纳率',
+    scope: 'agent',
+    // 只看走到过人工审阅的那些：Autonomous 模式直接 Succeeded，
+    // 把它们算进分母等于把"没人看过"算成"被采纳了"
+    definition: 'Succeeded / 曾进入 AwaitingReview 的 Run（Succeeded + Failed）',
+    filter: { type: 'AgentRun', status: ['AwaitingReview', 'Succeeded', 'Failed'] },
+    ratio: { numerator: { status: ['Succeeded'] } },
+    direction: 'higher-is-better',
+  },
+  {
+    id: 'agent.latency.avg',
+    title: 'Run 平均时延',
+    scope: 'agent',
+    definition: '已结算 Run 的 durationMs 平均值（毫秒）',
+    filter: { type: 'AgentRun' },
+    aggregate: { fn: 'avg', attribute: 'durationMs' },
+    direction: 'lower-is-better',
+  },
+  {
+    id: 'agent.ask-rate',
+    title: '人工确认触发率',
+    scope: 'agent',
+    // 过高说明权限或护栏设的太紧，人被叫醒得太频繁；
+    // 恒为零则说明护栏可能根本没生效
+    definition: '待确认 / 全部人工确认单（Pending / 全部 Approval）',
+    filter: { type: 'Approval' },
+    ratio: { numerator: { status: ['Pending'] } },
+    direction: 'lower-is-better',
+  },
 ]
+
+/**
+ * 指标 id 必须唯一。
+ *
+ * 重复的 id 不会报错，只会让 `findMetric` 永远返回第一条、
+ * 目录里出现两个同名条目——而"我明明改了这个指标的口径却不生效"
+ * 是一个极难查的现象。加指标时撞了 id 在这里当场炸掉。
+ * （这条是被自己撞出来的：新增 Agent 指标时重复定义了 agent.runs.by-status。）
+ */
+const duplicateIds = DEFAULT_METRICS.map((m) => m.id).filter(
+  (id, i, all) => all.indexOf(id) !== i,
+)
+if (duplicateIds.length > 0) {
+  throw new Error(`duplicate metric ids: ${[...new Set(duplicateIds)].join(', ')}`)
+}
 
 export function findMetric(id: string): MetricDef | undefined {
   return DEFAULT_METRICS.find((m) => m.id === id)

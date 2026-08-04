@@ -259,6 +259,46 @@ export class DashboardService {
     const metric = this.#require(metricId)
     const filter = { ...metric.filter, ...definedOnly(scope) }
 
+    // 求和 / 求平均：数条数答不了"花了多少钱"
+    if (metric.aggregate !== undefined) {
+      const { value, counted } = await this.#resources.aggregate(
+        caller,
+        filter,
+        metric.aggregate.fn,
+        metric.aggregate.attribute,
+      )
+      return {
+        id: metric.id,
+        title: metric.title,
+        definition: metric.definition,
+        direction: metric.direction,
+        total: value,
+        // 参与计算的条数一起给：平均值背后是 3 条还是 300 条，
+        // 决定了它值不值得当回事
+        groups: [{ key: 'counted', count: counted }],
+        computedAt: new Date(),
+      }
+    }
+
+    // 比率：分子分母共用同一个 filter 基底，因此不可能对不上
+    if (metric.ratio !== undefined) {
+      const denominator = await this.#countOf(caller, filter)
+      const numerator = await this.#countOf(caller, { ...filter, ...metric.ratio.numerator })
+      return {
+        id: metric.id,
+        title: metric.title,
+        definition: metric.definition,
+        direction: metric.direction,
+        // 分母为 0 时是 0 而不是 NaN——界面上 NaN 是一片吓人的空白
+        total: denominator === 0 ? 0 : Math.round((numerator / denominator) * 10_000) / 10_000,
+        groups: [
+          { key: 'numerator', count: numerator },
+          { key: 'denominator', count: denominator },
+        ],
+        computedAt: new Date(),
+      }
+    }
+
     // 分组与不分组都走同一条 countGrouped：不分组时按 type 分组再求和。
     // 少一条代码路径，就少一个"两处算得不一样"的可能
     const groups = await this.#resources.countGrouped(caller, filter, metric.groupBy ?? 'type')
@@ -296,6 +336,11 @@ export class DashboardService {
       Object.assign(filter, groupFilter(metric.groupBy, group))
     }
     return this.#resources.query(caller, filter, page)
+  }
+
+  async #countOf(caller: Caller, filter: Record<string, unknown>): Promise<number> {
+    const groups = await this.#resources.countGrouped(caller, filter, 'type')
+    return groups.reduce((sum, g) => sum + g.count, 0)
   }
 
   #require(metricId: string): MetricDef {
