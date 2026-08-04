@@ -473,3 +473,58 @@ body {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ── Dashboard ─────────────────────────────────────── */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  padding: 4px;
+  align-content: start;
+  width: 100%;
+}
+.metric-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.metric-title { font-size: 13px; font-weight: 600; }
+.metric-value {
+  font-size: 34px;
+  font-weight: 600;
+  text-align: left;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.metric-value:hover { color: var(--accent); }
+/* 方向只用来提示"多了好还是少了好"，不替使用者下判断——
+   同一个数字在不同项目里可能是好消息也可能是坏消息 */
+.metric-value.lower-is-better::after { content: ' ↓'; font-size: 14px; color: var(--text-dim); }
+.metric-value.higher-is-better::after { content: ' ↑'; font-size: 14px; color: var(--text-dim); }
+.metric-groups { display: flex; flex-direction: column; gap: 2px; }
+.metric-group {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.metric-group:hover { background: var(--surface-2); }
+.metric-group .count { font-variant-numeric: tabular-nums; font-weight: 600; }
+.metric-definition { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+.metric-failed { font-size: 12px; color: var(--danger, #c92a2a); }

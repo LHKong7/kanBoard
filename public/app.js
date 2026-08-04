@@ -33,6 +33,9 @@ const state = {
   /** @type {{id: string, version: number}|null} */ editing: null,
   /** 当前检索词。空串表示不过滤。 */
   /** @type {string} */ search: '',
+  /** 当前视图：某个类型的看板，或 Dashboard */
+  /** @type {'board'|'dashboard'} */ view: 'board',
+  /** @type {any[]} */ metrics: [],
   /**
    * 这一页是否被截断了。
    *
@@ -171,6 +174,7 @@ let boardableTypes = []
  * 两边各存一份状态迟早会对不上。
  */
 function applyUrl(params, boardable) {
+  state.view = params.get('view') === 'dashboard' ? 'dashboard' : 'board'
   const wanted = params.get('type')
   const valid = boardable.some((t) => t.name === wanted)
   // URL 里写了个不存在的类型就退回第一个，而不是留在空白看板上
@@ -182,8 +186,9 @@ function applyUrl(params, boardable) {
 /** 把当前视图写回地址栏。`replace` 用于不该在历史里留一条记录的变化（如输入中的搜索） */
 function syncUrl(replace = false) {
   const params = new URLSearchParams()
-  if (state.activeType !== '') params.set('type', state.activeType)
-  if (state.search !== '') params.set('q', state.search)
+  if (state.view === 'dashboard') params.set('view', 'dashboard')
+  else if (state.activeType !== '') params.set('type', state.activeType)
+  if (state.search !== '' && state.view === 'board') params.set('q', state.search)
   const qs = params.toString()
   const url = qs === '' ? location.pathname : `${location.pathname}?${qs}`
   if (url === location.pathname + location.search) return
@@ -203,13 +208,26 @@ function lifecycleFor(typeName) {
 }
 
 function renderTabs(types) {
+  const dashboard = document.createElement('button')
+  dashboard.className = 'type-tab'
+  dashboard.textContent = 'Dashboard'
+  dashboard.setAttribute('aria-selected', String(state.view === 'dashboard'))
+  dashboard.onclick = async () => {
+    state.view = 'dashboard'
+    syncUrl()
+    renderTabs(types)
+    closeDrawer()
+    await refresh()
+  }
+
   el.typeTabs.replaceChildren(
     ...types.map((t) => {
       const btn = document.createElement('button')
       btn.className = 'type-tab'
       btn.textContent = t.name
-      btn.setAttribute('aria-selected', String(t.name === state.activeType))
+      btn.setAttribute('aria-selected', String(state.view === 'board' && t.name === state.activeType))
       btn.onclick = async () => {
+        state.view = 'board'
         state.activeType = t.name
         // 切换类型是一次导航，该在历史里留一条——后退键要能回到上一个看板
         syncUrl()
@@ -219,12 +237,14 @@ function renderTabs(types) {
       }
       return btn
     }),
+    dashboard,
   )
 }
 
 // ── 看板 ────────────────────────────────────────────
 
 async function refresh() {
+  if (state.view === 'dashboard') return refreshDashboard()
   if (state.activeType === '') return
   // 走 GET 而不是 POST :query。
   //
@@ -237,6 +257,117 @@ async function refresh() {
   state.items = result.items
   state.truncated = result.nextCursor !== null
   renderBoard()
+}
+
+/**
+ * Dashboard（FR-DASH-005/006）。
+ *
+ * 每张卡片显示一个指标，并把**口径**一起显示出来——
+ * 一个没有口径的数字，两个人会读出两个意思。
+ * 点开就是下钻：同一个 filter 不做聚合再跑一遍，所以条数必然对得上。
+ */
+async function refreshDashboard() {
+  if (state.metrics.length === 0) {
+    state.metrics = (await api('/v1/metrics')).items
+  }
+  el.board.replaceChildren(hint('加载指标…', '', true))
+
+  const values = await Promise.all(
+    state.metrics.map(async (m) => {
+      try {
+        return await api(`/v1/metrics/${m.id}`)
+      } catch (error) {
+        // 一个指标算不出来不该让整块面板空白。把失败显示成失败，
+        // 而不是显示成 0——0 是个会被当真的数字
+        return { id: m.id, title: m.title, failed: String(error.message) }
+      }
+    }),
+  )
+
+  const grid = document.createElement('div')
+  grid.className = 'metric-grid'
+  grid.append(...values.map(renderMetricCard))
+  el.board.replaceChildren(grid)
+}
+
+function renderMetricCard(value) {
+  const card = document.createElement('section')
+  card.className = 'metric-card'
+  card.dataset['metric'] = value.id
+
+  const title = document.createElement('div')
+  title.className = 'metric-title'
+  title.textContent = value.title
+  card.append(title)
+
+  if (value.failed !== undefined) {
+    const failed = document.createElement('div')
+    failed.className = 'metric-failed'
+    failed.textContent = `算不出来：${value.failed}`
+    card.append(failed)
+    return card
+  }
+
+  if (value.groups.length === 0) {
+    const big = document.createElement('button')
+    big.className = `metric-value ${value.direction}`
+    big.textContent = String(value.total)
+    big.onclick = () => void openBreakdown(value)
+    card.append(big)
+  } else {
+    const list = document.createElement('div')
+    list.className = 'metric-groups'
+    for (const g of value.groups) {
+      const row = document.createElement('button')
+      row.className = 'metric-group'
+      row.dataset['group'] = g.key
+      row.innerHTML = '<span></span><span class="count"></span>'
+      row.querySelector('span').textContent = g.key
+      row.querySelector('.count').textContent = String(g.count)
+      row.onclick = () => void openBreakdown(value, g.key)
+      list.append(row)
+    }
+    card.append(list)
+  }
+
+  // 口径跟着数字走，不放在别处的文档里
+  const definition = document.createElement('div')
+  definition.className = 'metric-definition'
+  definition.textContent = value.definition
+  card.append(definition)
+  return card
+}
+
+/** 下钻：把构成这个数字的对象列出来 */
+async function openBreakdown(value, group) {
+  el.drawer.hidden = false
+  el.drawerType.textContent = '指标下钻'
+  el.drawerTitle.textContent = group === undefined ? value.title : `${value.title} · ${group}`
+  el.drawerBody.replaceChildren(hint('加载中…', '', true))
+
+  try {
+    const qs = group === undefined ? '' : `?group=${encodeURIComponent(group)}`
+    const result = await api(`/v1/metrics/${value.id}/items${qs}`)
+    const section = document.createElement('div')
+    section.className = 'section'
+
+    const count = document.createElement('div')
+    count.className = 'hint'
+    count.textContent = `${result.items.length} 项${result.nextCursor === null ? '' : '（还有更多）'}`
+    section.append(count)
+
+    for (const item of result.items) {
+      const row = document.createElement('button')
+      row.className = 'rel-row'
+      row.dataset['id'] = item.id
+      row.textContent = `${item.type} · ${item.attributes.title ?? item.attributes.name ?? item.id} · ${item.status}`
+      row.onclick = () => void openDrawer(item.id)
+      section.append(row)
+    }
+    el.drawerBody.replaceChildren(section)
+  } catch (error) {
+    el.drawerBody.replaceChildren(hint('下钻失败', String(error.message), true))
+  }
 }
 
 function renderBoard() {

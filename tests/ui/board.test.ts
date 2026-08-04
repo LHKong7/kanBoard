@@ -734,3 +734,64 @@ describe('表单上能看到长度上限', () => {
     await page.click('#modalClose')
   })
 })
+
+/**
+ * Dashboard（FR-DASH-005/006）。
+ *
+ * 要盯住的是两件事：**口径和数字一起显示**，以及**点开的明细与数字一致**。
+ * 只断言"能显示一个数"没有价值——错的数字也是数字。
+ */
+describe('Dashboard', () => {
+  it('每个指标都把口径显示在数字旁边', async () => {
+    await page.goto(`${baseUrl}/?view=dashboard`)
+    await page.waitForSelector('.metric-card')
+
+    const cards = await page.locator('.metric-card').count()
+    assert.ok(cards > 0, '一个指标都没有')
+    // 没有口径的数字，两个人会读出两个意思
+    assert.equal(await page.locator('.metric-definition').count(), cards)
+  })
+
+  it('点开一个数字，明细条数与它相同', async () => {
+    for (const title of ['被阻塞的任务 A', '被阻塞的任务 B']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/resources',
+        headers: { ...AUTH, 'content-type': 'application/json' },
+        payload: {
+          type: 'Task',
+          workspace: 'ws_dash',
+          attributes: { title, assignee: 'user://bob', blockReason: '等依赖' },
+        },
+      })
+      const id = res.json().id
+      for (const to of ['Doing', 'Blocked']) {
+        await app.inject({
+          method: 'POST',
+          url: `/v1/resources/${id}/transitions`,
+          headers: { ...AUTH, 'content-type': 'application/json' },
+          payload: { to },
+        })
+      }
+    }
+
+    await page.goto(`${baseUrl}/?view=dashboard`)
+    await page.waitForSelector('[data-metric="project.tasks.blocked"] .metric-value')
+
+    const shown = Number(
+      await page.locator('[data-metric="project.tasks.blocked"] .metric-value').textContent(),
+    )
+    assert.ok(shown >= 2, `期望至少 2，实际 ${shown}`)
+
+    await page.click('[data-metric="project.tasks.blocked"] .metric-value')
+    await page.waitForSelector('.drawer-body .rel-row')
+    assert.equal(await page.locator('.drawer-body .rel-row').count(), shown)
+  })
+
+  it('Dashboard 视图有自己的 URL', async () => {
+    await openBoard('Task')
+    await page.click('.type-tab:text-is("Dashboard")')
+    await page.waitForSelector('.metric-card')
+    assert.equal(new URL(page.url()).searchParams.get('view'), 'dashboard')
+  })
+})

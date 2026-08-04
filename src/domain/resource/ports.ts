@@ -28,6 +28,14 @@ export type ResourceFilter = {
   text?: string | undefined
 }
 
+/** 可分组的字段。限定成一小组：任意字段分组会变成一个没有边界的查询接口 */
+export type GroupableField = 'status' | 'type' | 'owner' | 'project'
+
+export type GroupCount = {
+  key: string
+  count: number
+}
+
 export type Page = {
   size: number
   /** 游标即上一页最后一条的 id。ULID 有序，因此 id 就是稳定游标（FR-RES-012）。 */
@@ -89,6 +97,14 @@ export interface ResourceRepository {
   /** 带乐观锁的更新；版本不符返回 false，由服务层抛 ConflictError */
   update(resource: Resource, expectedVersion: number): Promise<boolean>
   query(filter: ResourceFilter, page: Page): Promise<PageResult<Resource>>
+  /**
+   * 分组计数（FR-DASH-005）。
+   *
+   * 指标必须**算出来**，不能靠人填。而"算"如果是把行拉回来在内存里数，
+   * 一个 100 万行的租户就会把进程打死——所以计数留在数据库里。
+   * 过滤条件与 `query` 完全共用，指标和它的下钻明细因此不可能对不上。
+   */
+  countGrouped(filter: ResourceFilter, groupBy: GroupableField): Promise<GroupCount[]>
   appendHistory(entry: HistoryEntry): Promise<void>
   history(resourceId: string, page: Page): Promise<PageResult<HistoryEntry>>
 }

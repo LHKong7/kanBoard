@@ -2,6 +2,8 @@ import { sql } from 'kysely'
 import type { Db } from './db/client.ts'
 import type { FieldChange } from './db/schema.ts'
 import type {
+  GroupCount,
+  GroupableField,
   Page,
   PageResult,
   ResourceFilter,
@@ -75,6 +77,13 @@ const RESOURCE_COLUMNS = [
   'visibility',
   'deleted_at',
 ] as const
+
+const GROUP_COLUMNS: Record<GroupableField, 'status' | 'type' | 'owner' | 'project'> = {
+  status: 'status',
+  type: 'type',
+  owner: 'owner',
+  project: 'project',
+}
 
 type ResourceRow = {
   id: string
@@ -195,41 +204,58 @@ export class PgResourceRepository implements ResourceRepository {
     return (result.numUpdatedRows ?? 0n) > 0n
   }
 
-  async query(filter: ResourceFilter, page: Page): Promise<PageResult<Resource>> {
-    const size = Math.min(Math.max(page.size, 1), 200)
-
-    let q = this.#db.selectFrom('resources').select(RESOURCE_COLUMNS).where('tenant', '=', this.#tenant)
-
-    if (filter.type !== undefined) q = q.where('type', '=', filter.type)
-    if (filter.workspace !== undefined) q = q.where('workspace', '=', filter.workspace)
-    if (filter.project !== undefined) q = q.where('project', '=', filter.project)
-    if (filter.owner !== undefined) q = q.where('owner', '=', filter.owner)
+  /**
+   * 过滤条件的**唯一**构造处。
+   *
+   * `query`（列表 / 下钻）与 `countGrouped`（指标）都走它。
+   * 分成两份写的话，指标算出 12 条、点开明细看到 9 条——
+   * 而这种不一致没人会当成 bug 报，只会让人默默不再相信这个数字。
+   */
+  #applyFilter<Q extends { where: (...args: never[]) => Q }>(q: Q, filter: ResourceFilter): Q {
+    // 用 any 桥接 Kysely 的 builder 泛型：这里只加 WHERE，不改变 select 的形状
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    let b = q as any
+    b = b.where('tenant', '=', this.#tenant)
+    if (filter.type !== undefined) b = b.where('type', '=', filter.type)
+    if (filter.workspace !== undefined) b = b.where('workspace', '=', filter.workspace)
+    if (filter.project !== undefined) b = b.where('project', '=', filter.project)
+    if (filter.owner !== undefined) b = b.where('owner', '=', filter.owner)
     if (filter.status !== undefined && filter.status.length > 0) {
-      q = q.where('status', 'in', filter.status as string[])
+      b = b.where('status', 'in', filter.status as string[])
     }
     if (filter.labels !== undefined && filter.labels.length > 0) {
-      q = q.where(sql<boolean>`labels @> ${sql.val(filter.labels as string[])}`)
+      b = b.where(sql<boolean>`labels @> ${sql.val(filter.labels as string[])}`)
     }
     if (filter.attributes !== undefined && Object.keys(filter.attributes).length > 0) {
       // @> 走 jsonb_path_ops GIN 索引
-      q = q.where(sql<boolean>`attributes @> ${JSON.stringify(filter.attributes)}::jsonb`)
+      b = b.where(sql<boolean>`attributes @> ${JSON.stringify(filter.attributes)}::jsonb`)
     }
     const term = filter.text?.trim()
     if (term !== undefined && term !== '') {
       if (RESOURCE_ID.test(term)) {
-        // 粘贴一个 id 过来找对象：走主键，不必让 ULID 的随机字符去污染 trigram 索引
-        q = q.where('id', '=', term)
+        b = b.where('id', '=', term)
       } else if (term.length >= TRIGRAM_MIN) {
-        // ILIKE 才能命中 gin_trgm_ops 索引
-        q = q.where(sql<boolean>`search_text ILIKE ${'%' + escapeLike(term) + '%'}`)
+        b = b.where(sql<boolean>`search_text ILIKE ${'%' + escapeLike(term) + '%'}`)
       } else {
-        // 短查询**刻意避开** trigram 索引，见下方 shortTermPredicate 的说明
-        q = q.where(sql<boolean>`strpos(lower(search_text), lower(${term})) > 0`)
+        b = b.where(sql<boolean>`strpos(lower(search_text), lower(${term})) > 0`)
       }
     }
     if (filter.includeDeleted !== true) {
-      q = q.where('deleted_at', 'is', null)
+      b = b.where('deleted_at', 'is', null)
     }
+    return b as Q
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+  }
+
+  async query(filter: ResourceFilter, page: Page): Promise<PageResult<Resource>> {
+    const size = Math.min(Math.max(page.size, 1), 200)
+
+    let q = this.#applyFilter(
+      this.#db.selectFrom('resources').select(RESOURCE_COLUMNS),
+      filter,
+    )
+    const term = filter.text?.trim()
+
     if (page.cursor !== undefined) {
       // ULID 单调递增，倒序分页取严格小于游标的下一批
       q = q.where('id', '<', page.cursor)
@@ -266,6 +292,29 @@ export class PgResourceRepository implements ResourceRepository {
       items,
       nextCursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,
     }
+  }
+
+  /**
+   * 分组计数。复用 `query` 的过滤条件构造，指标与下钻明细因此天然一致。
+   *
+   * 把 WHERE 的构造抽出来是必须的：如果指标一套条件、下钻另一套，
+   * 用户点开明细会发现条数对不上——而那种不一致没人会当成 bug 报，
+   * 只会让人默默不再相信这个数字。
+   */
+  async countGrouped(filter: ResourceFilter, groupBy: GroupableField): Promise<GroupCount[]> {
+    const column = GROUP_COLUMNS[groupBy]
+    const rows = await this.#applyFilter(
+      this.#db.selectFrom('resources').select((eb) => [
+        eb.ref(column).as('key'),
+        eb.fn.countAll<string>().as('count'),
+      ]),
+      filter,
+    )
+      .groupBy(column)
+      .orderBy('count', 'desc')
+      .execute()
+
+    return rows.map((r) => ({ key: r.key ?? '(none)', count: Number(r.count) }))
   }
 
   async appendHistory(entry: HistoryEntry): Promise<void> {

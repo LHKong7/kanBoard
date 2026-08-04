@@ -23,6 +23,9 @@ import {
   pathSchema,
   querySchema,
   queryParamsSchema,
+  metricIdSchema,
+  metricScopeSchema,
+  metricBreakdownSchema,
   confirmRelationSchema,
   relateSchema,
   relationDirectionSchema,
@@ -31,6 +34,7 @@ import {
   traverseSchema,
   updateResourceSchema,
 } from './schemas.ts'
+import { DashboardService } from '../domain/dashboard/service.ts'
 import { toWire } from './serialize.ts'
 import { registerStatic } from './static.ts'
 
@@ -261,6 +265,44 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
           includeDeleted: q.includeDeleted === 'true',
         },
         { size: q.size ?? 50, cursor: q.cursor },
+      ),
+    )
+    return { items: result.items.map(toWire), nextCursor: result.nextCursor }
+  })
+
+  // ── Dashboard 指标（FR-DASH-005/006/010/011） ─────────────
+  //
+  // 注意这里**只有 GET**。指标没有写路径，不是"暂时还没做"，
+  // 而是设计如此：指标是算出来的，因此系统里不存在人工填报入口。
+  app.get('/v1/metrics', async (request) => {
+    const items = await inTenant(request, async (service, caller) => {
+      // 目录本身也要认证过才给：指标名会泄漏这个系统在盯什么
+      void caller
+      return new DashboardService(service).catalogue()
+    })
+    return { items }
+  })
+
+  app.get('/v1/metrics/:id', async (request) => {
+    const params = metricIdSchema.parse(request.params)
+    const q = metricScopeSchema.parse(request.query ?? {})
+    const value = await inTenant(request, (service, caller) =>
+      new DashboardService(service).value(caller, params.id, q),
+    )
+    return { ...value, computedAt: value.computedAt.toISOString() }
+  })
+
+  /** 下钻：和指标共用 filter，因此条数天然一致（FR-DASH-006） */
+  app.get('/v1/metrics/:id/items', async (request) => {
+    const params = metricIdSchema.parse(request.params)
+    const q = metricBreakdownSchema.parse(request.query ?? {})
+    const result = await inTenant(request, (service, caller) =>
+      new DashboardService(service).breakdown(
+        caller,
+        params.id,
+        { project: q.project, workspace: q.workspace },
+        { size: q.size ?? 50, cursor: q.cursor },
+        q.group,
       ),
     )
     return { items: result.items.map(toWire), nextCursor: result.nextCursor }

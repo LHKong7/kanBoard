@@ -153,3 +153,25 @@ export type QueryBody = z.infer<typeof querySchema>
 export type RelateBody = z.infer<typeof relateSchema>
 export type TraverseBody = z.infer<typeof traverseSchema>
 export type PathBody = z.infer<typeof pathSchema>
+
+/**
+ * Dashboard 指标的参数（FR-DASH-005/006）。
+ *
+ * 指标 id 是点分小写标识（`project.tasks.blocked`），不是资源 id，
+ * 所以单独一个 schema 而不是复用 `resourceIdSchema`。
+ */
+export const metricIdSchema = z.object({ id: z.string().min(1).max(96).regex(/^[a-z][a-z0-9.-]*$/) })
+
+export const metricScopeSchema = z
+  .object({
+    project: resourceIdSchema.optional(),
+    workspace: z.string().max(64).optional(),
+  })
+  .strict()
+
+export const metricBreakdownSchema = metricScopeSchema.extend({
+  /** 分布指标里被点开的那一格，如 status=Blocked */
+  group: z.string().max(64).optional(),
+  size: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().max(64).optional(),
+}).strict()

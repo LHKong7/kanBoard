@@ -30,6 +30,8 @@ import {
 import type {
   AuditSink,
   EventSink,
+  GroupCount,
+  GroupableField,
   Page,
   PageResult,
   PathHit,
@@ -641,6 +643,29 @@ export class ResourceService {
       type,
     )
     return this.#deps.resources.query(filter, page)
+  }
+
+  /**
+   * 分组计数（FR-DASH-005）。
+   *
+   * 与 `query` 走**同一次授权**：指标看得到的范围，和列表看得到的范围
+   * 必须是同一个，否则 Dashboard 会变成一条绕过权限的旁路——
+   * "看不到明细但能看到条数"本身就是信息泄漏。
+   */
+  async countGrouped(
+    caller: Caller,
+    filter: ResourceFilter,
+    groupBy: GroupableField,
+  ): Promise<GroupCount[]> {
+    const type = filter.type
+    await this.#authorize(
+      caller,
+      type === undefined ? 'Resource.Read' : `${type}.Read`,
+      { tenant: caller.subject.tenant, workspace: filter.workspace, project: filter.project, type },
+      undefined,
+      type,
+    )
+    return this.#deps.resources.countGrouped(filter, groupBy)
   }
 
   async history(caller: Caller, id: string, page: Page): Promise<PageResult<import('./resource.ts').HistoryEntry>> {
