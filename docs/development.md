@@ -63,9 +63,19 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO projectos_dev_app;
 
 | 值 | 行为 |
 | --- | --- |
-| `all`（默认） | API + poller 同进程，本地开发用 |
-| `api` | 只起 HTTP，不消费 outbox |
-| `poller` | 只消费 outbox，不监听端口 |
+| `all`（默认） | API + poller + agent runner 同进程，本地开发用 |
+| `api` | 只起 HTTP，不消费 outbox、不跑 Agent |
+| `poller` | 只消费 outbox |
+
+Agent Runner 另外要 `PROJECTOS_MODEL`：
+
+| 值 | 行为 |
+| --- | --- |
+| `none`（默认） | **不启动 runner**。没有模型凭据时明确地什么都不做 |
+| `scripted` | 用确定性模型跑通链路，不做真实推理 |
+
+默认不启动是刻意的：退回到某个"看起来能跑"的假实现，会让线上安静地
+产出一堆无意义的草稿——而草稿是会被人当真的。
 
 集成测试需要一个可连的 Postgres：
 
@@ -300,3 +310,4 @@ curl -X POST localhost:3000/v1/resources \
 
 - [M0 状态](m0-status.md)：地基层（本体、统一模型、权限、隔离）
 - [M1 状态](m1-status.md)：工作流引擎、自动化、看板 UI
+- [Agent 层状态](agent-status.md)：Agent Runtime、Run 轨迹、协作模式与预算

@@ -2,6 +2,8 @@ import { buildDefaultRegistry } from './ontology/defaults.ts'
 import { buildDefaultWorkflowRegistry } from './workflow/defaults.ts'
 import { DEFAULT_AUTOMATION_RULES } from './workflow/automation.ts'
 import { OutboxPoller } from './infrastructure/poller.ts'
+import { AgentRunner } from './infrastructure/agent-runner.ts'
+import { ScriptedModelClient } from './infrastructure/model/scripted.ts'
 import { defaultPolicies } from './identity/default-policies.ts'
 import { createPool } from './infrastructure/db/client.ts'
 import { migrate } from './infrastructure/db/migrate.ts'
@@ -59,9 +61,37 @@ const poller =
     ? null
     : new OutboxPoller({ pool, registry, workflows, policies, rules: DEFAULT_AUTOMATION_RULES, tenants: [tenant] })
 
+/**
+ * Agent Runner（ADR-0008 的第三种进程角色）。
+ *
+ * 模型客户端目前只有确定性实现：真实供应商的适配器要凭据，
+ * 而**没有凭据时应当明确地什么都不做**，不该退回到某个"看起来能跑"的假实现，
+ * 否则线上会安静地产出一堆无意义的草稿。所以这里的默认是
+ * 不启动 runner——想在本地跑通链路时用 PROJECTOS_MODEL=scripted 显式打开。
+ */
+const modelKind = process.env['PROJECTOS_MODEL'] ?? 'none'
+const runner =
+  role === 'api' || role === 'poller' || modelKind === 'none'
+    ? null
+    : new AgentRunner({
+        pool,
+        registry,
+        workflows,
+        policies,
+        tenants: [tenant],
+        model: new ScriptedModelClient([
+          { thought: '（确定性模型：不做实际推理）', action: { kind: 'finish', summary: '未接入真实模型' } },
+        ]),
+      })
+
+if (modelKind === 'none' && role !== 'api' && role !== 'poller') {
+  console.log('agent runner disabled: no model configured (set PROJECTOS_MODEL=scripted for a dry run)')
+}
+
 const shutdown = async (signal: string): Promise<void> => {
   console.log(`${signal} received, shutting down`)
   poller?.stop()
+  runner?.stop()
   await app.close()
   await pool.end()
   process.exit(0)
@@ -78,4 +108,9 @@ if (role !== 'poller') {
 if (poller !== null) {
   console.log(`outbox poller started (${DEFAULT_AUTOMATION_RULES.length} automation rules)`)
   void poller.run()
+}
+
+if (runner !== null) {
+  console.log(`agent runner started (model=${modelKind})`)
+  void runner.run()
 }

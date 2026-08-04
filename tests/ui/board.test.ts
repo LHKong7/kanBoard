@@ -119,7 +119,12 @@ describe('看板的列来自状态机，不是前端写死的', () => {
 
   it('每个有生命周期的类型都有一个标签页', async () => {
     const tabs = await page.locator('.type-tab').allTextContents()
-    for (const expected of ['Project', 'Requirement', 'Story', 'Task', 'Decision', 'Knowledge', 'Agent']) {
+    // AgentRun 在这里，是因为本体里注册了它并给了生命周期——**前端一行没改**。
+    // 这是 ADR-0001「UI 是本体的渲染视图」最直接的一次兑现：
+    // 新增一整类领域对象（一次 Agent 执行）不需要动界面代码
+    for (const expected of [
+      'Project', 'Requirement', 'Story', 'Task', 'Decision', 'Knowledge', 'Agent', 'AgentRun',
+    ]) {
       assert.ok(tabs.includes(expected), `缺少标签页：${expected}`)
     }
   })
