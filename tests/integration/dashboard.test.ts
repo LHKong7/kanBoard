@@ -601,3 +601,126 @@ describe('the Agent metric set (FR-DASH-003)', () => {
     expect(res.statusCode).toBeGreaterThanOrEqual(400)
   })
 })
+
+/**
+ * Project 与 Team 视角（FR-DASH-001：8 项 / FR-DASH-002：6 项）。
+ *
+ * 这两组之前"各有几项"，缺的不是代码而是**对象**：
+ * Velocity 要有 Sprint，Milestone / Risk / Budget / Capacity 各自要有类型。
+ * 先补类型再补指标是对的顺序——反过来只会得到几个恒为零的数字，
+ * 而恒为零的指标比没有指标更容易让人误判。
+ */
+describe('the Project and Team metric sets (FR-DASH-001/002)', () => {
+  it('covers all eight Project metrics', async () => {
+    const catalogue = (await app.inject({ method: 'GET', url: '/v1/metrics', headers: asAdmin }))
+      .json().items as { id: string; scope: string }[]
+    const ids = catalogue.filter((m) => m.scope === 'project').map((m) => m.id)
+    for (const id of [
+      'project.burndown.remaining',
+      'project.velocity.completed-points',
+      'project.milestones.on-track',
+      'project.risks.open',
+      'project.budget.consumed',
+      'project.scope-change.superseded',
+      'project.cycle-time.done-stories',
+      'project.lead-time.finished-requirements',
+    ]) {
+      expect(ids, `缺少 ${id}`).toContain(id)
+    }
+  })
+
+  it('covers all six Team metrics', async () => {
+    const catalogue = (await app.inject({ method: 'GET', url: '/v1/metrics', headers: asAdmin }))
+      .json().items as { id: string; scope: string }[]
+    const ids = catalogue.filter((m) => m.scope === 'team').map((m) => m.id)
+    for (const id of [
+      'team.capacity.planned',
+      // Workload 用的是既有的这条，不另起一个同义指标——
+      // 目录里出现两个意思一样的数字，比少一个更糟
+      'team.tasks.by-owner',
+      'team.review.waiting',
+      'team.wip.in-progress',
+      'team.blocked.count',
+      'team.human-vs-agent',
+    ]) {
+      expect(ids, `缺少 ${id}`).toContain(id)
+    }
+    expect(ids).toHaveLength(6)
+  })
+
+  it('sums velocity over closed sprints only', async () => {
+    const closed = await create('Sprint', {
+      name: 'S1',
+      startAt: '2026-07-01T00:00:00Z',
+      endAt: '2026-07-14T00:00:00Z',
+      completedPoints: 21,
+    })
+    await move(closed, 'Active')
+    await move(closed, 'Closed')
+    // 还在跑的这次不该计入——它还没跑完
+    await create('Sprint', {
+      name: 'S2',
+      startAt: '2026-07-15T00:00:00Z',
+      endAt: '2026-07-28T00:00:00Z',
+      completedPoints: 99,
+    })
+
+    expect((await metric('project.velocity.completed-points')).json().total).toBe(21)
+  })
+
+  it('counts at-risk milestones in the denominator', async () => {
+    // 把有风险的排除掉，这个数字会在最需要示警的时候反而变好看
+    const reached = await create('Milestone', { name: 'M1', dueDate: '2026-08-01T00:00:00Z' })
+    await move(reached, 'Reached')
+    const atRisk = await create('Milestone', { name: 'M2', dueDate: '2026-09-01T00:00:00Z' })
+    await move(atRisk, 'AtRisk')
+
+    const body = (await metric('project.milestones.on-track')).json()
+    expect(body.total).toBe(0.5)
+    expect(body.groups.find((g: { key: string }) => g.key === 'denominator').count).toBe(2)
+  })
+
+  it('refuses to call a risk mitigated without an owner and a plan', async () => {
+    // PRD 03 §2 的不变量。一条没人负责、没有对策的"正在缓解"
+    // 是这类登记册最常见的自欺
+    const risk = await create('Risk', {
+      description: '第三方限流可能拖垮导出',
+      probability: 'high',
+      impact: 'high',
+    })
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/resources/${risk}/transitions`,
+      headers: asAdmin,
+      payload: { to: 'Mitigating' },
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json().message).toMatch(/mitigation/)
+  })
+
+  it('registers a risk without ceremony', async () => {
+    // 登记的门槛越高越没人记。守卫在 Mitigating 上，不在创建时
+    const risk = await create('Risk', {
+      description: '只是记一笔',
+      probability: 'low',
+      impact: 'low',
+    })
+    expect(risk).toBeTruthy()
+  })
+
+  it('splits workload by owner rather than reporting a total', async () => {
+    // 负载的问题从来不是"总量多少"，是"是不是压在一个人身上"
+    await create('Task', { title: 'A', assignee: 'user://bob' })
+    await create('Task', { title: 'B', assignee: 'user://bob' })
+    const body = (await metric('team.tasks.by-owner')).json()
+    expect(body.groups.length).toBeGreaterThan(0)
+    expect(body.total).toBe(2)
+  })
+
+  it('drills down from a Project metric like any other', async () => {
+    const risk = await create('Risk', { description: 'r', probability: 'low', impact: 'low' })
+    const detail = (await items('project.risks.open')).json()
+    expect(detail.items).toHaveLength(1)
+    expect(detail.items[0].id).toBe(risk)
+  })
+})

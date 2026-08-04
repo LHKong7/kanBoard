@@ -249,6 +249,85 @@ export const RELEASE_LIFECYCLE: Lifecycle = {
  * 把超时并进 Rejected 的话，"有多少确认是被人拒的、多少是没人管"
  * 就再也分不出来——而这两件事要采取的行动完全不同。
  */
+
+export const SPRINT_LIFECYCLE: Lifecycle = {
+  id: 'sprint-default',
+  entityType: 'Sprint',
+  initial: 'Planned',
+  states: [
+    { name: 'Planned' },
+    { name: 'Active' },
+    { name: 'Closed', terminal: true },
+  ],
+  transitions: [
+    { from: ['Planned'], to: 'Active' },
+    { from: ['Active'], to: 'Closed' },
+    { from: ['Planned'], to: 'Closed', description: '取消这次迭代' },
+  ],
+}
+
+export const MILESTONE_LIFECYCLE: Lifecycle = {
+  id: 'milestone-default',
+  entityType: 'Milestone',
+  initial: 'Planned',
+  states: [
+    { name: 'Planned' },
+    { name: 'AtRisk', description: '预测达成日已晚于 dueDate' },
+    { name: 'Reached', terminal: true },
+    { name: 'Missed', terminal: true },
+  ],
+  transitions: [
+    { from: ['Planned'], to: 'AtRisk' },
+    { from: ['AtRisk'], to: 'Planned', description: '追回来了' },
+    { from: ['Planned', 'AtRisk'], to: 'Reached' },
+    { from: ['Planned', 'AtRisk'], to: 'Missed' },
+  ],
+}
+
+/**
+ * 风险（PRD 03 §2 的不变量：高风险必须有 owner 与 mitigation）。
+ *
+ * 守卫放在 `Mitigating` 上而不是创建时：**登记一条风险不该有门槛**，
+ * 门槛越高越没人记。但声称"正在缓解"就必须说出缓解措施是什么——
+ * 没有对策的"正在处理"是这类登记册最常见的自欺。
+ */
+export const RISK_LIFECYCLE: Lifecycle = {
+  id: 'risk-default',
+  entityType: 'Risk',
+  initial: 'Identified',
+  states: [
+    { name: 'Identified' },
+    {
+      name: 'Mitigating',
+      requires: [{ kind: 'attributeSet', path: 'mitigation' }, { kind: 'ownerAssigned' }],
+    },
+    { name: 'Closed', terminal: true },
+    { name: 'Accepted', description: '接受这个风险，不再缓解', terminal: true },
+  ],
+  transitions: [
+    { from: ['Identified'], to: 'Mitigating' },
+    { from: ['Identified', 'Mitigating'], to: 'Accepted' },
+    { from: ['Mitigating'], to: 'Closed' },
+    { from: ['Identified'], to: 'Closed', description: '不再成立' },
+  ],
+}
+
+export const BUDGET_LIFECYCLE: Lifecycle = {
+  id: 'budget-default',
+  entityType: 'Budget',
+  initial: 'Active',
+  states: [
+    { name: 'Active' },
+    { name: 'Exceeded', description: 'consumed 超过 hardLimit' },
+    { name: 'Closed', terminal: true },
+  ],
+  transitions: [
+    { from: ['Active'], to: 'Exceeded' },
+    { from: ['Exceeded'], to: 'Active', description: '追加了预算' },
+    { from: ['Active', 'Exceeded'], to: 'Closed' },
+  ],
+}
+
 export const APPROVAL_LIFECYCLE: Lifecycle = {
   id: 'approval-default',
   entityType: 'Approval',
@@ -408,6 +487,10 @@ export const DEFAULT_LIFECYCLES: readonly Lifecycle[] = [
   ACCEPTANCE_LIFECYCLE,
   RELEASE_LIFECYCLE,
   APPROVAL_LIFECYCLE,
+  SPRINT_LIFECYCLE,
+  MILESTONE_LIFECYCLE,
+  RISK_LIFECYCLE,
+  BUDGET_LIFECYCLE,
 ]
 
 export function buildDefaultWorkflowRegistry(): WorkflowRegistry {

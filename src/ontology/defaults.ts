@@ -238,6 +238,72 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
     ],
   },
   {
+    name: 'Sprint',
+    version: '1.0.0',
+    context: 'Execution',
+    lifecycle: 'sprint-default',
+    description: '一次迭代（PRD 03 §5）。Velocity 的分母就是它',
+    attributes: [
+      { name: 'name', kind: 'string', required: true },
+      { name: 'goal', kind: 'text' },
+      { name: 'startAt', kind: 'datetime', required: true },
+      { name: 'endAt', kind: 'datetime', required: true },
+      { name: 'capacity', kind: 'float', description: '可用点数 / 工时' },
+      { name: 'completedPoints', kind: 'float', derived: true, description: '本迭代完成的点数' },
+    ],
+  },
+  {
+    name: 'Milestone',
+    version: '1.0.0',
+    context: 'Project',
+    lifecycle: 'milestone-default',
+    description: '里程碑（PRD 03 §2）',
+    attributes: [
+      { name: 'name', kind: 'string', required: true },
+      { name: 'dueDate', kind: 'datetime', required: true },
+      { name: 'forecastDate', kind: 'datetime', description: '按当前进度预测的达成日' },
+    ],
+  },
+  {
+    name: 'Risk',
+    version: '1.0.0',
+    context: 'Project',
+    lifecycle: 'risk-default',
+    description:
+      '风险登记册的一条（PRD 03 §2）。不变量：**高风险必须有 owner 与 mitigation**——' +
+      '一条没人负责、没有对策的高风险，登记下来只是让人安心，不改变任何事。',
+    attributes: [
+      { name: 'description', kind: 'text', required: true },
+      {
+        name: 'probability',
+        kind: 'enum',
+        values: ['low', 'medium', 'high'],
+        required: true,
+      },
+      { name: 'impact', kind: 'enum', values: ['low', 'medium', 'high'], required: true },
+      { name: 'mitigation', kind: 'text', description: '缓解措施。高风险进入 Mitigating 时必填' },
+      { name: 'dueDate', kind: 'datetime', description: '缓解期限；过期未处理会被指标点名' },
+    ],
+  },
+  {
+    name: 'Budget',
+    version: '1.0.0',
+    context: 'Project',
+    lifecycle: 'budget-default',
+    description: '预算（PRD 03 §2）。人力 / Token / 云成本各记一条',
+    attributes: [
+      {
+        name: 'type',
+        kind: 'enum',
+        values: ['headcount', 'token', 'cloud'],
+        required: true,
+      },
+      { name: 'planned', kind: 'float', required: true },
+      { name: 'consumed', kind: 'float', description: '已消耗。超过 hardLimit 触发策略' },
+      { name: 'hardLimit', kind: 'float' },
+    ],
+  },
+  {
     name: 'Approval',
     version: '1.0.0',
     context: 'Identity',

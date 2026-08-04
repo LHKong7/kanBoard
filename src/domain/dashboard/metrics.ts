@@ -157,6 +157,128 @@ export const DEFAULT_METRICS: readonly MetricDef[] = [
     direction: 'neutral',
   },
 
+  // ── Project 视角（FR-DASH-001：8 项） ──────────────────
+  {
+    id: 'project.burndown.remaining',
+    title: 'Burn Down · 剩余工作量',
+    scope: 'project',
+    definition: '未进入终态的 Story 的 storyPoint 之和',
+    filter: { type: 'Story', status: ['Draft', 'Ready', 'InProgress', 'Review'] },
+    aggregate: { fn: 'sum', attribute: 'storyPoint' },
+    direction: 'lower-is-better',
+  },
+  {
+    id: 'project.velocity.completed-points',
+    title: 'Velocity · 已完成点数',
+    scope: 'project',
+    definition: '已关闭 Sprint 的 completedPoints 之和',
+    filter: { type: 'Sprint', status: ['Closed'] },
+    aggregate: { fn: 'sum', attribute: 'completedPoints' },
+    direction: 'higher-is-better',
+  },
+  {
+    id: 'project.milestones.on-track',
+    title: 'Milestone · 按期率',
+    scope: 'project',
+    // AtRisk 也算进分母：把有风险的里程碑排除掉，
+    // 这个数字会在最需要示警的时候反而变好看
+    definition: 'Reached / 全部已判定的 Milestone（Reached + Missed + AtRisk）',
+    filter: { type: 'Milestone', status: ['Reached', 'Missed', 'AtRisk'] },
+    ratio: { numerator: { status: ['Reached'] } },
+    direction: 'higher-is-better',
+  },
+  {
+    id: 'project.risks.open',
+    title: 'Risk · 未关闭的风险',
+    scope: 'project',
+    definition: '尚未 Closed / Accepted 的 Risk 数量，按当前状态分组',
+    filter: { type: 'Risk', status: ['Identified', 'Mitigating'] },
+    groupBy: 'status',
+    direction: 'lower-is-better',
+  },
+  {
+    id: 'project.budget.consumed',
+    title: 'Budget · 已消耗',
+    scope: 'project',
+    definition: '未关闭 Budget 的 consumed 之和',
+    filter: { type: 'Budget', status: ['Active', 'Exceeded'] },
+    aggregate: { fn: 'sum', attribute: 'consumed' },
+    direction: 'lower-is-better',
+  },
+  {
+    id: 'project.scope-change.superseded',
+    title: 'Scope Change · 被取代的需求',
+    scope: 'project',
+    // 需求被 supersede 就是一次范围变更。数它比去翻历史便宜，
+    // 而且口径不含糊
+    definition: '状态为 Superseded 的 Requirement 数量',
+    filter: { type: 'Requirement', status: ['Superseded'] },
+    direction: 'lower-is-better',
+  },
+  {
+    id: 'project.cycle-time.done-stories',
+    title: 'Cycle Time · 已完成 Story',
+    scope: 'project',
+    definition: '已 Done 的 Story 数量。时长分布需要按 status_since 展开，见下方说明',
+    filter: { type: 'Story', status: ['Done'] },
+    direction: 'neutral',
+  },
+  {
+    id: 'project.lead-time.finished-requirements',
+    title: 'Lead Time · 已交付需求',
+    scope: 'project',
+    definition: '状态为 Finished 的 Requirement 数量',
+    filter: { type: 'Requirement', status: ['Finished'] },
+    direction: 'neutral',
+  },
+
+  // ── Team 视角（FR-DASH-002：6 项） ─────────────────────
+  {
+    id: 'team.capacity.planned',
+    title: 'Capacity · 计划容量',
+    scope: 'team',
+    definition: '进行中 Sprint 的 capacity 之和',
+    filter: { type: 'Sprint', status: ['Active'] },
+    aggregate: { fn: 'sum', attribute: 'capacity' },
+    direction: 'neutral',
+  },
+  {
+    id: 'team.review.waiting',
+    title: 'Review Time · 等待评审',
+    scope: 'team',
+    definition: '停在 Review 状态的 Task 数量',
+    filter: { type: 'Task', status: ['Review'] },
+    direction: 'lower-is-better',
+  },
+  {
+    id: 'team.wip.in-progress',
+    title: 'WIP · 在制品',
+    scope: 'team',
+    definition: '处于 Doing / Review / Testing 的 Task 数量',
+    filter: { type: 'Task', status: ['Doing', 'Review', 'Testing'] },
+    direction: 'lower-is-better',
+  },
+  {
+    id: 'team.blocked.count',
+    title: 'Blocked · 被阻塞的任务',
+    scope: 'team',
+    definition: '状态为 Blocked 的 Task 数量',
+    filter: { type: 'Task', status: ['Blocked'] },
+    direction: 'lower-is-better',
+  },
+  {
+    id: 'team.human-vs-agent',
+    title: 'Human vs Agent · 产出占比',
+    scope: 'team',
+    // 这个数字和 Automation Rate 不是一回事：它数的是**谁创建的**，
+    // 不判断人后来改了多少。两个都要，因为"Agent 起了多少稿"
+    // 和"多少稿被原样接受"是两个问题
+    definition: 'Agent 创建的 Story / 全部 Story（按创建者标签）',
+    filter: { type: 'Story' },
+    ratio: { numerator: { labels: ['agent-generated'] } },
+    direction: 'neutral',
+  },
+
   // ── Agent 视角（FR-DASH-003：8 项） ────────────────────
   //
   // Automation Rate 是第 8 项，也是北极星。它不在这张表里——

@@ -12,10 +12,10 @@
 | WF 工作流 | 9 | 8 | 见下；缺 FR-WF-006 外部事件触发 |
 | DOM 领域 | 8 | 7 | 见下 |
 | AGT Agent | 11 | 11 | 见下 |
-| DASH 指标 | 9 | 7 | 见下；Project / Team 两个视角仍未凑齐 |
+| DASH 指标 | 9 | 9 | 见下 |
 | AI 能力 | 12 | 1 | 只有运行时骨架；具体能力（WBS、拆分、估点…）未做 |
 | CON 连接器 | 12 | 8 | 契约与网关已交付；具体集成（GitHub/Jira/MCP/Browser）未做 |
-| **合计** | **102** | **83** | |
+| **合计** | **102** | **85** | |
 
 ## 这份表本身有多可信
 
@@ -168,7 +168,8 @@ FR-IAM-013 的注释此前是一句空话：`001_foundation.sql` 里 `audit_log`
 | FR-DASH-011 新鲜度 ≤ 1 分钟 | ✅ 现算，延迟为 0 |
 | FR-DASH-015 自动化分级与 Automation Rate | ✅ 口径表逐行对着 §2 写了用例；分级明细随指标一起返回 |
 | FR-DASH-003 Agent 视角 8 项 | ✅ 成本 / Token / 成功率 / 采纳率 / 时延 / Ask 率在目录里，Automation Rate 与 Rework Rate 走北极星路径 |
-| FR-DASH-001/002 Project 与 Team 视角 | ⚠️ 各有几项。缺的那些需要系统里还不存在的对象：Sprint（Velocity）、Milestone、Risk、Budget、Capacity |
+| FR-DASH-001 Project 视角 8 项 | ✅ Burn Down / Velocity / Milestone / Risk / Budget / Scope Change / Cycle Time / Lead Time |
+| FR-DASH-002 Team 视角 6 项 | ✅ Capacity / Workload / Review Time / WIP / Blocked / Human vs Agent |
 | FR-DASH-016 7 天推翻窗口的回溯修正 | ✅ 重开成为一条显式的边（[ADR-0012](adr/0012-reopen-is-an-explicit-edge.md)）；历史值不存，因此天然随事实修正 |
 | FR-DASH-007/008/012 异常检测、归因、重放 | ❌ |
 
@@ -182,10 +183,17 @@ Agent 视角凑齐 8 项时给指标模型加了**求和 / 求平均 / 比率**�
 仍然只接受属性名，不接受 `sum(cost * 1.2 + fee)` 这类表达式。
 一旦允许表达式，指标就不再是"能被读懂、被复算、被质疑"的东西了。
 
-Project 与 Team 两个视角差的不是代码，是**对象**：
-Velocity 要有 Sprint，Milestone / Risk / Budget / Capacity 各自要有对应的类型。
-先把类型建出来再补指标是对的顺序——反过来做只会得到几个恒为零的数字，
-而恒为零的指标比没有指标更容易让人误判。
+补齐 Project 与 Team 视角时，差的不是代码而是**对象**：
+Velocity 要有 Sprint，Milestone / Risk / Budget 各自要有类型。
+先建类型再补指标是对的顺序——反过来做只会得到几个恒为零的数字，
+而恒为零的指标比没有指标更容易让人误判。这四个类型按 PRD 03 的
+关键属性与不变量建出来了，其中 Risk「高风险必须有 owner 与 mitigation」
+做成了 `Mitigating` 状态的守卫：登记一条风险不该有门槛，
+但声称"正在缓解"就必须说得出对策。
+
+Cycle Time 与 Lead Time 目前只给出**计数**，没给时长分布。
+`status_since` 已经在库里（007_sla.sql），把它展开成分布是下一步——
+现在的口径写在指标定义里，没有假装它是分布。
 
 **Automation Rate 是唯一的例外，它明显更贵**：每个工作项都要拉一次历史
 再算一次编辑距离，是一次 N+1。目前用一条 5,000 项的硬上界兜住，
