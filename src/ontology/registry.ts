@@ -1,6 +1,7 @@
 import type { z } from 'zod'
 import { ValidationError } from '../platform/errors.ts'
 import { attributesSchema, toFieldErrors } from './validation.ts'
+import { MAX_LENGTH_BY_KIND } from './types.ts'
 import type { EntityTypeDef, RelationTypeDef } from './types.ts'
 
 /**
@@ -20,9 +21,10 @@ export class OntologyRegistry {
     }
     assertSemver(def.name, def.version)
     assertUniqueAttributeNames(def)
-    this.#entities.set(def.name, def)
+    const normalized = withResolvedMaxLength(def)
+    this.#entities.set(def.name, normalized)
     // 提前构建 schema：本体定义里的错误（如 enum 没有取值）在注册时就暴露，而不是等到第一次写入
-    this.#schemas.set(def.name, attributesSchema(def))
+    this.#schemas.set(def.name, attributesSchema(normalized))
   }
 
   registerRelation(def: RelationTypeDef): void {
@@ -161,4 +163,23 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false
   const setB = new Set(b)
   return a.every((x) => setB.has(x))
+}
+
+/**
+ * 把 `maxLength` 按 kind 补成具体数字。
+ *
+ * 在注册时补，而不是留给每个使用方各自去查默认表：
+ * 校验器、`GET /v1/ontology/entity-types`、以及照本体渲染表单的前端，
+ * 看到的必须是同一个数。默认规则一旦要在三个地方各实现一遍，
+ * 迟早会有一处漂移，而漂移的表现是"这里能存那里存不下"——
+ * 又一种没人报错的错。
+ */
+function withResolvedMaxLength(def: EntityTypeDef): EntityTypeDef {
+  return {
+    ...def,
+    attributes: def.attributes.map((attr) => {
+      const resolved = attr.maxLength ?? MAX_LENGTH_BY_KIND[attr.kind]
+      return resolved === undefined ? attr : { ...attr, maxLength: resolved }
+    }),
+  }
 }

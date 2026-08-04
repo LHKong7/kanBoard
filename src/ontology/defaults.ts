@@ -14,7 +14,7 @@ import type { EntityTypeDef, RelationTypeDef } from './types.ts'
 export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   {
     name: 'Project',
-    version: '1.1.0',
+    version: '1.2.0',
     context: 'Project',
     lifecycle: 'project-default',
     description: '项目：目标、里程碑、预算与风险的聚合根',
@@ -30,7 +30,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   },
   {
     name: 'Requirement',
-    version: '1.1.0',
+    version: '1.2.0',
     context: 'Requirement',
     lifecycle: 'requirement-default',
     description: '需求：Epic / Feature / Story 三级',
@@ -49,7 +49,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   },
   {
     name: 'Story',
-    version: '1.1.0',
+    version: '1.2.0',
     context: 'Requirement',
     lifecycle: 'story-default',
     description: '可独立交付的最小需求单元',
@@ -66,7 +66,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   },
   {
     name: 'Task',
-    version: '1.1.0',
+    version: '1.2.0',
     context: 'Execution',
     lifecycle: 'task-default',
     description: '执行单元。assignee 可以是 User 也可以是 Agent',
@@ -82,7 +82,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   },
   {
     name: 'Decision',
-    version: '1.1.0',
+    version: '1.2.0',
     context: 'Knowledge',
     lifecycle: 'decision-default',
     description: '决策 / ADR：解释"为什么这样做"',
@@ -96,7 +96,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   },
   {
     name: 'Knowledge',
-    version: '1.1.0',
+    version: '1.2.0',
     context: 'Knowledge',
     lifecycle: 'knowledge-default',
     description: '知识：必须有来源（derivedFrom），否则不可信',
@@ -110,7 +110,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   },
   {
     name: 'Agent',
-    version: '1.0.0',
+    version: '1.1.0',
     context: 'AI',
     lifecycle: 'agent-default',
     description: 'Agent 是一等身份主体，同样是领域对象（ADR-0003）',

@@ -687,3 +687,45 @@ describe('看板视图可以分享', () => {
     assert.ok(selected !== null && selected !== '')
   })
 })
+
+/**
+ * 长度上限出现在表单上（docs/dogfooding-log.md #7）。
+ *
+ * 上限只在服务端拦住的话，用户会一直写下去、提交时才被拒，
+ * 而在那之前他并不知道边界在哪。这条同时也是 ADR-0001 的检验：
+ * 前端不自己写一份上限，而是照本体渲染。
+ */
+describe('表单上能看到长度上限', () => {
+  it('输入框的 maxlength 来自本体，不是前端写死的', async () => {
+    const catalogue = await app.inject({
+      method: 'GET',
+      url: '/v1/ontology/entity-types',
+      headers: AUTH,
+    })
+    const expected = (
+      catalogue.json().items as Array<{
+        name: string
+        attributes: Array<{ name: string; maxLength?: number }>
+      }>
+    )
+      .find((t) => t.name === 'Task')
+      ?.attributes.find((a) => a.name === 'description')?.maxLength
+
+    await openBoard('Task')
+    await page.click('#newBtn')
+    await page.waitForSelector('#f_description')
+
+    const actual = await page.locator('#f_description').getAttribute('maxlength')
+    assert.equal(actual, String(expected))
+    await page.click('#modalClose')
+  })
+
+  it('正文类字段把上限写在提示里', async () => {
+    await openBoard('Task')
+    await page.click('#newBtn')
+    await page.waitForSelector('#f_description')
+    const hint = await page.locator('[data-name="description"] .hint').textContent()
+    assert.match(hint ?? '', /最多 [\d,]+ 字/)
+    await page.click('#modalClose')
+  })
+})

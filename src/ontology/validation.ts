@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MAX_LENGTH_BY_KIND } from './types.ts'
 import type { AttributeType, EntityTypeDef } from './types.ts'
 
 /**
@@ -12,13 +13,16 @@ import type { AttributeType, EntityTypeDef } from './types.ts'
 function schemaForAttribute(attr: AttributeType): z.ZodTypeAny {
   let base: z.ZodTypeAny
 
+  // 长度上限一律取本体上声明的那个（注册时已按 kind 补成具体数字）。
+  // 校验器**不再自己拍一个数**：那个数客户端看不到，只能靠被拒绝来试探边界
+  // （docs/dogfooding-log.md #7）。
+  const maxLength = attr.maxLength ?? MAX_LENGTH_BY_KIND[attr.kind]
+
   switch (attr.kind) {
     case 'string':
-      base = z.string().max(1024)
-      break
     case 'text':
     case 'richtext':
-      base = z.string().max(1_000_000)
+      base = maxLength === undefined ? z.string() : z.string().max(maxLength)
       break
     case 'int':
       base = z.number().int()
@@ -48,7 +52,15 @@ function schemaForAttribute(attr: AttributeType): z.ZodTypeAny {
       base = z.string().regex(/^[a-z][a-z0-9]*_[0-9A-HJKMNP-TV-Z]{26}$/, 'invalid resource id')
       break
     case 'json':
-      base = z.unknown()
+      // 此前完全没有上限，唯一的边界是 4MB 请求体。按序列化后的长度约束：
+      // json 属性没有天然的"字符数"，但它一样会把一条记录撑爆
+      base =
+        maxLength === undefined
+          ? z.unknown()
+          : z.unknown().refine(
+              (v) => v === undefined || JSON.stringify(v ?? null).length <= maxLength,
+              { message: `serialized JSON must be at most ${maxLength} characters` },
+            )
       break
     default: {
       const exhaustive: never = attr.kind

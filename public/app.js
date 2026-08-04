@@ -1021,16 +1021,33 @@ function fieldFor(attr) {
   input.id = `f_${attr.name}`
   input.dataset['kind'] = attr.kind
 
+  // 长度上限来自本体，不在前端另写一份（ADR-0001 P1.4）。
+  // 服务端本来就在按这个数校验；不告诉用户的话，他只能一直写下去，
+  // 提交时才被拒——而在那之前他并不知道边界在哪
+  // （docs/dogfooding-log.md #7）。json 的上限算的是序列化后的长度，
+  // 和输入框里的字符数不是一回事，所以不往上加 maxlength。
+  if (typeof attr.maxLength === 'number' && attr.kind !== 'json') {
+    input.maxLength = attr.maxLength
+  }
+
   if (attr.kind === 'bool') {
     wrap.append(input, label)
   } else {
     wrap.append(label, input)
   }
 
-  if (typeof attr.description === 'string') {
+  // 只有正文类字段才提示上限：一个 1024 字的标题写不满，说了只是噪声
+  const limitHint =
+    typeof attr.maxLength === 'number' && (attr.kind === 'text' || attr.kind === 'richtext')
+      ? `最多 ${attr.maxLength.toLocaleString()} 字`
+      : ''
+  const description = typeof attr.description === 'string' ? attr.description : ''
+  const hintText = [description, limitHint].filter((t) => t !== '').join(' · ')
+
+  if (hintText !== '') {
     const hintNode = document.createElement('div')
     hintNode.className = 'hint'
-    hintNode.textContent = attr.description
+    hintNode.textContent = hintText
     wrap.append(hintNode)
   }
 

@@ -97,8 +97,9 @@ describe('unified Resource API (ADR-0002)', () => {
 
   it('stamps the ontology version the instance was written under', async () => {
     const res = await createRequirement()
-    // 本体加了状态机写入的时间戳字段，按 04-ontology 的兼容矩阵递增 minor
-    expect(res.json().ontologyVersion).toBe('1.1.0')
+    // 1.2.0：属性长度上限从校验器搬进本体，并把 text 与 richtext 分开。
+    // 收紧了约束，但实测现有数据无一越界，因此按 04-ontology 的矩阵递增 minor
+    expect(res.json().ontologyVersion).toBe('1.2.0')
   })
 
   it('rejects attributes that violate the ontology, with field-level detail', async () => {
@@ -518,6 +519,82 @@ describe('search (FR-RES-016)', () => {
  * 分享不了、收藏不了、前进后退不工作。这组用例锁住的是
  * **GET 与 POST 是同一份行为**——两条路径分叉的话，能分享的那条就会慢慢变得不可信。
  */
+/**
+ * 长度上限对客户端可见（docs/dogfooding-log.md #7）。
+ *
+ * 光在服务端拦住是不够的：客户端要能**事先知道**边界在哪，
+ * 否则只能各自猜一个数去截断。
+ */
+describe('length bounds are discoverable, not just enforced (dogfooding #7)', () => {
+  it('publishes maxLength in the entity type catalogue', async () => {
+    const res = await app.inject({ method: 'GET', url: '/v1/ontology/entity-types', headers: asRD })
+    const types = res.json().items as Array<{
+      name: string
+      attributes: Array<{ name: string; kind: string; maxLength?: number }>
+    }>
+    const body = types.find((t) => t.name === 'Knowledge')?.attributes.find((a) => a.name === 'body')
+    expect(body?.maxLength).toBeTypeOf('number')
+
+    // 每个文本类属性都得有，否则客户端还是得为剩下的那些猜
+    for (const type of types) {
+      for (const attr of type.attributes) {
+        if (!['string', 'text', 'richtext', 'json'].includes(attr.kind)) continue
+        expect(attr.maxLength, `${type.name}.${attr.name}`).toBeTypeOf('number')
+      }
+    }
+  })
+
+  it('rejects a value past the published bound, naming the field', async () => {
+    const catalogue = await app.inject({
+      method: 'GET',
+      url: '/v1/ontology/entity-types',
+      headers: asRD,
+    })
+    const limit = (catalogue.json().items as Array<{ name: string; attributes: Array<{ name: string; maxLength?: number }> }>)
+      .find((t) => t.name === 'Task')
+      ?.attributes.find((a) => a.name === 'description')?.maxLength as number
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: asRD,
+      payload: {
+        type: 'Task',
+        workspace: 'ws_platform',
+        attributes: { title: 't', description: 'x'.repeat(limit + 1) },
+      },
+    })
+    expect(res.statusCode).toBe(422)
+    expect((res.json().details.fields as Array<{ path: string }>).map((f) => f.path)).toContain(
+      'description',
+    )
+  })
+
+  it('accepts a value exactly at the published bound', async () => {
+    // 公布 N 却在 N 处拒绝，等于公布了一个错的数
+    const catalogue = await app.inject({
+      method: 'GET',
+      url: '/v1/ontology/entity-types',
+      headers: asRD,
+    })
+    const limit = (catalogue.json().items as Array<{ name: string; attributes: Array<{ name: string; maxLength?: number }> }>)
+      .find((t) => t.name === 'Task')
+      ?.attributes.find((a) => a.name === 'description')?.maxLength as number
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: asRD,
+      payload: {
+        type: 'Task',
+        workspace: 'ws_platform',
+        attributes: { title: 't', description: 'x'.repeat(limit) },
+      },
+    })
+    expect(res.statusCode).toBe(201)
+  })
+})
+
 describe('GET /v1/resources gives read paths a URL (dogfooding #5)', () => {
   beforeEach(async () => {
     for (let i = 0; i < 5; i++) {

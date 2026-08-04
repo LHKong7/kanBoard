@@ -117,7 +117,37 @@ function stripMarkdown(text: string): string {
     .trim()
 }
 
+/**
+ * 从本体读某个属性的长度上限。
+ *
+ * 第一版这里是三个我编的数字（1024 / 20_000 / 200_000）——
+ * 上限本来就存在，只是当时藏在服务端的校验器里，客户端只能猜
+ * （docs/dogfooding-log.md #7）。现在本体会把它连同类型定义一起发出来，
+ * 猜就没有必要了：截断按服务端真正会拒的那个数来。
+ */
+async function loadMaxLengths(base: string): Promise<Map<string, number>> {
+  const res = await fetch(`${base}/v1/ontology/entity-types`, { headers: AUTH })
+  if (!res.ok) throw new Error(`cannot read ontology: HTTP ${res.status}`)
+  const body = (await res.json()) as {
+    items: Array<{ name: string; attributes: Array<{ name: string; maxLength?: number }> }>
+  }
+  const limits = new Map<string, number>()
+  for (const type of body.items) {
+    for (const attr of type.attributes) {
+      if (typeof attr.maxLength === 'number') limits.set(`${type.name}.${attr.name}`, attr.maxLength)
+    }
+  }
+  return limits
+}
+
+/** 按本体声明的上限截断。本体没声明就原样返回——不替它编一个数 */
+function fit(limits: Map<string, number>, key: string, value: string): string {
+  const max = limits.get(key)
+  return max === undefined ? value : value.slice(0, max)
+}
+
 export async function importDocs(base: string, docsDir: string): Promise<ImportSummary> {
+  const limits = await loadMaxLengths(base)
   const summary: ImportSummary = {
     project: '',
     requirements: new Map(),
@@ -153,7 +183,7 @@ export async function importDocs(base: string, docsDir: string): Promise<ImportS
           project: project.id,
           labels: [row.id.split('-')[1] ?? 'misc'],
           attributes: {
-            title: `${row.id} ${row.title}`.slice(0, 1024),
+            title: fit(limits, 'Requirement.title', `${row.id} ${row.title}`),
             // 三级里 Story 是可执行的最小单元；FR 条目相当于 Feature
             level: 'Feature',
             statement: `验收标准：${row.acceptance}`,
@@ -175,7 +205,7 @@ export async function importDocs(base: string, docsDir: string): Promise<ImportS
         workspace: 'ws_projectos',
         project: project.id,
         labels: ['prd'],
-        attributes: { title, body: markdown.slice(0, 200_000), confidence: 100 },
+        attributes: { title, body: fit(limits, 'Knowledge.body', markdown), confidence: 100 },
       })
       summary.knowledge++
     } catch (error) {
@@ -199,9 +229,9 @@ export async function importDocs(base: string, docsDir: string): Promise<ImportS
         labels: ['adr'],
         attributes: {
           question: `ADR-${heading.number} ${heading.title}`,
-          chosen: section(markdown, '决策').slice(0, 20_000) || heading.title,
-          rationale: section(markdown, '背景').slice(0, 20_000) || '（未记录）',
-          consequences: section(markdown, '后果').slice(0, 20_000),
+          chosen: fit(limits, 'Decision.chosen', section(markdown, '决策')) || heading.title,
+          rationale: fit(limits, 'Decision.rationale', section(markdown, '背景')) || '（未记录）',
+          consequences: fit(limits, 'Decision.consequences', section(markdown, '后果')),
         },
       })
       summary.decisions.set(heading.number, created.id)
