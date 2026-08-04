@@ -32,6 +32,8 @@ const BENCH_INDEXES: readonly string[] = [
   'CREATE INDEX resources_attributes_gin_idx  ON resources USING gin (attributes jsonb_path_ops)',
   'CREATE INDEX resources_labels_gin_idx      ON resources USING gin (labels)',
   'CREATE INDEX resources_live_idx            ON resources (tenant, type) WHERE deleted_at IS NULL',
+  // 002_search.sql。没有它，检索的基准测的是顺序扫描，数字会难看得毫无意义
+  'CREATE INDEX resources_search_trgm_idx     ON resources USING gin (search_text gin_trgm_ops)',
   'CREATE UNIQUE INDEX relations_unique_edge_idx ON relations (tenant, from_id, type, to_id)',
   'CREATE INDEX relations_out_idx ON relations (tenant, from_id, type)',
   'CREATE INDEX relations_in_idx  ON relations (tenant, to_id, type)',
@@ -141,7 +143,16 @@ export async function seed(connectionString: string, scale: SeedScale): Promise<
         jsonb_build_object(
           'title', 'Requirement ' || n,
           'level', (ARRAY['Epic','Feature','Story'])[1 + n % 3],
-          'statement', 'generated for benchmarking',
+          -- 中英混排，因为真实语料就是这样，而这正是选 trigram 而非
+          -- to_tsvector 的理由（002_search.sql）。全用 ASCII 生成的话，
+          -- 检索基准测的是一个我们根本不会遇到的场景。
+          --
+          -- 两种选择度都造出来，好分别测：
+          --   '状态机可配置' 等四个短语各占 1/4 —— 宽查询
+          --   '编号 <n>'                        —— 窄查询，唯一命中
+          'statement', '需求说明：' ||
+            (ARRAY['状态机可配置','多租户隔离','权限模型','图查询遍历'])[1 + n % 4] ||
+            '，编号 ' || n,
           'priority', (ARRAY['Must','Should','Could'])[1 + n % 3]
         ),
         'workspace'

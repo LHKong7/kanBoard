@@ -18,6 +18,14 @@ export type ResourceFilter = {
   /** attributes 的精确匹配，键为属性名 */
   attributes?: Record<string, unknown> | undefined
   includeDeleted?: boolean | undefined
+  /**
+   * 全文检索词（FR-RES-016）。
+   *
+   * 匹配范围是标签与属性的**值**，不含键名——否则搜 "title" 会命中全表。
+   * 词形如资源 id 时走主键精确匹配，方便"粘贴一个 id 过来找对象"。
+   * 与其余条件是 AND：`{type:'Requirement', text:'状态机'}` 表示两者都要满足。
+   */
+  text?: string | undefined
 }
 
 export type Page = {

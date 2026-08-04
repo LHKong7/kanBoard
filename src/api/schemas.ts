@@ -65,6 +65,8 @@ export const querySchema = z.object({
       labels: z.array(z.string().max(64)).max(20).optional(),
       attributes: z.record(z.unknown()).optional(),
       includeDeleted: z.boolean().optional(),
+      /** 全文检索词（FR-RES-016）。与其余条件是 AND。 */
+      text: z.string().min(1).max(256).optional(),
     })
     .strict()
     .optional(),

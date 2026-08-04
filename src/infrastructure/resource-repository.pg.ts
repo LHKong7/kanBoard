@@ -10,6 +10,72 @@ import type {
 import type { HistoryEntry, Resource, Visibility } from '../domain/resource/resource.ts'
 import type { Principal } from '../identity/types.ts'
 
+/** 与 api/schemas.ts 的 resourceIdSchema 同源：`req_01J…` 这种形状 */
+const RESOURCE_ID = /^[a-z][a-z0-9]*_[0-9A-HJKMNP-TV-Z]{26}$/
+
+/**
+ * 短于三个字符的查询串走另一条路。
+ *
+ * pg_trgm 三字符一组，抽不出三元组时索引**不是"用不上"，而是更糟**：
+ * 规划器照样可能选它，而索引扫描会把整表当候选返回，再由 recheck 逐行过滤。
+ * 100 万行实测 `状态`（4 组，Execution Time）：
+ *
+ *                          带 type 过滤    不带
+ *   ILIKE（可命中 trigram）    14.0 ms    1259 ms   ← 索引返回 1,010,420 候选行
+ *   strpos（挡开 trigram）      0.4 ms     734 ms
+ *
+ * 两处收益不同，别混为一谈：
+ *
+ * - **不带 type**：1259 → 734 ms。都很糟，strpos 只是没那么糟。
+ *   这条路径会打一条 warn 日志，见下方 query()。
+ * - **带 type**（界面上的实际路径，看板永远有一个当前类型）：14.0 → 0.4 ms。
+ *   差别不在于躲开了 trigram，而在于躲开之后规划器改选了
+ *   (tenant, type, id DESC)——它本来就按 id 排好序，凑够一页就能停；
+ *   而 ILIKE 那条选的是 (tenant, type)，得读完一万行再 top-N 排序。
+ *
+ * 中文两字词（需求 / 状态 / 权限）太常见，拒绝这类查询等于让搜索框
+ * 对中文用户不可用，所以是换路径而不是拒绝。
+ */
+const TRIGRAM_MIN = 3
+
+/**
+ * 转义 LIKE 的通配符。
+ *
+ * 不转的话，用户搜一个 `%` 就等于「匹配一切」，搜 `_` 等于「匹配任意单字」——
+ * 前者把全表拉回来，后者给出莫名其妙的结果，两种都不是用户要的。
+ * 反斜杠自己必须先转，否则 `\%` 会被当成"转义过的 %"而漏掉。
+ */
+function escapeLike(term: string): string {
+  return term.replace(/[\\%_]/g, (ch) => `\\${ch}`)
+}
+
+/**
+ * 显式列出要取的列，不用 `selectAll()`。
+ *
+ * `search_text` 是生成列（002_search.sql），内容是全部属性值的拼接——
+ * 也就是说 `selectAll()` 会把每一行的属性**取两遍**。
+ * 它只用于 WHERE，从不回传给调用方，没有理由让它占着网络和内存。
+ */
+const RESOURCE_COLUMNS = [
+  'id',
+  'tenant',
+  'type',
+  'ontology_version',
+  'workspace',
+  'project',
+  'owner',
+  'created_by',
+  'created_at',
+  'updated_at',
+  'status',
+  'lifecycle',
+  'version',
+  'labels',
+  'attributes',
+  'visibility',
+  'deleted_at',
+] as const
+
 type ResourceRow = {
   id: string
   tenant: string
@@ -95,7 +161,7 @@ export class PgResourceRepository implements ResourceRepository {
   async findById(id: string): Promise<Resource | null> {
     const row = await this.#db
       .selectFrom('resources')
-      .selectAll()
+      .select(RESOURCE_COLUMNS)
       .where('tenant', '=', this.#tenant)
       .where('id', '=', id)
       .executeTakeFirst()
@@ -132,7 +198,7 @@ export class PgResourceRepository implements ResourceRepository {
   async query(filter: ResourceFilter, page: Page): Promise<PageResult<Resource>> {
     const size = Math.min(Math.max(page.size, 1), 200)
 
-    let q = this.#db.selectFrom('resources').selectAll().where('tenant', '=', this.#tenant)
+    let q = this.#db.selectFrom('resources').select(RESOURCE_COLUMNS).where('tenant', '=', this.#tenant)
 
     if (filter.type !== undefined) q = q.where('type', '=', filter.type)
     if (filter.workspace !== undefined) q = q.where('workspace', '=', filter.workspace)
@@ -148,6 +214,19 @@ export class PgResourceRepository implements ResourceRepository {
       // @> 走 jsonb_path_ops GIN 索引
       q = q.where(sql<boolean>`attributes @> ${JSON.stringify(filter.attributes)}::jsonb`)
     }
+    const term = filter.text?.trim()
+    if (term !== undefined && term !== '') {
+      if (RESOURCE_ID.test(term)) {
+        // 粘贴一个 id 过来找对象：走主键，不必让 ULID 的随机字符去污染 trigram 索引
+        q = q.where('id', '=', term)
+      } else if (term.length >= TRIGRAM_MIN) {
+        // ILIKE 才能命中 gin_trgm_ops 索引
+        q = q.where(sql<boolean>`search_text ILIKE ${'%' + escapeLike(term) + '%'}`)
+      } else {
+        // 短查询**刻意避开** trigram 索引，见下方 shortTermPredicate 的说明
+        q = q.where(sql<boolean>`strpos(lower(search_text), lower(${term})) > 0`)
+      }
+    }
     if (filter.includeDeleted !== true) {
       q = q.where('deleted_at', 'is', null)
     }
@@ -156,8 +235,30 @@ export class PgResourceRepository implements ResourceRepository {
       q = q.where('id', '<', page.cursor)
     }
 
+    // 排序始终按 id 倒序（最新的在前），检索时也不换成相关度排序：
+    // 游标分页依赖 id 的全序，换成相关度就得换一套游标方案，
+    // 而"翻页会漏条目/重复条目"是比"排序不够聪明"严重得多的缺陷。
+    //
     // 多取一条用来判断是否还有下一页，避免额外的 count 查询
+    const startedAt = Date.now()
     const rows = await q.orderBy('id', 'desc').limit(size + 1).execute()
+
+    // 短查询没有别的条件收窄时是真的慢，得让运维知道。带 type/project 的不必吵——
+    // 那条路径实测 0.5ms，属于正常流量
+    if (
+      term !== undefined &&
+      term.length > 0 &&
+      term.length < TRIGRAM_MIN &&
+      !RESOURCE_ID.test(term) &&
+      filter.type === undefined &&
+      filter.project === undefined
+    ) {
+      const elapsed = Date.now() - startedAt
+      console.warn(
+        `[search] term "${term}" is shorter than ${TRIGRAM_MIN} chars and has no type/project ` +
+          `filter to narrow it; this scanned the whole tenant (${elapsed}ms)`,
+      )
+    }
     const hasMore = rows.length > size
     const items = (hasMore ? rows.slice(0, size) : rows).map((r) => toResource(r as unknown as ResourceRow))
 

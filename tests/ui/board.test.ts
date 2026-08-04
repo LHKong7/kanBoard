@@ -468,3 +468,141 @@ describe('自动化在界面上看得见', () => {
     assert.match(reason ?? '', /automation:/)
   })
 })
+
+/**
+ * 检索（FR-RES-016 / 自用日志 #3）。
+ *
+ * 这组用例要锁住的关键点是：**过滤发生在服务端**。
+ * 如果改成在已加载的那 200 条里做前端过滤，功能性断言照样全绿，
+ * 但用户搜到的永远只是"最近 200 条里的"——一个会骗人的搜索框。
+ * 所以第一条用例直接检查请求体里带没带 `filter.text`。
+ */
+describe('搜索', () => {
+  /** 通过 HTTP 建对象，绕开表单——这里测的是搜索，不是新建 */
+  async function seed(title: string): Promise<string> {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: { type: 'Task', workspace: 'ws_ui', attributes: { title } },
+    })
+    return res.json().id as string
+  }
+
+  it('把检索词发给服务端，而不是在前端过滤已加载的那一页', async () => {
+    await seed('锚定词 kanaria 的任务')
+    await openBoard('Task')
+
+    const bodies: string[] = []
+    const record = (request: import('playwright').Request) => {
+      if (request.url().includes('/v1/resources:query') && request.method() === 'POST') {
+        bodies.push(request.postData() ?? '')
+      }
+    }
+    page.on('request', record)
+    try {
+      await page.fill('#searchInput', 'kanaria')
+      await page.waitForFunction(() => document.querySelectorAll('.card').length === 1, undefined, {
+        timeout: 5000,
+      })
+    } finally {
+      page.off('request', record)
+    }
+
+    assert.ok(
+      bodies.some((b) => JSON.parse(b).filter?.text === 'kanaria'),
+      `没有一个 :query 请求带上 filter.text，说明过滤是在前端做的：${JSON.stringify(bodies)}`,
+    )
+  })
+
+  it('搜中文——默认全文检索分词器切不开这些字', async () => {
+    await seed('把状态机改成可配置')
+    await openBoard('Task')
+    await page.fill('#searchInput', '状态机')
+    await page.waitForFunction(() => document.querySelectorAll('.card').length > 0, undefined, {
+      timeout: 5000,
+    })
+    assert.match((await page.locator('.card').first().textContent()) ?? '', /状态机/)
+  })
+
+  it('搜不到时说清楚是什么没搜到，而不是显示一个空看板', async () => {
+    await openBoard('Task')
+    await page.fill('#searchInput', 'zzz-绝不存在的词-zzz')
+    await page.waitForSelector('.board-empty')
+    assert.match((await page.locator('.board-empty').first().textContent()) ?? '', /没有匹配/)
+  })
+
+  it('Esc 清空搜索并回到全量视图', async () => {
+    await seed('清空搜索后应当还在')
+    await openBoard('Task')
+    await page.fill('#searchInput', 'zzz-绝不存在的词-zzz')
+    await page.waitForSelector('.board-empty')
+
+    await page.locator('#searchInput').press('Escape')
+    await page.waitForSelector('.column')
+    assert.equal(await page.locator('#searchInput').inputValue(), '')
+    assert.ok((await page.locator('.card').count()) > 0)
+  })
+})
+
+/**
+ * 建关系时的候选对象选择。
+ *
+ * 以前这里写死"列出每种类型最近 50 条"——对象一多就选不到想要的那个，
+ * 而且提示语无论列没列全都一样。这是自用日志 #3 的同一个缺失在另一处的表现。
+ */
+describe('建关系时能筛选候选对象', () => {
+  it('筛选词交给服务端，候选列表跟着变', async () => {
+    for (const title of ['候选甲 alpha', '候选乙 beta', '候选丙 gamma']) {
+      await app.inject({
+        method: 'POST',
+        url: '/v1/resources',
+        headers: { ...AUTH, 'content-type': 'application/json' },
+        payload: { type: 'Task', workspace: 'ws_pick', attributes: { title } },
+      })
+    }
+    const story = await app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: { type: 'Story', workspace: 'ws_pick', attributes: { title: '要挑任务的故事' } },
+    })
+
+    await openBoard('Story')
+    await page.click(`.card[data-id="${story.json().id}"]`)
+    await page.waitForSelector('#addRelationBtn')
+    await page.click('#addRelationBtn')
+    await page.waitForSelector('#relTargetSearch')
+    await page.selectOption('#relType', 'decomposedInto')
+    await page.waitForFunction(() => {
+      const s = document.querySelector('#relTarget') as HTMLSelectElement | null
+      return s !== null && s.options.length > 1
+    })
+
+    await page.fill('#relTargetSearch', 'beta')
+    await page.waitForFunction(() => {
+      const s = document.querySelector('#relTarget') as HTMLSelectElement | null
+      return s !== null && s.options.length === 1
+    }, undefined, { timeout: 5000 })
+
+    const only = await page.locator('#relTarget option').first().textContent()
+    assert.match(only ?? '', /候选乙/)
+
+    // 列全了就说列全了——以前无论如何都说"最近 50 条"
+    assert.match((await page.locator('#relTarget ~ .hint').textContent()) ?? '', /已列全/)
+    await page.click('#modalClose')
+  })
+
+  it('筛不到时说清楚，而不是给一个空下拉', async () => {
+    await page.click('#addRelationBtn')
+    await page.waitForSelector('#relTargetSearch')
+    await page.selectOption('#relType', 'decomposedInto')
+    await page.fill('#relTargetSearch', 'zzz-绝不存在的候选-zzz')
+    await page.waitForFunction(
+      () => (document.querySelector('#relTarget ~ .hint')?.textContent ?? '').includes('没有匹配'),
+      undefined,
+      { timeout: 5000 },
+    )
+    await page.click('#modalClose')
+  })
+})

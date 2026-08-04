@@ -226,6 +226,66 @@ export async function runBenchmark(options: {
         }),
     },
     {
+      id: 'NFR-PERF-002d',
+      label: '检索 窄查询（中文 + 唯一编号，trigram 命中少量行）',
+      target: 'P95 < 400ms',
+      targetMs: 400,
+      request: (i) =>
+        inject({
+          method: 'POST',
+          url: '/v1/resources:query',
+          headers: HEADERS,
+          // '编号 <n>' 在语料里唯一。这是搜索框最常见的用法：找一个特定的东西
+          payload: {
+            type: 'Requirement',
+            filter: { text: `编号 ${1 + (i % 10000)}` },
+            page: { size: 50 },
+          },
+        }),
+    },
+    {
+      id: 'NFR-PERF-002e',
+      label: '检索 宽查询（中文短语命中约 1/4 语料）',
+      target: 'P95 < 400ms',
+      targetMs: 400,
+      request: (i) =>
+        inject({
+          method: 'POST',
+          url: '/v1/resources:query',
+          headers: HEADERS,
+          // 最坏的现实情况：命中面很大，但仍要按 id 倒序取前 50 条。
+          // trigram 位图扫描要先把命中集合收齐再排序——这条是检索的上界
+          payload: {
+            type: 'Requirement',
+            filter: { text: ['状态机可配置', '多租户隔离', '权限模型', '图查询遍历'][i % 4] },
+            page: { size: 50 },
+          },
+        }),
+    },
+    {
+      id: 'NFR-PERF-002f',
+      label: '检索 短词（2 字，走不了 trigram，靠 type 索引收窄）',
+      target: 'P95 < 400ms',
+      targetMs: 400,
+      request: (i) =>
+        inject({
+          method: 'POST',
+          url: '/v1/resources:query',
+          headers: HEADERS,
+          // 中文两字词是最常见的输入之一，值得有个数字。
+          //
+          // 注意它**不是**"改回 ILIKE 就会变红"的护栏：带 type 过滤时
+          // ILIKE 实测 14ms，同样远在 400ms 之内，这条照样绿。
+          // 短查询选 strpos 的真正理由记在 002_search.sql 与仓储层的注释里，
+          // 靠的是那份 2×2 实测，不是靠这条基准。
+          payload: {
+            type: 'Requirement',
+            filter: { text: ['状态', '租户', '权限', '图谱'][i % 4] },
+            page: { size: 50 },
+          },
+        }),
+    },
+    {
       id: 'NFR-PERF-003',
       label: '图遍历 深度 5，稠密含环（blockedBy）',
       target: 'P95 < 500ms',

@@ -397,6 +397,113 @@ describe('query (FR-RES-002/012)', () => {
 })
 
 /**
+ * 检索（FR-RES-016）。
+ *
+ * 自用日志 #3：142 条需求里找一条，只能全量拉到内存用正则匹配——
+ * 记不住 id 的人无法使用这个系统。这组用例锁住的是"能找到"这件事本身。
+ */
+describe('search (FR-RES-016)', () => {
+  let taskId: string
+
+  beforeEach(async () => {
+    const mk = async (attributes: Record<string, unknown>, labels: string[] = []) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/resources',
+        headers: asRD,
+        payload: { type: 'Task', workspace: 'ws_platform', labels, attributes },
+      })
+      return res.json().id as string
+    }
+    taskId = await mk({ title: 'FR-WF-001 每个 EntityType 可绑定可配置状态机' }, ['wf'])
+    await mk({ title: 'FR-DASH-015 按口径计算自动化分级', description: '含状态机三个字' })
+    await mk({ title: 'unrelated english task' }, ['misc'])
+  })
+
+  const search = async (text: string, extra: Record<string, unknown> = {}) => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/resources:query',
+      headers: asRD,
+      payload: { type: 'Task', filter: { text, ...extra } },
+    })
+    expect(res.statusCode).toBe(200)
+    return (res.json().items as Array<{ id: string }>).map((i) => i.id)
+  }
+
+  it('finds Chinese substrings — the default FTS parser cannot tokenize these', async () => {
+    // 这条是选 trigram 而不是 to_tsvector 的全部理由：
+    // 默认分词器不切中文，整段中文是一个 token，搜「状态机」会一无所获
+    const hits = await search('状态机')
+    expect(hits).toHaveLength(2)
+    expect(hits).toContain(taskId)
+  })
+
+  it('finds an ASCII identifier embedded in a title', async () => {
+    expect(await search('FR-WF-001')).toEqual([taskId])
+  })
+
+  it('matches labels as well as attribute values', async () => {
+    expect(await search('wf')).toEqual([taskId])
+  })
+
+  it('does not match attribute *names* — searching "title" must not return everything', async () => {
+    // 用 attributes::text 建索引就会踩这个：键名进了索引，
+    // 于是搜 "title" 命中全表。一个永远返回一切的搜索框比没有更糟
+    expect(await search('title')).toEqual([])
+  })
+
+  it('treats LIKE wildcards as literal text', async () => {
+    // 不转义的话，搜一个 % 等于「匹配一切」
+    expect(await search('%')).toEqual([])
+    expect(await search('_')).toEqual([])
+  })
+
+  it('looks up by pasted resource id', async () => {
+    expect(await search(taskId)).toEqual([taskId])
+  })
+
+  it('combines with other filters instead of replacing them', async () => {
+    // 检索词与其余条件是 AND：标签对不上就该落空
+    expect(await search('状态机', { labels: ['misc'] })).toEqual([])
+    expect(await search('状态机', { labels: ['wf'] })).toEqual([taskId])
+  })
+
+  it('still answers short terms, even though the index cannot help', async () => {
+    // 中文两字词（需求 / 状态 / 权限）太常见，不能因为走不了索引就拒绝
+    expect(await search('状态')).toHaveLength(2)
+  })
+
+  it('excludes soft-deleted resources unless asked', async () => {
+    const before = await search('状态机')
+    const current = await app.inject({ method: 'GET', url: `/v1/resources/${taskId}`, headers: asRD })
+    await app.inject({
+      method: 'DELETE',
+      url: `/v1/resources/${taskId}`,
+      headers: { ...asRD, 'if-match': `"${current.json().version}"` },
+    })
+    expect(await search('状态机')).toHaveLength(before.length - 1)
+    expect(await search('状态机', { includeDeleted: true })).toHaveLength(before.length)
+  })
+
+  it('keeps the search index in step with edits', async () => {
+    // 生成列由数据库维护。若改成应用层写入的普通列，就会有"改了标题但搜不到"的窗口
+    const current = await app.inject({ method: 'GET', url: `/v1/resources/${taskId}`, headers: asRD })
+    await app.inject({
+      method: 'PATCH',
+      url: `/v1/resources/${taskId}`,
+      headers: asRD,
+      payload: {
+        expectedVersion: current.json().version,
+        attributes: { title: '改成了完全不同的标题 renamed' },
+      },
+    })
+    expect(await search('renamed')).toEqual([taskId])
+    expect(await search('FR-WF-001')).toEqual([])
+  })
+})
+
+/**
  * 自用第一天发现的洞（docs/dogfooding-log.md #1）。
  *
  * 分页写成了 `{limit, cursor}` 而不是 `{page:{size, cursor}}`。

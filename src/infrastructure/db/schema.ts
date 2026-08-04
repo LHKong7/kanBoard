@@ -23,6 +23,11 @@ export type ResourcesTable = {
   attributes: JSONColumnType<Record<string, unknown>, string, string>
   visibility: string
   deleted_at: Date | null
+  /**
+   * 生成列（002_search.sql）：标签 + 属性值拼成的可检索文本。
+   * `never` 表示插入与更新都不接受它——写它是错误，由数据库负责维护。
+   */
+  search_text: ColumnType<string, never, never>
 }
 
 export type RelationsTable = {

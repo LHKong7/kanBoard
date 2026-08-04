@@ -230,6 +230,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
           labels: body.filter?.labels,
           attributes: body.filter?.attributes,
           includeDeleted: body.filter?.includeDeleted,
+          text: body.filter?.text,
         },
         { size: body.page?.size ?? 50, cursor: body.page?.cursor },
       ),

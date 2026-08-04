@@ -31,6 +31,15 @@ const state = {
    * 用户会以为是自己手滑。
    */
   /** @type {{id: string, version: number}|null} */ editing: null,
+  /** 当前检索词。空串表示不过滤。 */
+  /** @type {string} */ search: '',
+  /**
+   * 这一页是否被截断了。
+   *
+   * 看板一次最多取 200 条。不说的话，用户看到的就是"全部"——
+   * 而这正是这个项目反复栽跟头的那种失败：没报错，只是答案不完整。
+   */
+  /** @type {boolean} */ truncated: false,
 }
 
 const el = {
@@ -39,6 +48,7 @@ const el = {
   identityBtn: /** @type {HTMLElement} */ (document.getElementById('identityBtn')),
   identityLabel: /** @type {HTMLElement} */ (document.getElementById('identityLabel')),
   newBtn: /** @type {HTMLElement} */ (document.getElementById('newBtn')),
+  searchInput: /** @type {HTMLInputElement} */ (document.getElementById('searchInput')),
   pollDot: /** @type {HTMLElement} */ (document.getElementById('pollDot')),
   drawer: /** @type {HTMLElement} */ (document.getElementById('drawer')),
   drawerType: /** @type {HTMLElement} */ (document.getElementById('drawerType')),
@@ -172,11 +182,19 @@ function renderTabs(types) {
 
 async function refresh() {
   if (state.activeType === '') return
+  // 检索交给服务端做，不在前端过滤已加载的 200 条——
+  // 那样搜到的永远只是"最近 200 条里的"，而用户以为搜的是全部。
+  const filter = state.search === '' ? undefined : { text: state.search }
   const result = await api('/v1/resources:query', {
     method: 'POST',
-    body: JSON.stringify({ type: state.activeType, page: { size: 200 } }),
+    body: JSON.stringify({
+      type: state.activeType,
+      ...(filter === undefined ? {} : { filter }),
+      page: { size: 200 },
+    }),
   })
   state.items = result.items
+  state.truncated = result.nextCursor !== null
   renderBoard()
 }
 
@@ -184,6 +202,11 @@ function renderBoard() {
   const lifecycle = lifecycleFor(state.activeType)
   if (lifecycle === undefined) {
     el.board.replaceChildren(hint('没有可展示的类型', '本体里还没有绑定生命周期的对象'))
+    return
+  }
+
+  if (state.search !== '' && state.items.length === 0) {
+    el.board.replaceChildren(hint(`没有匹配「${state.search}」的 ${state.activeType}`, '换个词，或切到别的类型试试'))
     return
   }
 
@@ -195,12 +218,29 @@ function renderBoard() {
     byStatus.get(item.status).push(item)
   }
 
-  el.board.replaceChildren(
-    ...[...byStatus.entries()].map(([status, items]) => {
-      const def = lifecycle.states.find((s) => s.name === status)
-      return renderColumn(status, def, items)
-    }),
-  )
+  const columns = [...byStatus.entries()].map(([status, items]) => {
+    const def = lifecycle.states.find((s) => s.name === status)
+    return renderColumn(status, def, items)
+  })
+
+  el.board.replaceChildren(...columns)
+  renderTruncationNotice()
+}
+
+/** 只显示了一部分就得说出来——静默截断会被当成"就这么多" */
+function renderTruncationNotice() {
+  const existing = document.getElementById('truncationNotice')
+  if (existing !== null) existing.remove()
+  if (!state.truncated) return
+
+  const notice = document.createElement('div')
+  notice.id = 'truncationNotice'
+  notice.className = 'truncation'
+  notice.textContent =
+    state.search === ''
+      ? `只显示了最新的 ${state.items.length} 条，还有更多——用搜索框缩小范围`
+      : `匹配「${state.search}」的结果超过 ${state.items.length} 条，只显示了最新的这些`
+  el.board.append(notice)
 }
 
 function renderColumn(status, def, items) {
@@ -610,23 +650,38 @@ async function openRelationModal(item) {
   const targetLabel = document.createElement('label')
   targetLabel.textContent = '目标对象'
   targetLabel.htmlFor = 'relTarget'
+  // 搜索框：只列"最近 50 条"时，对象一多就根本选不到想要的那个。
+  // 检索能力有了（FR-RES-016），这里直接用上
+  const targetSearch = document.createElement('input')
+  targetSearch.type = 'search'
+  targetSearch.id = 'relTargetSearch'
+  targetSearch.className = 'search'
+  targetSearch.autocomplete = 'off'
+  targetSearch.placeholder = '筛选候选对象'
   const targetSelect = document.createElement('select')
   targetSelect.id = 'relTarget'
   const targetHint = document.createElement('div')
   targetHint.className = 'hint'
-  targetField.append(targetLabel, targetSelect, targetHint)
+  targetField.append(targetLabel, targetSearch, targetSelect, targetHint)
 
-  /** 按所选关系的值域拉候选对象 */
+  /** 按所选关系的值域拉候选对象；有检索词就交给服务端过滤 */
   const loadTargets = async () => {
     const def = candidates.find((r) => r.name === typeSelect.value)
+    const term = targetSearch.value.trim()
     targetSelect.replaceChildren()
     targetHint.textContent = '加载中…'
     const options = []
+    let truncated = false
     for (const type of def?.range ?? []) {
       const result = await api('/v1/resources:query', {
         method: 'POST',
-        body: JSON.stringify({ type, page: { size: 50 } }),
+        body: JSON.stringify({
+          type,
+          ...(term === '' ? {} : { filter: { text: term } }),
+          page: { size: 50 },
+        }),
       })
+      if (result.nextCursor !== null) truncated = true
       for (const candidate of result.items) {
         if (candidate.id === item.id) continue // 自环被数据库约束挡住，不如先别列出来
         options.push(candidate)
@@ -639,11 +694,22 @@ async function openRelationModal(item) {
       option.textContent = `${candidate.type} · ${title}`
       targetSelect.append(option)
     }
-    // 只取最近 50 条：真正的搜索要等 M2，这里如实说明而不是假装列全了
+    // 列不全就说出来。以前这里写死"最近 50 条"，现在如实反映有没有被截断
     targetHint.textContent =
-      options.length === 0 ? '没有可选对象' : `列出每种类型最近 50 条，共 ${options.length} 个候选`
+      options.length === 0
+        ? term === ''
+          ? '没有可选对象'
+          : `没有匹配「${term}」的候选对象`
+        : truncated
+          ? `${options.length} 个候选，还有更多——用上面的框缩小范围`
+          : `${options.length} 个候选（已列全）`
   }
 
+  let targetSearchTimer = 0
+  targetSearch.addEventListener('input', () => {
+    clearTimeout(targetSearchTimer)
+    targetSearchTimer = setTimeout(() => void loadTargets(), 200)
+  })
   typeSelect.onchange = () => void loadTargets()
   el.modalForm.append(typeField, targetField)
   await loadTargets()
@@ -1079,6 +1145,35 @@ function hint(title, detail = '', inline = false) {
 
 el.newBtn.onclick = openCreateModal
 el.identityBtn.onclick = openIdentityModal
+
+/**
+ * 搜索。
+ *
+ * 每次按键都发请求会把服务端打满，所以做防抖；但**不做前端过滤**——
+ * 在已加载的 200 条里过滤，搜到的永远只是"最近 200 条里的"，
+ * 而用户以为搜的是全部。宁可慢 200 毫秒，也不要一个会骗人的搜索框。
+ */
+let searchTimer = 0
+el.searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(async () => {
+    state.search = el.searchInput.value.trim()
+    try {
+      await refresh()
+    } catch (error) {
+      toast('搜索失败', String(error.message), 'error')
+    }
+  }, 200)
+})
+
+// Esc 清空搜索：搜完之后要回到全量视图，不该逼人手动删干净
+el.searchInput.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || el.searchInput.value === '') return
+  event.stopPropagation()
+  el.searchInput.value = ''
+  state.search = ''
+  void refresh()
+})
 el.drawerClose.onclick = closeDrawer
 el.modalCancel.onclick = closeModal
 el.modalClose.onclick = closeModal
