@@ -230,7 +230,7 @@ describe('可用动作由工作流引擎给出', () => {
     })
   })
 
-  it('终态没有可执行的迁移', async () => {
+  it('终态只剩重开，并且看起来就是重开', async () => {
     const id = await page.locator('.card:has-text("渲染 PDF")').getAttribute('data-id')
     await page.evaluate(
       async ([resourceId, auth]) => {
@@ -244,7 +244,13 @@ describe('可用动作由工作流引擎给出', () => {
     await openBoard('Task')
     await page.click('.card:has-text("渲染 PDF")')
     await page.waitForSelector('.drawer-body .section')
-    assert.equal(await page.locator('.transition').count(), 0)
+
+    // ADR-0012：终态的唯一出口是显式的重开。
+    // 这条用例原本断言"一个迁移都没有"——放开重开时它红了
+    assert.equal(await page.locator('.transition').count(), 1)
+    assert.equal(await page.locator('.transition.reopen').count(), 1)
+    // 渲染成一个和"推进到下一步"长得一样的按钮，等于把它又藏了回去
+    assert.match(await page.locator('.transition').innerText(), /重开/)
   })
 })
 

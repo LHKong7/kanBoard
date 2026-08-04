@@ -1,0 +1,22 @@
+{
+  // 测试与工具脚本也要类型检查。
+  //
+  // 在此之前 `pnpm typecheck` 只看 src/：测试跑在 esbuild 的
+  // "剥掉类型"模式下，**类型根本没被检查过**。后果不是"少了一道保险"，
+  // 而是重命名一个字段之后，测试可能继续绿——它读到的是 undefined，
+  // 断言正好还成立。写了一屋子用例，然后其中几条悄悄什么也没测。
+  //
+  // 单独一个配置而不是并进 tsconfig.json：主配置的 rootDir 是 src，
+  // 而 noEmit 的检查不需要 rootDir。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "types": ["node"],
+    // UI 测试里 `page.evaluate(...)` 的回调**真的在浏览器里跑**，
+    // 它看得见 document。只在这份配置里放开：src 仍由主配置检查，
+    // 那边没有 DOM，所以服务端代码误用浏览器全局照样会被拦下
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "tools/**/*.ts", "bench/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

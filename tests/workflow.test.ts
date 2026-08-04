@@ -8,7 +8,7 @@ import {
 import { buildDefaultWorkflowRegistry, TASK_LIFECYCLE } from '../src/workflow/defaults.ts'
 import { evaluateGuard } from '../src/workflow/guards.ts'
 import { TransitionError } from '../src/platform/errors.ts'
-import type { GuardContext } from '../src/workflow/types.ts'
+import type { GuardContext, Lifecycle, TransitionDef } from '../src/workflow/types.ts'
 
 function ctx(overrides: Partial<GuardContext> = {}): GuardContext {
   return {
@@ -118,6 +118,50 @@ describe('lifecycle registration rejects self-contradictory definitions', () => 
       }),
     ).toThrow(/marked terminal but has an outgoing transition/)
   })
+
+  /**
+   * 重开必须是显式的（ADR-0012）。
+   *
+   * 放开"终态可以有出边"时，很容易顺手把校验整条删掉。
+   * 那样一台把 Done 悄悄连回去的状态机就再也没人拦——
+   * 而它的症状是"已完成的数量在跳"，排查起来极难。
+   * 所以放开的只是标了名字的那一条，其余三条规则各有一个用例。
+   */
+  describe('reopen edges (ADR-0012)', () => {
+    const lifecycle = (transitions: TransitionDef[]): Lifecycle => ({
+      id: 'x',
+      entityType: 'X',
+      initial: 'A',
+      states: [{ name: 'A' }, { name: 'Done', terminal: true }, { name: 'Dropped', terminal: true }],
+      transitions: [{ from: ['A'], to: 'Done' }, ...transitions],
+    })
+
+    it('accepts a terminal outgoing edge when it is marked reopen', () => {
+      expect(() =>
+        new WorkflowRegistry().register(lifecycle([{ from: ['Done'], to: 'A', reopen: true }])),
+      ).not.toThrow()
+    })
+
+    it('still rejects an unmarked one, and says what to do', () => {
+      expect(() => new WorkflowRegistry().register(lifecycle([{ from: ['Done'], to: 'A' }]))).toThrow(
+        /mark it reopen: true/,
+      )
+    })
+
+    it('rejects a reopen that does not start from a terminal state', () => {
+      // 贴在普通边上的 reopen 是个假标记，会让 Rework Rate 统计到不是返工的东西
+      expect(() =>
+        new WorkflowRegistry().register(lifecycle([{ from: ['A'], to: 'Done', reopen: true }])),
+      ).toThrow(/is not terminal/)
+    })
+
+    it('rejects a reopen that lands on another terminal state', () => {
+      // 终态之间横跳不是重开，是分类错误
+      expect(() =>
+        new WorkflowRegistry().register(lifecycle([{ from: ['Done'], to: 'Dropped', reopen: true }])),
+      ).toThrow(/must land on a non-terminal state/)
+    })
+  })
 })
 
 describe('transition resolution distinguishes its failure modes', () => {
@@ -196,8 +240,11 @@ describe('available transitions drive the UI (FR-RES-008)', () => {
     expect(options.find((o) => o.to === 'Doing')?.ready).toBe(true)
   })
 
-  it('returns nothing from a terminal state', () => {
-    expect(availableTransitions(TASK_LIFECYCLE, 'Task', 'Done', ctx())).toEqual([])
+  it('offers only the reopen edge from a terminal state', () => {
+    // ADR-0012：终态不再等于封闭，但它唯一的出口是显式的重开。
+    // 这条用例原本断言"什么都不返回"——放开重开时它红了，正是它该做的事
+    const options = availableTransitions(TASK_LIFECYCLE, 'Task', 'Done', ctx())
+    expect(options.map((o) => o.to)).toEqual(['Doing'])
   })
 
   it('collapses multiple paths to the same target into one entry', () => {

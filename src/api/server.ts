@@ -27,6 +27,7 @@ import {
   lifecycleSchema,
   metricScopeSchema,
   metricBreakdownSchema,
+  automationRateSchema,
   confirmRelationSchema,
   relateSchema,
   relationDirectionSchema,
@@ -350,10 +351,19 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
    * 硬套进通用指标模型只会让那个模型变成什么都能装的容器。
    */
   app.get('/v1/metrics:automation-rate', async (request) => {
-    const q = metricScopeSchema.parse(request.query ?? {})
+    const q = automationRateSchema.parse(request.query ?? {})
     const summary = await inTenant(request, async (service, caller) => {
       const registry = deps.lifecycles === undefined ? deps.workflows : await deps.lifecycles.current()
-      return new DashboardService(service, registry).automationRate(caller, q)
+      return new DashboardService(service, registry).automationRate(
+        caller,
+        { project: q.project, workspace: q.workspace },
+        {
+          period: {
+            from: q.from === undefined ? undefined : new Date(q.from),
+            to: q.to === undefined ? undefined : new Date(q.to),
+          },
+        },
+      )
     })
     return {
       ...summary,
@@ -367,6 +377,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         editRatio: i.editRatio,
         agent: i.agent,
         provisional: i.provisional,
+        reworked: i.reworked,
+        acceptedAt: i.acceptedAt.toISOString(),
       })),
     }
   })

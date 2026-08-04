@@ -325,4 +325,141 @@ describe('Automation Rate over real data (FR-DASH-015)', () => {
     const body = (await rate()).json()
     expect(body.provisional).toBe(1)
   })
+
+  it('grades against the version at acceptance, not the current one', async () => {
+    // §2 的编辑幅度是"到**进入终态时**的最终版本"。
+    // 采纳之后的补充不是"采纳前的人工修改"，算进去会让一个
+    // 原样接受、后来才被人补了一句的产出莫名其妙降级
+    const id = await agentTask('原样接受的任务')
+    const current = await app.inject({ method: 'GET', url: `/v1/resources/${id}`, headers: asAdmin })
+    await app.inject({
+      method: 'PATCH',
+      url: `/v1/resources/${id}`,
+      headers: asAdmin,
+      payload: {
+        expectedVersion: current.json().version,
+        attributes: { ...current.json().attributes, title: '完成之后才补的完全不同的标题' },
+      },
+    })
+
+    const body = (await rate()).json()
+    expect(body.items[0].editRatio).toBe(0)
+    expect(body.byLevel.L3).toBe(1)
+  })
+})
+
+/**
+ * 7 天推翻窗口的回溯修正（FR-DASH-016）。
+ *
+ * 这是「指标即查询」真正兑现的地方：历史值没有被存下来，
+ * 所以它**天然**会随事实变化而变化。如果指标是物化写入的，
+ * 回溯修正就得额外写一套重算任务——而那套任务漏跑一次，
+ * 没有任何人会发现。
+ */
+describe('overturn window and retroactive correction (FR-DASH-016)', () => {
+  const rate = async (qs = '') =>
+    app.inject({ method: 'GET', url: `/v1/metrics:automation-rate${qs}`, headers: asAdmin })
+
+  async function agentTaskDone(title: string) {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: {
+        'x-principal': 'agent://planner@1.0.0',
+        'x-tenant': TENANT,
+        'x-roles': 'AIAgent',
+        'x-capabilities': 'Task.*',
+      },
+      payload: { type: 'Task', workspace: 'ws', attributes: { title, assignee: 'user://bob' } },
+    })
+    const id = created.json().id as string
+    for (const to of ['Doing', 'Review', 'Testing', 'Done']) await move(id, to)
+    return id
+  }
+
+  it('reopening a Done task is possible at all', async () => {
+    // 在 ADR-0012 之前这条迁移不存在，于是"被推翻"在系统里
+    // 根本无法表达，Rework Rate 会永远是 0——不是因为质量好
+    const id = await agentTaskDone('会被重开的任务')
+    await move(id, 'Doing')
+    const after = await app.inject({ method: 'GET', url: `/v1/resources/${id}`, headers: asAdmin })
+    expect(after.json().status).toBe('Doing')
+  })
+
+  it('deducts a reopened item from L3 and counts it as rework', async () => {
+    const settled = await agentTaskDone('站住了的任务')
+    const overturned = await agentTaskDone('被推翻的任务')
+
+    const before = (await rate()).json()
+    expect(before.byLevel.L3).toBe(2)
+    expect(before.automationRate).toBe(1)
+    expect(before.reworked).toBe(0)
+
+    await move(overturned, 'Doing')
+
+    // 同一个查询，同一段时期，数字变了——因为事实变了。
+    // 这就是"回溯修正"，没有额外的重算任务
+    const after = (await rate()).json()
+    expect(after.byLevel.L3).toBe(1)
+    expect(after.automationRate).toBe(0.5)
+    expect(after.reworked).toBe(1)
+    expect(after.reworkRate).toBe(0.5)
+    expect(after.items.find((i: { id: string }) => i.id === settled).level).toBe('L3')
+    expect(after.items.find((i: { id: string }) => i.id === overturned).reworked).toBe(true)
+  })
+
+  it('keeps a reopened item in the denominator', async () => {
+    // 最容易写错的一条：按当前状态过滤的话，被重开的项此刻不在终态，
+    // 于是从分子和分母同时消失。自动化率照样下降，看起来"生效了"，
+    // 但 Rework Rate 恒为 0，回溯修正根本没有发生
+    const id = await agentTaskDone('被推翻的任务')
+    await move(id, 'Doing')
+
+    const body = (await rate()).json()
+    expect(body.total).toBe(1)
+    expect(body.accepted).toBe(1)
+    expect(body.reworked).toBe(1)
+  })
+
+  it('never counts an item that has not been accepted yet', async () => {
+    // 只走到 Review 的任务从未进入终态，重开与否都与它无关
+    const created = await app.inject({
+      method: 'POST',
+      url: '/v1/resources',
+      headers: {
+        'x-principal': 'agent://planner@1.0.0',
+        'x-tenant': TENANT,
+        'x-roles': 'AIAgent',
+        'x-capabilities': 'Task.*',
+      },
+      payload: { type: 'Task', workspace: 'ws', attributes: { title: '在做', assignee: 'user://bob' } },
+    })
+    for (const to of ['Doing', 'Review']) await move(created.json().id, to)
+    expect((await rate()).json().total).toBe(0)
+  })
+
+  it('scopes the metric to a period by acceptance time', async () => {
+    await agentTaskDone('本期完成的')
+
+    // 采纳发生在"现在"，所以一个位于过去的窗口里应当空无一物
+    const past = (await rate('?from=2020-01-01T00:00:00Z&to=2020-02-01T00:00:00Z')).json()
+    expect(past.total).toBe(0)
+    expect(past.automationRate).toBe(0)
+
+    const wide = (await rate('?from=2020-01-01T00:00:00Z')).json()
+    expect(wide.total).toBe(1)
+  })
+
+  it('rejects a period whose end precedes its start', async () => {
+    // from > to 会安静地返回空区间，看起来像"这段时间没干活"
+    const res = await rate('?from=2026-09-01T00:00:00Z&to=2026-08-01T00:00:00Z')
+    expect(res.statusCode).toBe(400)
+    expect(res.json().message).toMatch(/validation/)
+  })
+
+  it('rejects an unknown query parameter instead of ignoring it', async () => {
+    // 打错的 `form=` 会被静默忽略，然后返回一个范围完全不对的数字
+    const res = await rate('?form=2026-08-01T00:00:00Z')
+    expect(res.statusCode).toBe(400)
+  })
 })

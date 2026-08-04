@@ -158,12 +158,23 @@ describe('lifecycle over HTTP (FR-WF-002/003)', () => {
     expect(done.json().attributes.completedAt).toBeDefined()
   })
 
-  it('refuses to move out of a terminal state', async () => {
+  it('allows only the declared reopen out of a terminal state', async () => {
+    // ADR-0012：终态不再等于封闭，出口是一条显式的重开边。
+    // 这条用例原本断言"任何迁移都 409"——放开重开时它红了
     const task = await create('Task', { title: 't', assignee: 'user://bob' })
     await move(task, 'Doing')
     await move(task, 'Done')
-    const res = await move(task, 'Doing')
-    expect(res.statusCode).toBe(409)
+
+    // 没有声明的边照样拒绝：放开的是一条，不是整扇门
+    expect((await move(task, 'Review')).statusCode).toBe(409)
+    expect((await move(task, 'Doing')).statusCode).toBe(200)
+  })
+
+  it('keeps a terminal state without a reopen edge sealed', async () => {
+    // Cancelled 没有重开边，于是它仍然是死路
+    const task = await create('Task', { title: 't', assignee: 'user://bob' })
+    await move(task, 'Cancelled')
+    expect((await move(task, 'Doing')).statusCode).toBe(409)
   })
 
   it('lists available transitions with readiness and what is blocking', async () => {

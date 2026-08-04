@@ -17,14 +17,17 @@ import type { Grade, GradeInput } from '../src/domain/dashboard/automation-rate.
  */
 
 const NOW = new Date('2026-08-20T00:00:00Z')
+/** 采纳于 19 天前：7 天窗口早已关闭 */
 const LONG_AGO = new Date('2026-08-01T00:00:00Z')
+const days = (n: number): number => n * 24 * 60 * 60 * 1000
+const after = (base: Date, n: number): Date => new Date(base.getTime() + days(n))
 
 const input = (over: Partial<GradeInput> = {}): GradeInput => ({
   agent: 'agent://planner@1.0.0',
   firstAttributes: { title: 'Agent 写的标题', body: 'x'.repeat(100) },
   finalAttributes: { title: 'Agent 写的标题', body: 'x'.repeat(100) },
-  terminalAt: LONG_AGO,
-  overturned: false,
+  acceptedAt: LONG_AGO,
+  overturnedAt: null,
   now: NOW,
   ...over,
 })
@@ -96,20 +99,66 @@ describe('消歧规则 §2.5', () => {
   })
 
   it('7 天内被推翻 → 从 L3 移除', () => {
-    const g = grade(input({ overturned: true }))
+    const g = grade(input({ overturnedAt: after(LONG_AGO, 3) }))
     expect(g.level).not.toBe('L3')
     // 降到 L2 而不是 L0：产出确实是 Agent 做的，只是没站住
     expect(g.level).toBe('L2')
+    expect(g.reworked).toBe(true)
   })
 
   it('尚在 7 天窗口内的 L3 被标为临时', () => {
     // 藏起来会让指标看着更稳、实际更不可信
-    const recent = grade(input({ terminalAt: new Date('2026-08-19T00:00:00Z') }))
+    const recent = grade(input({ acceptedAt: new Date('2026-08-19T00:00:00Z') }))
     expect(recent.level).toBe('L3')
     expect(recent.provisional).toBe(true)
 
     const settled = grade(input())
     expect(settled.provisional).toBe(false)
+  })
+})
+
+/**
+ * 7 天推翻窗口（FR-DASH-016）。
+ *
+ * 这一组的存在本身就是一次修正：FR-DASH-015 的第一版把"是否被推翻"
+ * 做成了一个布尔值，于是**任何时候**的一次 reopen 都会把当初的 L3 扣掉。
+ * 口径写的是"采纳后 7 天内"（§2.2 第 4 条），半年后的返工不在其列。
+ */
+describe('7 天推翻窗口 §2.2 / FR-DASH-016', () => {
+  it('窗口内被推翻 → 扣除并计入 Rework', () => {
+    const g = grade(input({ overturnedAt: after(LONG_AGO, 6.9) }))
+    expect(g.level).toBe('L2')
+    expect(g.reworked).toBe(true)
+  })
+
+  it('窗口外被推翻 → 仍是 L3，不计入 Rework', () => {
+    // 布尔版实现会在这里把 L3 扣掉。方向是低估自动化率——
+    // 一个越用越难看的指标，没人会想去查它为什么难看
+    const g = grade(input({ overturnedAt: after(LONG_AGO, 7.1) }))
+    expect(g.level).toBe('L3')
+    expect(g.reworked).toBe(false)
+  })
+
+  it('第 7 天整是窗口外', () => {
+    // 边界钉死：口径是"7 天内"，第 7 天整已经不算内
+    expect(grade(input({ overturnedAt: after(LONG_AGO, 7) })).level).toBe('L3')
+    expect(
+      grade(input({ overturnedAt: new Date(after(LONG_AGO, 7).getTime() - 1) })).level,
+    ).toBe('L2')
+  })
+
+  it('被推翻的项不再标为临时——它已经确定被扣掉了', () => {
+    const g = grade(input({ acceptedAt: after(NOW, -1), overturnedAt: after(NOW, -0.5) }))
+    expect(g.provisional).toBe(false)
+    expect(g.reworked).toBe(true)
+  })
+
+  it('人做的工作项被推翻也不算 Rework', () => {
+    // Rework Rate 衡量的是 Agent 产出的质量。人自己写的东西被推翻，
+    // 说明不了 Agent 什么
+    const g = grade(input({ agent: null, overturnedAt: after(LONG_AGO, 1) }))
+    expect(g.level).toBe('L0')
+    expect(g.reworked).toBe(false)
   })
 })
 
@@ -161,11 +210,13 @@ describe('Levenshtein 本身', () => {
 })
 
 describe('汇总公式 §2.2', () => {
-  const g = (level: Grade['level'], provisional = false): Grade => ({
+  const g = (level: Grade['level'], provisional = false, reworked = false): Grade => ({
     level,
     editRatio: 0,
-    agent: 'agent://a@1',
+    // L0 的定义就是没有 Agent 参与，别处的断言都靠这一点区分分母
+    agent: level === 'L0' ? null : 'agent://a@1',
     provisional,
+    reworked,
   })
 
   it('Automation Rate = L3 / 全部进入终态的工作项', () => {
@@ -196,5 +247,19 @@ describe('汇总公式 §2.2', () => {
 
   it('带上口径版本，便于发现口径漂移', () => {
     expect(summarize([]).rubricVersion).toBe(AUTOMATION_RUBRIC_VERSION)
+  })
+
+  it('Rework Rate 的分母是被采纳的 Agent 产出，不是全部工作项', () => {
+    // 3 个 Agent 产出 + 1 个人工，其中 1 个 Agent 产出被推翻
+    const s = summarize([g('L3'), g('L3'), g('L2', false, true), g('L0')])
+    expect(s.total).toBe(4)
+    expect(s.accepted).toBe(3)
+    expect(s.reworked).toBe(1)
+    // 用全部工作项当分母会得到 0.25——一个可以靠多干人工活刷好看的指标
+    expect(s.reworkRate).toBeCloseTo(1 / 3, 4)
+  })
+
+  it('没有 Agent 产出时 Rework Rate 是 0，不是 NaN', () => {
+    expect(summarize([g('L0'), g('L0')]).reworkRate).toBe(0)
   })
 })

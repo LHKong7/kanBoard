@@ -169,6 +169,25 @@ export const metricScopeSchema = z
   })
   .strict()
 
+/**
+ * Automation Rate 的查询参数（FR-DASH-015/016）。
+ *
+ * `from` / `to` 界定「同期」，按**采纳时刻**落窗。
+ * 时间用 ISO 串而不是 epoch 毫秒：指标区间是要被人手写进 URL 的，
+ * 而一串数字里的错误没人看得出来。
+ */
+export const automationRateSchema = metricScopeSchema
+  .extend({
+    from: z.string().datetime().optional(),
+    to: z.string().datetime().optional(),
+  })
+  .strict()
+  .refine((q) => q.from === undefined || q.to === undefined || q.from < q.to, {
+    // from > to 会安静地返回一个空区间，看起来像"这段时间没干活"
+    message: 'from must be earlier than to',
+    path: ['from'],
+  })
+
 export const metricBreakdownSchema = metricScopeSchema.extend({
   /** 分布指标里被点开的那一格，如 status=Blocked */
   group: z.string().max(64).optional(),
@@ -209,6 +228,8 @@ export const lifecycleSchema = z
             from: z.array(z.string().min(1).max(64)).min(1).max(40),
             to: z.string().min(1).max(64),
             capability: z.string().max(96).optional(),
+            /** 从终态重开（ADR-0012）。合法性由 WorkflowRegistry 判，这里只认形状 */
+            reopen: z.boolean().optional(),
           })
           .strict(),
       )

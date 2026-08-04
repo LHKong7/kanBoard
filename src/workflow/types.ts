@@ -31,7 +31,12 @@ export type StateDef = {
   entryActions?: readonly TransitionAction[]
   /** 状态停留时限。M1 只记录，超时动作在 poller 中实现 */
   sla?: { maxDurationMs: number; onBreach: 'notify-owner' | 'escalate' }
-  /** 终态：不再有出边 */
+  /**
+   * 终态：这个状态算"完成"。指标据此计入分母，SLA 停止计时。
+   *
+   * 终态默认没有出边，唯一的例外是显式标了 `reopen` 的迁移（ADR-0012）。
+   * **终态不等于封闭**——依赖"进了就不会再变"的代码会出错。
+   */
   terminal?: boolean
   description?: string
 }
@@ -43,6 +48,14 @@ export type TransitionDef = {
   /** 迁移所需 Capability；缺省为 `<Type>.Transition` */
   capability?: string
   actions?: readonly TransitionAction[]
+  /**
+   * 从终态重开（ADR-0012）。
+   *
+   * 这是终态唯一允许的出边，也是 FR-DASH-016 判定「被推翻」的依据。
+   * 做成显式标记而不是"从终态出发就算重开"，是为了让它在状态机定义里
+   * 一眼可见——重开是一件该被看见的事。
+   */
+  reopen?: boolean
   description?: string
 }
 

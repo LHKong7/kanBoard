@@ -1,4 +1,5 @@
 import pg from 'pg'
+import type { InjectOptions } from 'fastify'
 import { buildServer } from '../src/api/server.ts'
 import { buildDefaultRegistry } from '../src/ontology/defaults.ts'
 import { buildDefaultWorkflowRegistry } from '../src/workflow/defaults.ts'
@@ -169,7 +170,10 @@ export async function runBenchmark(options: {
     `  sampled ${taskIds.length} tasks / ${projectIds.length} projects / ${storyIds.length} stories\n`,
   )
 
-  const inject = async (init: Parameters<typeof app.inject>[0]): Promise<number> => {
+  // 用 InjectOptions 而不是 Parameters<typeof app.inject>[0]：
+  // inject 是重载的，Parameters<> 只会取到最后一个重载（无参的 Chain），
+  // 于是这里的形参被推成 undefined，整段 bench 的类型检查静默失效
+  const inject = async (init: InjectOptions): Promise<number> => {
     const res = await app.inject(init)
     return res.statusCode
   }

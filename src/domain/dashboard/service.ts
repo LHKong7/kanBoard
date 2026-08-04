@@ -10,50 +10,77 @@ import type { HistoryEntry } from '../resource/resource.ts'
 import type { WorkflowRegistry } from '../../workflow/engine.ts'
 
 /**
- * 从历史记录里还原「Agent 初版」与「终态时的终版」。
+ * 从历史记录里还原「Agent 初版」与「采纳那一刻的终版」。
  *
- * 历史是**逐字段 diff** 的序列，所以初版要从终版反向回放得到：
+ * 历史是**逐字段 diff** 的序列，所以两个版本都要从当前值反向回放得到：
  * 把每一次变更倒着撤销回去。这比另存一份快照可靠——
  * 快照会和历史不一致，而不一致时没人知道该信哪个。
+ *
+ * 返回 null 表示这个工作项从未进入过终态，因此不进分母（§2.2）。
  */
 function reconstruct(
-  item: { attributes: Record<string, unknown>; createdBy: string; status: string; updatedAt: Date },
+  item: { attributes: Record<string, unknown>; createdBy: string; status: string },
   history: readonly HistoryEntry[],
-): Omit<GradeInput, 'now'> {
+  terminalStates: ReadonlySet<string>,
+): Omit<GradeInput, 'now'> | null {
   const ordered = [...history].sort((a, b) => a.version - b.version)
-  const creation = ordered[0]
-  // 创建者是 agent:// 才算 Agent 产出（§2.1：无关联 AgentRun 即 L0）
-  const agent = item.createdBy.startsWith('agent://') ? item.createdBy : null
 
-  const final = item.attributes
-  const first: Record<string, unknown> = { ...final }
-  // 倒着撤销每一次属性变更，回到第一版
-  for (const entry of [...ordered].reverse()) {
-    if (creation !== undefined && entry.version === creation.version) continue
-    for (const change of entry.changes) {
-      if (!change.path.startsWith('attributes.')) continue
-      const key = change.path.slice('attributes.'.length)
-      if (change.from === null || change.from === undefined) delete first[key]
-      else first[key] = change.from
-    }
-  }
-
-  // 进入终态之后又发生过状态变更，就是被推翻了（§2.5）
-  let terminalAt = item.updatedAt
-  let overturned = false
-  let sawTerminal = false
+  // ── 先定位「采纳」与「推翻」两个时刻 ──
+  //
+  // 采纳 = **首次**进入终态。之后首次离开终态 = 被推翻。
+  // 两个都取首次：口径管的是"采纳后 7 天内"，
+  // 取最近一次会让每次推翻都刷新一遍窗口（见 GradeInput.acceptedAt）
+  let acceptedAt: Date | null = null
+  let acceptanceVersion = 0
+  let overturnedAt: Date | null = null
   for (const entry of ordered) {
     const statusChange = entry.changes.find((c) => c.path === 'status')
     if (statusChange === undefined) continue
-    if (String(statusChange.to) === item.status) {
-      terminalAt = entry.changedAt
-      sawTerminal = true
-    } else if (sawTerminal) {
-      overturned = true
+    const to = String(statusChange.to)
+    if (acceptedAt === null) {
+      if (terminalStates.has(to)) {
+        acceptedAt = entry.changedAt
+        acceptanceVersion = entry.version
+      }
+    } else if (overturnedAt === null && !terminalStates.has(to)) {
+      overturnedAt = entry.changedAt
     }
   }
 
-  return { agent, firstAttributes: first, finalAttributes: final, terminalAt, overturned }
+  if (acceptedAt === null) {
+    // 创建时就落在终态的对象没有状态变更记录。它确实进过终态，
+    // 只是没有"迁移"这一步——用创建时刻当采纳时刻
+    const creation = ordered[0]
+    if (!terminalStates.has(item.status) || creation === undefined) return null
+    acceptedAt = creation.changedAt
+    acceptanceVersion = creation.version
+  }
+
+  // ── 再还原两个版本 ──
+  const cur: Record<string, unknown> = { ...item.attributes }
+  let final: Record<string, unknown> | null = null
+
+  for (const entry of [...ordered].reverse()) {
+    // 撤到采纳那一步之后，当前快照就是"进入终态时的最终版本"（§2 编辑幅度定义）。
+    // 用当前属性当终版是错的：采纳之后的编辑不是"采纳前的人工修改"，
+    // 把它算进去会让一个原样接受、后来才被人补充的产出莫名其妙降级
+    if (final === null && entry.version <= acceptanceVersion) final = { ...cur }
+    for (const change of entry.changes) {
+      if (!change.path.startsWith('attributes.')) continue
+      const key = change.path.slice('attributes.'.length)
+      if (change.from === null || change.from === undefined) delete cur[key]
+      else cur[key] = change.from
+    }
+  }
+
+  return {
+    // 创建者是 agent:// 才算 Agent 产出（§2.1：无关联 AgentRun 即 L0）
+    agent: item.createdBy.startsWith('agent://') ? item.createdBy : null,
+    firstAttributes: cur,
+    finalAttributes: final ?? { ...item.attributes },
+    acceptedAt,
+    overturnedAt,
+  }
 }
 
 function titleOf(item: { attributes: Record<string, unknown>; id: string }): string {
@@ -90,7 +117,47 @@ export type MetricValue = {
 /** §2.4：计入自动化率的对象类型 */
 const COUNTED_TYPES = ['Requirement', 'Story', 'Task', 'Decision', 'Knowledge'] as const
 
-export type GradedItem = Grade & { id: string; type: string; title: string }
+const PAGE_SIZE = 200
+const HISTORY_SIZE = 200
+
+/**
+ * 一次计算最多检查多少个工作项。
+ *
+ * 这条上界是真实存在的代价：每个工作项都要拉一次历史并做一次编辑距离，
+ * 全租户扫描不是免费的。定成常量而不是"扫到底"，是因为一个会随数据量
+ * 线性变慢、最终超时的指标接口，坏起来的样子是整个 Dashboard 打不开。
+ * 命中上界时结果里的 `truncated` 会是 true——**慢和少算都可以接受，
+ * 不声不响地少算不可以**。
+ */
+const MAX_SCANNED = 5_000
+
+export type AutomationRateOptions = {
+  types?: readonly string[]
+  now?: Date
+  /** 「同期」的定义：按**采纳时刻**落窗。不传即全部历史 */
+  period?: Period | undefined
+  maxItems?: number
+}
+
+export type Period = { from?: Date | undefined; to?: Date | undefined }
+
+function inPeriod(at: Date, period: Period | undefined): boolean {
+  if (period === undefined) return true
+  if (period.from !== undefined && at < period.from) return false
+  // 右端开区间：`to` 传当天零点时，"到 8 月 1 日"不该悄悄含进 8 月 1 日当天
+  if (period.to !== undefined && at >= period.to) return false
+  return true
+}
+
+export type GradedItem = Grade & { id: string; type: string; title: string; acceptedAt: Date }
+
+export type AutomationRateResult = AutomationSummary & {
+  items: GradedItem[]
+  /** 扫描命中了上界，结果不完整 */
+  truncated: boolean
+  /** 实际检查过的工作项数量 */
+  scanned: number
+}
 
 export class DashboardService {
   readonly #resources: ResourceService
@@ -116,34 +183,69 @@ export class DashboardService {
   async automationRate(
     caller: Caller,
     scope: MetricScopeFilter,
-    options: { types?: readonly string[]; now?: Date } = {},
-  ): Promise<AutomationSummary & { items: GradedItem[] }> {
+    options: AutomationRateOptions = {},
+  ): Promise<AutomationRateResult> {
     const now = options.now ?? new Date()
     const types = options.types ?? COUNTED_TYPES
+    const maxItems = options.maxItems ?? MAX_SCANNED
     const graded: GradedItem[] = []
+    let scanned = 0
+    let truncated = false
 
     for (const type of types) {
-      const lifecycle = this.#terminalStates(type)
-      if (lifecycle.length === 0) continue
+      const terminal = new Set(this.#terminalStates(type))
+      if (terminal.size === 0) continue
 
-      // 分母是「同期进入终态的全部工作项」，人做的也算（§2.2）
-      const page = await this.#resources.query(
-        caller,
-        { ...definedOnly(scope), type, status: lifecycle },
-        { size: 200 },
-      )
+      // 注意这里**不按当前状态过滤**。
+      //
+      // 分母是「同期**进入过**终态的全部工作项」（§2.2），
+      // 而一个被推翻的工作项此刻正躺在非终态里。按 status 过滤的话，
+      // 它会同时从分子和分母消失——自动化率照样下降，看起来"生效了"，
+      // 但 Rework Rate 恒为 0，回溯修正（FR-DASH-016）根本无从发生。
+      // 这是一次真实的返工：FR-DASH-015 那版就是这么写的
+      let cursor: string | undefined = undefined
+      for (;;) {
+        const page: PageResult<Resource> = await this.#resources.query(
+          caller,
+          { ...definedOnly(scope), type },
+          { size: PAGE_SIZE, cursor },
+        )
 
-      for (const item of page.items) {
-        const history = await this.#resources.history(caller, item.id, { size: 200 })
-        const g = grade({
-          ...reconstruct(item, history.items),
-          now,
-        })
-        graded.push({ id: item.id, type: item.type, title: titleOf(item), ...g })
+        for (const item of page.items) {
+          if (scanned >= maxItems) {
+            truncated = true
+            break
+          }
+          scanned++
+          const history = await this.#resources.history(caller, item.id, { size: HISTORY_SIZE })
+          const input = reconstruct(item, history.items, terminal)
+          // 从未进入终态 → 不进分母
+          if (input === null) continue
+          // 「同期」：按采纳时刻落窗。没有窗口就是全部历史
+          if (!inPeriod(input.acceptedAt, options.period)) continue
+          graded.push({
+            id: item.id,
+            type: item.type,
+            title: titleOf(item),
+            acceptedAt: input.acceptedAt,
+            ...grade({ ...input, now }),
+          })
+        }
+
+        if (truncated || page.nextCursor === null) break
+        cursor = page.nextCursor
       }
+      if (truncated) break
     }
 
-    return { ...summarize(graded), items: graded }
+    return {
+      ...summarize(graded),
+      // 扫描被截断时**明说**，不要安静地少算。
+      // 一个少算了的北极星指标看起来完全正常，而它正是最不该被默默相信的数字
+      truncated,
+      scanned,
+      items: graded,
+    }
   }
 
   /** 某个类型的终态集合。取自状态机定义，不在这里另写一份清单 */

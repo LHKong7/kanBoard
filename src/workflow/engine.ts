@@ -55,6 +55,14 @@ export type AvailableTransition = {
   ready: boolean
   blockedBy: string | null
   requires: string | null
+  /**
+   * 这是一条从终态出发的重开边（ADR-0012）。
+   *
+   * 单独标出来给 UI 用：把"重开一个已完成的任务"渲染成一个
+   * 和别的迁移长得一样的按钮，等于把 ADR-0012 想让人看见的那件事
+   * 又藏了回去。
+   */
+  reopen: boolean
 }
 
 /**
@@ -163,6 +171,7 @@ export function availableTransitions(
       ready: failure === null,
       blockedBy: failure,
       requires: requirements.length > 0 ? requirements.join(' and ') : null,
+      reopen: transition.reopen === true,
     })
   }
 
@@ -221,15 +230,33 @@ function validateLifecycle(lifecycle: Lifecycle): void {
     if (!names.has(transition.to)) {
       throw new Error(`lifecycle "${lifecycle.id}" has a transition to unknown state "${transition.to}"`)
     }
-    // 终态如果还有出边，说明它不是终态——这种自相矛盾最好在注册时就炸掉
+    // 终态的出边必须是显式的重开（ADR-0012）。
+    //
+    // 原规则是"终态一律不许有出边"，理由是把 Done 悄悄连回去的状态机
+    // 说明 Done 根本不是终态。那个理由仍然成立，所以不标 reopen 照样报错；
+    // 放开的只是**标了名字的那一条**——因为 FR-DASH-016 要求
+    // 系统能表达"采纳后被推翻"，而在此之前它根本无法表达
     const target = lifecycle.states.find((s) => s.name === transition.to)
     for (const from of transition.from) {
       const source = lifecycle.states.find((s) => s.name === from)
-      if (source?.terminal === true) {
+      if (source?.terminal === true && transition.reopen !== true) {
         throw new Error(
-          `lifecycle "${lifecycle.id}": state "${from}" is marked terminal but has an outgoing transition to "${target?.name}"`,
+          `lifecycle "${lifecycle.id}": state "${from}" is marked terminal but has an outgoing transition to "${target?.name}"; mark it reopen: true if this is a deliberate reopen (ADR-0012)`,
         )
       }
+      if (transition.reopen === true && source?.terminal !== true) {
+        // 不从终态出发的"重开"是个假标记。放任它，
+        // FR-DASH-016 的 Rework Rate 就会开始统计一些不是返工的东西
+        throw new Error(
+          `lifecycle "${lifecycle.id}": transition "${from}" → "${target?.name}" is marked reopen but "${from}" is not terminal`,
+        )
+      }
+    }
+    if (transition.reopen === true && target?.terminal === true) {
+      // 终态之间横跳不是重开，是分类错误
+      throw new Error(
+        `lifecycle "${lifecycle.id}": reopen transition must land on a non-terminal state, but "${target.name}" is terminal`,
+      )
     }
   }
 }

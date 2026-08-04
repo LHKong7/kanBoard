@@ -52,7 +52,7 @@ beforeEach(async () => {
   lifecycles.invalidate()
 })
 
-const putLifecycle = async (body: unknown, headers = asAdmin, id = 'task-default') =>
+const putLifecycle = async (body: object, headers = asAdmin, id = 'task-default') =>
   app.inject({ method: 'PUT', url: `/v1/workflows/${id}`, headers, payload: body })
 
 async function createTask() {

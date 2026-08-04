@@ -364,6 +364,9 @@ body {
 .transition:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
 .transition:disabled { cursor: not-allowed; opacity: .75; }
 .transition .arrow { color: var(--text-faint); }
+/* 重开一件已完成的事不是普通的推进，别让它看起来像（ADR-0012） */
+.transition.reopen { border-style: dashed; }
+.transition.reopen .arrow { color: var(--warn); }
 .transition .why {
   font-size: 11px;
   color: var(--warn);

@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "dev": "node --watch --experimental-strip-types src/main.ts",
     "start": "node --experimental-strip-types src/main.ts",
     "migrate": "node --experimental-strip-types src/platform/db/migrate.ts",

@@ -61,10 +61,9 @@ export async function checkFit(connectionString: string): Promise<{
           id: row.id,
           type: row.type,
           writtenUnder: row.ontology_version,
-          detail:
-            error instanceof ValidationError
-              ? JSON.stringify(error.details?.['fields'] ?? error.message)
-              : String(error),
+          // details 是 unknown（它装的东西每个错误类型都不一样），
+          // 所以要先确认它真是个对象再取 fields，而不是假设它是
+          detail: error instanceof ValidationError ? describe(error) : String(error),
         })
       }
     }
@@ -102,4 +101,13 @@ if (entry !== undefined && import.meta.url.endsWith(entry.split('/').slice(-2).j
   }
   if (violations.length > 20) console.error(`  … and ${violations.length - 20} more`)
   process.exit(1)
+}
+
+/** 校验失败时哪些字段不合规。取不到就退回错误消息本身 */
+function describe(error: ValidationError): string {
+  const details = error.details
+  if (typeof details === 'object' && details !== null && 'fields' in details) {
+    return JSON.stringify((details as { fields: unknown }).fields)
+  }
+  return error.message
 }

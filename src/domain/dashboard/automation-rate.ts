@@ -26,6 +26,8 @@ export type Grade = {
    * 把它们藏起来，指标看着更稳，实际更不可信。
    */
   provisional: boolean
+  /** 采纳后 7 天内被推翻（FR-DASH-016）。这是 Rework Rate 的分子 */
+  reworked: boolean
 }
 
 export type GradeInput = {
@@ -35,14 +37,28 @@ export type GradeInput = {
   firstAttributes: Record<string, unknown>
   /** 进入终态时的属性 */
   finalAttributes: Record<string, unknown>
-  /** 进入终态的时刻 */
-  terminalAt: Date
-  /** 进入终态之后是否又离开过终态 / 被取代（§2.5：7 天内被推翻要扣除） */
-  overturned: boolean
+  /**
+   * **首次**进入终态的时刻，即"采纳"发生的那一刻。
+   *
+   * 是首次而不是最近一次：口径写的是"采纳后 7 天内"（§2.2 第 4 条），
+   * 窗口从采纳起算。取最近一次的话，一个被推翻又重新完成的工作项
+   * 会拿到一个刷新过的窗口，等于推翻一次就重置一次考核——
+   * 反复推翻反而永远查不出来。
+   */
+  acceptedAt: Date
+  /**
+   * 采纳之后**首次**离开终态的时刻；从未被推翻则为 null。
+   *
+   * 存时刻而不是布尔值，是因为口径关心的是"多久之后"：
+   * 半年后的一次 reopen 不该把当初的 L3 扣掉（§2.2 第 4 条只管 7 天内）。
+   * 用布尔值表达不出这个区别，而它算错的方向是**低估**自动化率——
+   * 一个越用越难看的指标，没人会想去查它为什么难看。
+   */
+  overturnedAt: Date | null
   now: Date
 }
 
-const OVERTURN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+export const OVERTURN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 
 /**
  * 文本字段做 Levenshtein 的长度上限。
@@ -57,16 +73,24 @@ const LEVENSHTEIN_MAX = 4_000
 export function grade(input: GradeInput): Grade {
   // §2.1：无关联 AgentRun 即 L0。人做的活不该被算进自动化率的分子
   if (input.agent === null) {
-    return { level: 'L0', editRatio: 1, agent: null, provisional: false }
+    return { level: 'L0', editRatio: 1, agent: null, provisional: false, reworked: false }
   }
 
   const ratio = editRatio(input.firstAttributes, input.finalAttributes)
-  const withinWindow = input.now.getTime() - input.terminalAt.getTime() < OVERTURN_WINDOW_MS
+  const accepted = input.acceptedAt.getTime()
+  const reworked =
+    input.overturnedAt !== null && input.overturnedAt.getTime() - accepted < OVERTURN_WINDOW_MS
 
   // §2.5：7 天内被推翻的从 L3 移除。降到 L2 而不是 L0——
   // 产出确实是 Agent 做的，只是没站住
-  if (input.overturned) {
-    return { level: ratio === 0 ? 'L2' : gradeByRatio(ratio), editRatio: ratio, agent: input.agent, provisional: false }
+  if (reworked) {
+    return {
+      level: ratio === 0 ? 'L2' : gradeByRatio(ratio),
+      editRatio: ratio,
+      agent: input.agent,
+      provisional: false,
+      reworked: true,
+    }
   }
 
   return {
@@ -74,7 +98,8 @@ export function grade(input: GradeInput): Grade {
     editRatio: ratio,
     agent: input.agent,
     // 只有 L3 才需要标注临时性：L0..L2 不进分子，推翻与否不改变它们
-    provisional: ratio === 0 && withinWindow,
+    provisional: ratio === 0 && input.now.getTime() - accepted < OVERTURN_WINDOW_MS,
+    reworked: false,
   }
 }
 
@@ -175,14 +200,31 @@ export type AutomationSummary = {
   aiLedRate: number
   /** L3 里还在 7 天窗口内、可能被扣回去的数量 */
   provisional: number
+  /** 被采纳的 Agent 产出数量，即 Rework Rate 的分母 */
+  accepted: number
+  /** 采纳后 7 天内被推翻的数量 */
+  reworked: number
+  /**
+   * Rework Rate = reworked / accepted（§1.3）。
+   *
+   * 分母是**被采纳的 Agent 产出**，不是全部工作项：人自己写的东西
+   * 被推翻，说明不了 Agent 的产出质量。用全部工作项作分母会让
+   * Rework Rate 随着人工工作量的增加而下降——一个可以靠多干活
+   * 刷好看的指标，等于没有指标。
+   */
+  reworkRate: number
 }
 
 export function summarize(grades: readonly Grade[]): AutomationSummary {
   const byLevel: Record<AutomationLevel, number> = { L0: 0, L1: 0, L2: 0, L3: 0 }
   let provisional = 0
+  let accepted = 0
+  let reworked = 0
   for (const g of grades) {
     byLevel[g.level]++
     if (g.provisional) provisional++
+    if (g.agent !== null) accepted++
+    if (g.reworked) reworked++
   }
   const total = grades.length
   return {
@@ -194,6 +236,9 @@ export function summarize(grades: readonly Grade[]): AutomationSummary {
     automationRate: total === 0 ? 0 : round(byLevel.L3 / total),
     aiLedRate: total === 0 ? 0 : round((byLevel.L2 + byLevel.L3) / total),
     provisional,
+    accepted,
+    reworked,
+    reworkRate: accepted === 0 ? 0 : round(reworked / accepted),
   }
 }
 

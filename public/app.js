@@ -631,11 +631,14 @@ function sectionTransitions(id, transitions) {
 
     const arrow = document.createElement('span')
     arrow.className = 'arrow'
-    arrow.textContent = '→'
+    // 重开是把一件已经完成的事重新打开（ADR-0012）。
+    // 渲染成和"推进到下一步"一样的按钮，等于把它藏了回去
+    arrow.textContent = t.reopen ? '↩' : '→'
 
     const name = document.createElement('span')
-    name.textContent = t.to
+    name.textContent = t.reopen ? `重开 → ${t.to}` : t.to
 
+    if (t.reopen) btn.classList.add('reopen')
     btn.append(arrow, name)
 
     // 未就绪的也列出来，并说明差什么。

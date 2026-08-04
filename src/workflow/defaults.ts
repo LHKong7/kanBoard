@@ -54,6 +54,9 @@ export const TASK_LIFECYCLE: Lifecycle = {
     { from: ['Doing', 'Review', 'Testing'], to: 'Blocked' },
     { from: ['Blocked'], to: 'Doing' },
     { from: ['Todo', 'Doing', 'Review', 'Testing', 'Blocked'], to: 'Cancelled' },
+    // 返工重开（ADR-0012）。任务天天被重开，在此之前系统无法表达这件事，
+    // 于是自动化率里没有一次返工——不是因为没返工过
+    { from: ['Done'], to: 'Doing', reopen: true, capability: 'Task.Execute', description: '返工重开' },
   ],
 }
 
@@ -90,6 +93,14 @@ export const REQUIREMENT_LIFECYCLE: Lifecycle = {
     { from: ['Planning'], to: 'InProgress' },
     { from: ['InProgress'], to: 'Finished' },
     { from: ['Approved', 'Planning', 'InProgress'], to: 'Superseded' },
+    // 谁有权批准，谁才有权推翻（ADR-0012）
+    {
+      from: ['Finished'],
+      to: 'InProgress',
+      reopen: true,
+      capability: 'Requirement.Approve',
+      description: '验收后返工',
+    },
   ],
 }
 
@@ -118,6 +129,7 @@ export const STORY_LIFECYCLE: Lifecycle = {
     { from: ['Review'], to: 'Done' },
     { from: ['InProgress'], to: 'Done' },
     { from: ['Draft', 'Ready', 'InProgress', 'Review'], to: 'Cancelled' },
+    { from: ['Done'], to: 'InProgress', reopen: true, description: '返工重开' },
   ],
 }
 
