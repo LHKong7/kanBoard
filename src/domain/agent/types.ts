@@ -92,12 +92,26 @@ export type RunBudget = {
   maxTokens: number
   maxSteps: number
   maxCostUsd: number
+  /**
+   * 单次 Run 允许影响的**不同对象**数量上限（FR-IAM-012 blastRadius）。
+   *
+   * 与前三项不是一类东西。token / 成本 / 步数衡量的是**花掉了多少**，
+   * 所以在记账之后判——已经花了的钱不该凭空消失。
+   * blastRadius 衡量的是**损害面**，必须在动手之前判：
+   * 第 101 个对象一旦被改，事情已经发生了，事后终止只是记录它。
+   *
+   * 数的是不同对象而不是操作次数：把同一份文档改五十遍，
+   * 影响面是 1 不是 50。按操作数计的话，一个反复修订的 Agent
+   * 会被误杀，而一个批量改一百个对象的失控 Agent 反而更容易过关。
+   */
+  maxObjectsPerRun: number
 }
 
 export const DEFAULT_RUN_BUDGET: RunBudget = {
   maxTokens: 100_000,
   maxSteps: 8,
   maxCostUsd: 5,
+  maxObjectsPerRun: 100,
 }
 
 export type RunStepKind = 'context' | 'reasoning' | 'observation' | 'artifact' | 'guardrail' | 'tool'
@@ -126,6 +140,8 @@ export type RunOutcome =
   | { kind: 'completed'; summary: string }
   | { kind: 'awaiting-review'; summary: string; proposals: number }
   | { kind: 'budget-exceeded'; limit: keyof RunBudget; used: number }
+  /** 影响面触顶（FR-IAM-012）。与超预算分开，因为要采取的行动完全不同 */
+  | { kind: 'blast-radius-exceeded'; limit: number; touched: number }
   | { kind: 'failed'; reason: string }
 
 export type RunResult = {

@@ -42,6 +42,8 @@ export type AgentRunnerDeps = {
   /** 外部系统通道。不给就是这批 Run 不能调用任何外部工具 */
   connectors?: ConnectorInvoker
   clock?: Clock
+  /** 单次 Run 的影响面上限（FR-IAM-012）。租户级策略，不由 Run 自己设定 */
+  blastRadius?: number
   /** 每轮最多认领几个 Run */
   batchSize?: number
   onFinished?: (run: Resource, result: RunResult) => void
@@ -171,6 +173,7 @@ export class AgentRunner {
             steps: new PgRunStepRepository(trx, tenant),
             clock,
             ...(this.#deps.connectors === undefined ? {} : { connectors: this.#deps.connectors }),
+            ...(this.#deps.blastRadius === undefined ? {} : { blastRadius: this.#deps.blastRadius }),
           })
           result = await runtime.execute(agentCaller, run)
         } catch (error) {
@@ -298,6 +301,8 @@ function describe(result: RunResult): string {
       return `待人工审阅：${o.proposals} 项产出`
     case 'budget-exceeded':
       return `预算触顶（${o.limit}=${o.used}）后终止`
+    case 'blast-radius-exceeded':
+      return `影响面触顶（已改动 ${o.touched} 个对象，上限 ${o.limit}）后熔断`
     case 'failed':
       return `失败：${o.reason}`
   }

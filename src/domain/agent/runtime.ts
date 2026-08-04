@@ -61,6 +61,13 @@ export type RuntimeDeps = {
   /** Context 装配的深度与段数上限 */
   contextDepth?: number
   contextLimit?: number
+  /**
+   * 单次 Run 允许影响的对象数上限（FR-IAM-012 blastRadius）。
+   *
+   * 来自**租户级策略**（PRD 07 §7 的 agentPolicy），不是 Run 上的属性：
+   * 一道能被本次执行自己调大的闸不是闸。缺省用 DEFAULT_RUN_BUDGET。
+   */
+  blastRadius?: number
 }
 
 /**
@@ -106,13 +113,15 @@ export class AgentRuntime {
     const mode = (run.attributes['mode'] as CollaborationMode) ?? 'Suggest'
     const spec = agentSpecFrom(agentResource, {
       mode,
-      budget: budgetFor(run),
+      budget: budgetFor(run, this.#deps.blastRadius),
     })
 
     let seq = 0
     let tokensUsed = 0
     let costUsd = 0
     const proposals: ProposedResource[] = []
+    /** 这次 Run 改动过的对象 id。blastRadius 数的是它的大小（FR-IAM-012） */
+    const touched = new Set<string>()
     const history: { thought: string; observation: string }[] = []
 
     const record = async (
@@ -208,6 +217,29 @@ export class AgentRuntime {
         continue
       }
 
+      // blastRadius 在**动手之前**判（FR-IAM-012）。
+      //
+      // 和预算相反：预算记的是已经花掉的，所以事后判；
+      // 影响面记的是损害，第 101 个对象改下去之后再终止，
+      // 只是把事情记录下来，而不是拦住它。
+      if (MAY_WRITE[spec.mode] && touched.size >= spec.budget.maxObjectsPerRun) {
+        await record('guardrail', `影响面触顶：已改动 ${touched.size} 个对象`, {
+          limit: spec.budget.maxObjectsPerRun,
+          touched: touched.size,
+        })
+        return {
+          outcome: {
+            kind: 'blast-radius-exceeded',
+            limit: spec.budget.maxObjectsPerRun,
+            touched: touched.size,
+          },
+          steps: seq,
+          tokensUsed,
+          costUsd,
+          proposals,
+        }
+      }
+
       let createdId: string | null = null
       if (MAY_WRITE[spec.mode]) {
         try {
@@ -219,6 +251,13 @@ export class AgentRuntime {
             labels: ['agent-generated'],
           })
           createdId = created.id
+          // 用集合而不是计数器：同一个对象改多次，影响面还是 1。
+          //
+          // **老实说：当前运行时只会创建、不会更新，所以这里换成计数器
+          // 全部用例照样绿**（试过）。留着集合是因为更新路径一旦出现，
+          // 计数器会把一个反复修订同一份文档的 Agent 误杀，
+          // 而真正该被拦下的是批量改一百个对象的那种
+          touched.add(created.id)
           await record('artifact', `创建了 ${proposal.resourceType} ${created.id}`, {
             rationale: proposal.rationale,
           })
@@ -302,13 +341,17 @@ export class AgentRuntime {
 }
 
 /** Run 上写了预算就用它，否则用默认值。Run 级预算让"这次别花太多"成为可能 */
-function budgetFor(run: Resource): RunBudget {
+function budgetFor(run: Resource, blastRadius?: number): RunBudget {
   const maxTokens = run.attributes['maxTokens']
   const maxSteps = run.attributes['maxSteps']
   return {
     maxTokens: typeof maxTokens === 'number' ? maxTokens : DEFAULT_RUN_BUDGET.maxTokens,
     maxSteps: typeof maxSteps === 'number' ? maxSteps : DEFAULT_RUN_BUDGET.maxSteps,
     maxCostUsd: DEFAULT_RUN_BUDGET.maxCostUsd,
+    // 影响面上限**不读 Run 上的属性**（FR-IAM-012）。
+    // 它是最后一道闸，而一道能被本次执行自己调大的闸不是闸。
+    // 要改就改租户级策略，那是一次有人签字的决定
+    maxObjectsPerRun: blastRadius ?? DEFAULT_RUN_BUDGET.maxObjectsPerRun,
   }
 }
 

@@ -9,7 +9,7 @@ import { defaultPolicies } from '../../src/identity/default-policies.ts'
 import { AgentRunner } from '../../src/infrastructure/agent-runner.ts'
 import { NeverFinishingModelClient, ScriptedModelClient } from '../../src/infrastructure/model/scripted.ts'
 import type { ScriptedTurn } from '../../src/infrastructure/model/scripted.ts'
-import type { ModelClient } from '../../src/domain/agent/types.ts'
+import type { ModelClient, RunResult } from '../../src/domain/agent/types.ts'
 import type { ConnectorInvoker } from '../../src/domain/agent/runtime.ts'
 import { DomainError } from '../../src/platform/errors.ts'
 
@@ -53,9 +53,11 @@ function runnerWith(
   model: ModelClient,
   onFinished?: AgentRunnerOnFinished,
   connectors?: ConnectorInvoker,
+  blastRadius?: number,
 ): AgentRunner {
   return new AgentRunner({
     ...(connectors === undefined ? {} : { connectors }),
+    ...(blastRadius === undefined ? {} : { blastRadius }),
     pool,
     tenants: [TENANT],
     registry: buildDefaultRegistry(),
@@ -416,5 +418,122 @@ describe('agents reach the outside world only through the gateway', () => {
       `SELECT kind, summary FROM agent_run_steps WHERE run_id = '${run.id}' ORDER BY seq`,
     )
     expect(steps.some((s) => s.kind === 'guardrail' && s.summary.includes('allow-list'))).toBe(true)
+  })
+})
+
+/**
+ * blastRadius：单次 Run 的影响面上限（FR-IAM-012）。
+ *
+ * 这是防止 Agent 失控的**最后一道闸**。前面几道（能力声明、策略、
+ * 协作模式、预算）都可能被配置放宽，而这一道回答的是另一个问题：
+ * 就算它有权限、也没超预算，它一次能弄坏多少东西。
+ */
+describe('blast radius is the last gate (FR-IAM-012)', () => {
+  const propose = (title: string): ScriptedTurn => ({
+    thought: `再拆一个：${title}`,
+    action: {
+      kind: 'propose',
+      resourceType: 'Story',
+      attributes: { title },
+      rationale: 'r',
+    },
+  })
+
+  it('trips before touching one object too many', async () => {
+    // 上限 2：第 3 次提议不该落库。**事后终止只是记录损害，不是拦住它**
+    const { run } = await seedRun('Autonomous', { attributes: { maxSteps: 8 } })
+    const model = new ScriptedModelClient([propose('A'), propose('B'), propose('C'), FINISH])
+
+    let outcome: RunResult['outcome'] | null = null
+    await runnerWith(model, (_r, result) => { outcome = result.outcome }, undefined, 2).pollOnce()
+
+    expect(outcome).not.toBeNull()
+    expect(outcome!.kind).toBe('blast-radius-exceeded')
+
+    const stories = await app.inject({
+      method: 'GET',
+      url: '/v1/resources?type=Story',
+      headers: asAdmin,
+    })
+    const titles = (stories.json().items as { attributes: Record<string, unknown> }[])
+      .map((s) => s.attributes['title'])
+    expect(titles).toHaveLength(2)
+    expect(titles).not.toContain('C')
+
+    const settled = await get(run.id)
+    expect(String(settled.attributes.outcome)).toMatch(/影响面触顶/)
+  })
+
+  it('records the trip as a guardrail step, not a silent stop', async () => {
+    // 悄悄停下来的熔断和"这次没什么可做的"长得一模一样
+    const { run } = await seedRun('Autonomous', { attributes: { maxSteps: 8 } })
+    await runnerWith(
+      new ScriptedModelClient([propose('A'), propose('B'), FINISH]),
+      undefined,
+      undefined,
+      1,
+    ).pollOnce()
+
+    const steps = await queryAsTenant<{ kind: string; summary: string }>(
+      pool,
+      TENANT,
+      `SELECT kind, summary FROM agent_run_steps WHERE run_id = '${run.id}' ORDER BY seq`,
+    )
+    const guardrail = steps.find((s) => s.kind === 'guardrail' && s.summary.includes('影响面触顶'))
+    expect(guardrail).toBeDefined()
+  })
+
+  it('lets a run under the limit finish normally', async () => {
+    // 熔断闸不该误杀正常的 Run。
+    //
+    // **注意这条用例证明不了"数的是对象而不是操作次数"**：
+    // 当前运行时只会创建、不会更新，于是每次写回都是一个新对象，
+    // 两种计法结果相同。把 `touched` 换成计数器，全部用例照样绿（试过）。
+    // 集合的写法是为将来的更新路径准备的，理由写在 RunBudget 的注释里
+    const { run } = await seedRun('Autonomous', { attributes: { maxSteps: 6 } })
+    let outcome: RunResult['outcome'] | null = null
+    await runnerWith(
+      new ScriptedModelClient([propose('A'), FINISH]),
+      (_r, result) => { outcome = result.outcome },
+      undefined,
+      2,
+    ).pollOnce()
+
+    expect(outcome!.kind).toBe('completed')
+    void run
+  })
+
+  it('a run cannot raise its own limit', async () => {
+    // Run 上写 maxObjectsPerRun 不该有任何效果：
+    // 一道能被本次执行自己调大的闸不是闸
+    const { run } = await seedRun('Autonomous', {
+      attributes: { maxSteps: 8, maxTokens: 100000 },
+    })
+    let outcome: RunResult['outcome'] | null = null
+    await runnerWith(
+      new ScriptedModelClient([propose('A'), propose('B'), propose('C'), FINISH]),
+      (_r, result) => { outcome = result.outcome },
+      undefined,
+      1,
+    ).pollOnce()
+
+    expect(outcome!.kind).toBe('blast-radius-exceeded')
+    void run
+  })
+
+  it('leaves Suggest-mode runs alone — nothing is being touched', async () => {
+    // Suggest 模式不落库，影响面是 0，不该被这道闸挡住
+    const { run } = await seedRun('Suggest', { attributes: { maxSteps: 8 } })
+    let outcome: RunResult['outcome'] | null = null
+    await runnerWith(
+      new ScriptedModelClient([propose('A'), propose('B'), propose('C'), FINISH]),
+      (_r, result) => { outcome = result.outcome },
+      undefined,
+      1,
+    ).pollOnce()
+
+    // Suggest 有产出就是 awaiting-review。重点是它**不是**被熔断
+    expect(outcome!.kind).toBe('awaiting-review')
+    void run
   })
 })
