@@ -2,6 +2,8 @@ import { DomainError } from '../../platform/errors.ts'
 import type { Clock } from '../../platform/clock.ts'
 import type { Caller, ResourceService } from '../resource/service.ts'
 import type { Resource } from '../resource/resource.ts'
+import { WorkingMemory } from './memory.ts'
+import type { AgentMemory, MemoryEntry } from './memory.ts'
 import { assembleContext } from './context.ts'
 import { agentSpecFrom, DEFAULT_RUN_BUDGET } from './types.ts'
 import type { CallInput, CallResult } from '../connector/types.ts'
@@ -71,6 +73,11 @@ export type RuntimeDeps = {
    */
   signal?: AbortSignal
   /**
+   * 四级 Memory（FR-AGT-005）。不给就是这次 Run 没有跨 Run 的记忆——
+   * **不是"记忆无限"**。缺省值必须是最小的那一侧。
+   */
+  memory?: AgentMemory
+  /**
    * 单次 Run 允许影响的对象数上限（FR-IAM-012 blastRadius）。
    *
    * 来自**租户级策略**（PRD 07 §7 的 agentPolicy），不是 Run 上的属性：
@@ -131,7 +138,10 @@ export class AgentRuntime {
     const proposals: ProposedResource[] = []
     /** 这次 Run 改动过的对象 id。blastRadius 数的是它的大小（FR-IAM-012） */
     const touched = new Set<string>()
-    const history: { thought: string; observation: string }[] = []
+    // Working Memory：单次 Run 的短期记忆，**Run 结束即释放**（FR-AGT-005）。
+    // 它是个局部变量，没有任何持久化——那正是"释放"的实现方式
+    const working = new WorkingMemory()
+    const history = working.steps
 
     const record = async (
       kind: RunStep['kind'],
@@ -162,10 +172,27 @@ export class AgentRuntime {
         limit: this.#deps.contextLimit ?? 40,
       })
     }
+    // ── Memory 装配（FR-AGT-005） ────────────────────────
+    //
+    // Episodic：这个 Agent 在**这个项目**里没过期的经历。
+    // Procedural：它的声明本身（system 提示、可提议类型…）。
+    // Semantic 不在这里读——它是 Knowledge 对象，本来就走上面的图装配，
+    // 和别的知识一样带出处。**这正是 FR-AGT-006 想要的效果**：
+    // Agent 学到的东西和人写的知识在同一条路径上，没有私有捷径
+    const recalled: MemoryEntry[] = []
+    if (this.#deps.memory !== undefined) {
+      recalled.push(
+        ...(await this.#deps.memory.recall(spec.principal, run.project)),
+        ...this.#deps.memory.procedural(agentResource),
+      )
+      for (const entry of recalled) working.put(`${entry.tier}:${entry.key}`, entry.value)
+    }
+
     await record('context', `装配了 ${context.segments.length} 段上下文`, {
       // 出处清单进轨迹：FR-AGT-004 的验收标准就是这个列表可查
       sources: context.segments.map((s) => ({ id: s.sourceId, type: s.sourceType, via: s.via })),
       truncated: context.truncated,
+      memory: recalled.map((m) => ({ tier: m.tier, key: m.key, sourceId: m.sourceId })),
     })
 
     /**
@@ -228,6 +255,10 @@ export class AgentRuntime {
       if (response.action.kind === 'finish') {
         const summary = response.action.summary
         await record('artifact', '完成', { summary })
+        // 把这次的结论记成一条经历（FR-AGT-005）。
+        // 记的是**结论**不是全过程：把整段推理存下来，下一次召回
+        // 会把上下文塞满旧的思考过程，而那些既占地方又容易误导
+        await this.#remember(spec, run, summary, proposals.length)
         return {
           outcome:
             NEEDS_REVIEW[spec.mode] && proposals.length > 0
@@ -350,6 +381,33 @@ export class AgentRuntime {
    * 但失败必须留痕——一次静默失败的工具调用，会让模型基于"什么都没发生"
    * 继续推理，而使用者看到的产出像是凭空来的。
    */
+  /**
+   * 写一条 Episodic 记忆。失败不影响 Run 的结论。
+   *
+   * 记忆写不进去是遗憾，不是错误——但必须**说出来**。
+   * 安静吞掉的话，表现是"这个 Agent 好像什么都记不住"，
+   * 而没有任何地方能查出为什么。
+   */
+  async #remember(
+    spec: AgentSpec,
+    run: Resource,
+    summary: string,
+    produced: number,
+  ): Promise<void> {
+    if (this.#deps.memory === undefined) return
+    try {
+      await this.#deps.memory.remember(
+        spec.principal,
+        run.project,
+        `run:${String(run.attributes['goal'] ?? '').slice(0, 64)}`,
+        { summary, produced, at: this.#deps.clock.now().toISOString() },
+        { tenant: run.tenant, runRef: run.id },
+      )
+    } catch (error) {
+      console.error(`[agent] failed to record episodic memory for run ${run.id}:`, error)
+    }
+  }
+
   async #callTool(
     caller: Caller,
     action: Extract<ModelResponse['action'], { kind: 'call' }>,

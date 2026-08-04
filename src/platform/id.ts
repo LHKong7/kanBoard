@@ -40,6 +40,11 @@ export function newRunId(): string {
   return `run_${ulid()}`
 }
 
+/** Episodic Memory 的 id（FR-AGT-005） */
+export function newMemoryId(): string {
+  return `mem_${ulid()}`
+}
+
 export function newTraceId(): string {
   return `tr_${ulid()}`
 }

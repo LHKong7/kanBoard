@@ -5,6 +5,8 @@ import { PgRelationRepository } from './relation-repository.pg.ts'
 import { PgResourceRepository } from './resource-repository.pg.ts'
 import { PgRunStepRepository } from './run-step-repository.pg.ts'
 import { AgentRuntime } from '../domain/agent/runtime.ts'
+import { AgentMemory } from '../domain/agent/memory.ts'
+import { PgEpisodicStore } from './agent-memory.pg.ts'
 import type { ConnectorInvoker } from '../domain/agent/runtime.ts'
 import type { ModelClient, RunResult } from '../domain/agent/types.ts'
 import { ResourceService } from '../domain/resource/service.ts'
@@ -15,7 +17,7 @@ import type { WorkflowRegistry } from '../workflow/engine.ts'
 import type { Capability, Policy } from '../identity/types.ts'
 import { systemClock } from '../platform/clock.ts'
 import type { Clock } from '../platform/clock.ts'
-import { newTraceId } from '../platform/id.ts'
+import { newTraceId, newMemoryId } from '../platform/id.ts'
 import type pg from 'pg'
 
 /**
@@ -182,6 +184,12 @@ export class AgentRunner {
             ...(this.#deps.connectors === undefined ? {} : { connectors: this.#deps.connectors }),
             ...(this.#deps.blastRadius === undefined ? {} : { blastRadius: this.#deps.blastRadius }),
             signal: this.#aborter.signal,
+            memory: new AgentMemory({
+              service,
+              episodic: new PgEpisodicStore(trx, tenant),
+              newId: newMemoryId,
+              now: () => clock.now(),
+            }),
           })
           result = await runtime.execute(agentCaller, run)
         } catch (error) {

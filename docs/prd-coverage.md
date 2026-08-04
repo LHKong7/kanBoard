@@ -11,11 +11,11 @@
 | IAM 权限 | 13 | 12 | 见下；缺 FR-IAM-009 的「超时自动拒绝」 |
 | WF 工作流 | 9 | 8 | 见下；缺 FR-WF-006 外部事件触发 |
 | DOM 领域 | 8 | 7 | 见下 |
-| AGT Agent | 11 | 9 | 逐条核对过；缺 FR-AGT-005/006 四级 Memory 模型 |
+| AGT Agent | 11 | 11 | 见下 |
 | DASH 指标 | 9 | 6 | 见下；FR-DASH-001/002/003 只做了一部分，按本表规矩不计入 |
 | AI 能力 | 12 | 1 | 只有运行时骨架；具体能力（WBS、拆分、估点…）未做 |
 | CON 连接器 | 12 | 8 | 契约与网关已交付；具体集成（GitHub/Jira/MCP/Browser）未做 |
-| **合计** | **102** | **79** | |
+| **合计** | **102** | **81** | |
 
 ## 这份表本身有多可信
 
@@ -155,7 +155,8 @@ FR-IAM-013 的注释此前是一句空话：`001_foundation.sql` 里 `audit_log`
 | FR-AGT-009/010 四种协作模式 · 不可逆操作强制确认 | ✅ |
 | FR-AGT-011 经领域对象协作，无私有消息通道 | ✅ 两条 CI 规则挡住 |
 | FR-AGT-012 三层预算与熔断 | ✅ |
-| FR-AGT-005/006 四级 Memory 模型 · Semantic Memory 落 Knowledge BC | ❌ 代码里搜不到 |
+| FR-AGT-005 四级 Memory 模型 | ✅ Working 在内存、Episodic 有界 TTL、Semantic 落 Knowledge、Procedural 即声明 |
+| FR-AGT-006 Semantic Memory 必须落 Knowledge BC | ✅ 私有表上的 CHECK 让「藏语义记忆」**做不到**，而不是「不该做」 |
 
 ## Dashboard 细分
 

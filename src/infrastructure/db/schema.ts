@@ -154,8 +154,23 @@ export type SlaBreachesTable = {
   notification_id: string | null
 }
 
+export type AgentMemoriesTable = {
+  id: string
+  tenant: string
+  agent: string
+  project: string | null
+  /** 只可能是 'episodic'——表上有 CHECK 约束（009_agent_memory.sql） */
+  kind: string
+  key: string
+  value: JSONColumnType<Record<string, unknown>, string, string>
+  run_ref: string | null
+  created_at: Date
+  expires_at: Date
+}
+
 export type Database = {
   resources: ResourcesTable
+  agent_memories: AgentMemoriesTable
   sla_breaches: SlaBreachesTable
   lifecycles: LifecyclesTable
   agent_run_steps: AgentRunStepsTable
