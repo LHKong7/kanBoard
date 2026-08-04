@@ -304,6 +304,29 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
     ],
   },
   {
+    name: 'Proposal',
+    version: '1.0.0',
+    context: 'AI',
+    lifecycle: 'proposal-default',
+    description:
+      'Agent 提议创建的一个对象（FR-AI-001）。**一个节点一条**，' +
+      '因此可以逐节点接受或拒绝——而不是对着一整棵生成出来的树只能全要或全不要。' +
+      '接受时才真正创建那个对象；在此之前它只是一条提议，不占用类型体系里的位置。',
+    attributes: [
+      { name: 'resourceType', kind: 'string', required: true, description: '接受后要创建什么类型' },
+      { name: 'draft', kind: 'json', required: true, description: '接受后写进去的属性' },
+      { name: 'rationale', kind: 'text', description: 'Agent 给出的依据' },
+      { name: 'runRef', kind: 'ref', description: '哪次 Run 提的' },
+      {
+        name: 'materialisedId',
+        kind: 'string',
+        derived: true,
+        description: '接受之后真正创建出来的对象 id。**没接受就是空**',
+      },
+      { name: 'decidedAt', kind: 'datetime', derived: true },
+    ],
+  },
+  {
     name: 'Approval',
     version: '1.0.0',
     context: 'Identity',
@@ -351,6 +374,21 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
 ]
 
 export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
+  {
+    // Proposal ──refines──▶ Proposal：生成出来的是一棵树（FR-AI-001 的"对象树"）
+    name: 'refines',
+    inverse: 'refinedBy',
+    acyclic: true,
+    domain: ['Proposal'],
+    range: ['Proposal'],
+  },
+  {
+    name: 'refinedBy',
+    inverse: 'refines',
+    acyclic: true,
+    domain: ['Proposal'],
+    range: ['Proposal'],
+  },
   {
     // Release ──ships──▶ Task
     name: 'ships',

@@ -304,6 +304,24 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return { items }
   })
 
+  /**
+   * 接受一条提议，把它变成真正的对象（FR-AI-001）。
+   *
+   * 用子资源而不是 `:accept` 自定义方法：`:` 形式会和已有的
+   * `/v1/resources/:id` 参数路由撞在一起（Fastify 会把两者并成一个
+   * `:id|:id\:accept` 的节点）。而这个形状本来就有先例——
+   * `/v1/relations/:id/confirmation` 也是"一次人的决定带来一个后果"。
+   *
+   * 不做成 `POST …/transitions {to:'Accepted'}`，是因为它不只是迁移：
+   * 它**创建了另一个对象**，而迁移接口的契约里没有这回事。
+   * 拒绝倒确实只是迁移，所以拒绝没有对应端点。
+   */
+  app.post('/v1/resources/:id/acceptance', async (request, reply) => {
+    const id = resourceIdSchema.parse((request.params as { id: string }).id)
+    const created = await inTenant(request, (service, caller) => service.acceptProposal(caller, id))
+    return reply.status(201).send(toWire(created))
+  })
+
   app.post('/v1/resources/:id/transitions', async (request, reply) => {
     const id = resourceIdSchema.parse((request.params as { id: string }).id)
     const body = transitionSchema.parse(withIfMatch(request, 'expectedVersion'))

@@ -110,11 +110,27 @@ export type RuntimeDeps = {
  * PRD §4 的规则是"任何不可逆操作永远需要人工确认"，
  * 而把一个对象直接创建成终态，就等于替人做了不可逆的决定。
  */
+/**
+ * 哪些模式**直接创建目标对象**。
+ *
+ * Draft 从 true 改成了 false（FR-AI-001）。它仍然会落库，
+ * 但落的是 `Proposal` 而不是目标对象——于是一棵生成出来的树
+ * 可以被逐节点接受或拒绝。直接创建的话，"审阅"就只剩下
+ * 对着一整棵树全要或全不要，而那实际上等于全都不要。
+ */
 const MAY_WRITE: Record<CollaborationMode, boolean> = {
   Suggest: false,
-  Draft: true,
+  Draft: false,
   ExecuteWithReview: true,
   Autonomous: true,
+}
+
+/** 哪些模式把产出记成可逐条决定的提议（FR-AI-001） */
+const PROPOSES: Record<CollaborationMode, boolean> = {
+  Suggest: false,
+  Draft: true,
+  ExecuteWithReview: false,
+  Autonomous: false,
 }
 
 /** 哪些模式在产出后必须停下来等人（FR-AGT-009） */
@@ -396,6 +412,34 @@ export class AgentRuntime {
           const message = error instanceof DomainError ? error.message : String(error)
           await record('guardrail', `写回被拒：${message}`, { type: proposal.resourceType })
           history.push({ thought: response.thought, observation: `创建失败：${message}` })
+          continue
+        }
+      } else if (PROPOSES[spec.mode]) {
+        // Draft：落一条**提议**，不落目标对象（FR-AI-001）。
+        // 每个节点各一条，人可以留下十七个、扔掉三个
+        try {
+          const proposalRecord = await this.#deps.service.create(caller, {
+            type: 'Proposal',
+            workspace: run.workspace,
+            project: run.project,
+            attributes: {
+              resourceType: proposal.resourceType,
+              draft: proposal.attributes,
+              rationale: proposal.rationale,
+              runRef: run.id,
+            },
+            labels: ['agent-generated'],
+          })
+          createdId = proposalRecord.id
+          touched.add(proposalRecord.id)
+          await record('artifact', `提议创建 ${proposal.resourceType}（待逐条决定）`, {
+            proposalId: proposalRecord.id,
+            rationale: proposal.rationale,
+          })
+        } catch (error) {
+          const message = error instanceof DomainError ? error.message : String(error)
+          await record('guardrail', `提议落库被拒：${message}`, { type: proposal.resourceType })
+          history.push({ thought: response.thought, observation: `提议失败：${message}` })
           continue
         }
       } else {

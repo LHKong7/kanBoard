@@ -328,6 +328,34 @@ export const BUDGET_LIFECYCLE: Lifecycle = {
   ],
 }
 
+/**
+ * 一条提议的生命周期（FR-AI-001）。
+ *
+ * 三个状态就够了。关键在于它是**每个节点各有一条**：
+ * 一棵生成出来的 WBS 有二十个节点，人要能留下十七个、扔掉三个，
+ * 而不是对着整棵树只能全要或全不要——后者的实际结果是全都不要。
+ */
+export const PROPOSAL_LIFECYCLE: Lifecycle = {
+  id: 'proposal-default',
+  entityType: 'Proposal',
+  initial: 'Pending',
+  states: [
+    { name: 'Pending' },
+    {
+      name: 'Accepted',
+      entryActions: [{ kind: 'stampNow', path: 'decidedAt' }],
+      terminal: true,
+    },
+    { name: 'Rejected', entryActions: [{ kind: 'stampNow', path: 'decidedAt' }], terminal: true },
+  ],
+  transitions: [
+    // 接受要一个人才有的能力。Agent 自己批自己的产出，
+    // 整套人机协作模式就只是个摆设（同 AgentRun.Approve）
+    { from: ['Pending'], to: 'Accepted', capability: 'Proposal.Decide' },
+    { from: ['Pending'], to: 'Rejected', capability: 'Proposal.Decide' },
+  ],
+}
+
 export const APPROVAL_LIFECYCLE: Lifecycle = {
   id: 'approval-default',
   entityType: 'Approval',
@@ -487,6 +515,7 @@ export const DEFAULT_LIFECYCLES: readonly Lifecycle[] = [
   ACCEPTANCE_LIFECYCLE,
   RELEASE_LIFECYCLE,
   APPROVAL_LIFECYCLE,
+  PROPOSAL_LIFECYCLE,
   SPRINT_LIFECYCLE,
   MILESTONE_LIFECYCLE,
   RISK_LIFECYCLE,

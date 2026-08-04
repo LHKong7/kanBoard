@@ -775,6 +775,57 @@ export class ResourceService {
     return this.#deps.resources.aggregate(filter, fn, attribute)
   }
 
+  /**
+   * 接受一条提议：把它变成真正的对象（FR-AI-001）。
+   *
+   * 两步在**同一次调用**里完成——先创建目标对象，再把提议迁到 Accepted。
+   * 反过来（先迁移再创建）的话，创建失败会留下一条"已接受但什么也没有"的提议，
+   * 而那种状态没有任何地方能看出不对。
+   *
+   * 创建走的是普通的 `create`，所以本体校验、权限、审计、事件一个不少：
+   * **Agent 提议的对象和人建的对象没有区别**，只是多了一步谁来点头。
+   */
+  async acceptProposal(caller: Caller, proposalId: string): Promise<Resource> {
+    const proposal = await this.#requireLive(proposalId)
+    if (proposal.type !== 'Proposal') {
+      throw new ValidationError(`${proposalId} is not a Proposal`, { type: proposal.type })
+    }
+    if (proposal.status !== 'Pending') {
+      // **老实说：删掉这个检查，所有用例照样绿**（试过）。
+      // 重复接受时下面的乐观锁会撞上版本冲突，整个请求事务回滚，
+      // 第二个对象不会留下来——正确性由事务保证，不由这一行。
+      //
+      // 留着是为了错误信息：撞版本号得到的是"有人同时改了它"，
+      // 而真实情况是"这条已经决定过了"。两者要采取的行动完全不同。
+      throw new ConflictError(proposalId, 0, proposal.version)
+    }
+
+    const resourceType = String(proposal.attributes['resourceType'] ?? '')
+    const draft = proposal.attributes['draft']
+    const attributes =
+      typeof draft === 'object' && draft !== null ? (draft as Record<string, unknown>) : {}
+
+    const created = await this.create(caller, {
+      type: resourceType,
+      workspace: proposal.workspace,
+      project: proposal.project,
+      attributes,
+      // 出处留在标签上：事后要能问出"这批对象里有多少是 Agent 提的"
+      labels: ['agent-generated'],
+    })
+
+    const withId = await this.update(caller, proposalId, {
+      expectedVersion: proposal.version,
+      attributes: { ...proposal.attributes, materialisedId: created.id },
+      reason: `accepted proposal → ${created.id}`,
+    })
+    await this.transition(caller, proposalId, 'Accepted', {
+      expectedVersion: withId.version,
+      reason: 'proposal accepted',
+    })
+    return created
+  }
+
   async history(caller: Caller, id: string, page: Page): Promise<PageResult<import('./resource.ts').HistoryEntry>> {
     const resource = await this.get(caller, id)
     return this.#deps.resources.history(resource.id, page)

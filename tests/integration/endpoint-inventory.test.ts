@@ -67,6 +67,10 @@ const EXPECTED = [
   'POST /v1/graph:action',
   'POST /v1/relations/:id/confirmation',
   'POST /v1/resources',
+  // 接受一条 Agent 提议，把它变成真正的对象（FR-AI-001）。
+  // 子资源形式与 `/v1/relations/:id/confirmation` 一致：
+  // 都是"一次人的决定带来一个后果"
+  'POST /v1/resources/:id/acceptance',
   'POST /v1/resources/:id/relations',
   'POST /v1/resources/:id/transitions',
   'POST /v1/resources:action',

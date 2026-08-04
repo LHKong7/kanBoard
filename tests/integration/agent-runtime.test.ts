@@ -101,7 +101,17 @@ async function seedRun(
     // 能力是**声明出来的**。AIAgent 角色是空集，不写这行 Agent 什么都做不了——
     // 这正是 ADR-0003 的默认值。注意再怎么写也批不了自己的产出：
     // 那条是 Deny，配不掉
-    capabilities: ['Agent.Read', 'Requirement.Read', 'Story.Read', 'Story.Create', 'AgentRun.Read'],
+    // `Proposal.Create` 是 Draft 模式的前提：它落的是提议不是目标对象。
+    // 和 `mayPropose` 不重复——那个限的是**能提议什么类型**，
+    // 这个限的是**能不能写**
+    capabilities: [
+      'Agent.Read',
+      'Requirement.Read',
+      'Story.Read',
+      'Story.Create',
+      'Proposal.Create',
+      'AgentRun.Read',
+    ],
     mayPropose: overrides.mayPropose ?? ['Story'],
     contextRelations: ['implementedBy', 'explains'],
   })
@@ -223,16 +233,23 @@ describe('collaboration modes decide what may be written (FR-AGT-009)', () => {
     expect((await get(run.id)).status).toBe('AwaitingReview')
   })
 
-  it('Draft writes the object but stops for a human', async () => {
+  it('Draft records a proposal per node, not the object itself (FR-AI-001)', async () => {
+    // 这条用例原本断言 Draft 直接创建目标对象。改成提议之后它红了——
+    // 那正是这次改动的意义：一棵生成出来的树要能被**逐节点**接受或拒绝，
+    // 而不是对着整棵树全要或全不要（后者的实际结果是全都不要）
     const { run } = await seedRun('Draft')
     const { results } = await runnerWith(new ScriptedModelClient([PROPOSE_STORY, FINISH])).pollOnce()
 
-    const createdId = results[0]?.result.proposals[0]?.createdId
-    expect(createdId).toBeTruthy()
-    // 落库了，但落在初始状态，并且打了标好让人能筛出来
-    const story = await get(createdId as string)
-    expect(story.status).toBe('Draft')
-    expect(story.labels).toContain('agent-generated')
+    const proposalId = results[0]?.result.proposals[0]?.createdId
+    expect(proposalId).toBeTruthy()
+
+    const proposal = await get(proposalId as string)
+    expect(proposal.type).toBe('Proposal')
+    expect(proposal.status).toBe('Pending')
+    expect(proposal.attributes.resourceType).toBe('Story')
+    expect(proposal.labels).toContain('agent-generated')
+    // 目标对象**还不存在**
+    expect(proposal.attributes.materialisedId).toBeUndefined()
     expect((await get(run.id)).status).toBe('AwaitingReview')
   })
 
@@ -674,5 +691,153 @@ describe('cancelling a specific run across processes (FR-ARCH-011)', () => {
     })
     expect(stories.json().items).toHaveLength(0)
     void propose
+  })
+})
+
+/**
+ * 逐节点接受 / 拒绝（FR-AI-001）。
+ *
+ * 验收标准原文是「生成对象树并可逐节点接受/拒绝」。
+ * 关键在"逐节点"：一棵二十个节点的 WBS，人要能留下十七个、扔掉三个。
+ * 只能对整棵树表态的话，实际结果是全都不要——因为没人愿意为了三个错的
+ * 把十七个对的一起丢掉，也没人愿意把三个错的一起放进来。
+ */
+describe('a generated tree is accepted node by node (FR-AI-001)', () => {
+  const propose = (title: string): ScriptedTurn => ({
+    thought: `拆一个：${title}`,
+    action: {
+      kind: 'propose',
+      resourceType: 'Story',
+      attributes: { title },
+      rationale: `${title} 覆盖了需求的一部分`,
+    },
+  })
+
+  async function draftRun(titles: string[]) {
+    const { run } = await seedRun('Draft', { attributes: { maxSteps: 8 } })
+    await runnerWith(
+      new ScriptedModelClient([...titles.map(propose), FINISH]),
+    ).pollOnce()
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/v1/resources?type=Proposal',
+      headers: asAdmin,
+    })
+    return {
+      run,
+      proposals: listed.json().items as { id: string; attributes: Record<string, unknown> }[],
+    }
+  }
+
+  const accept = (id: string, headers = asAdmin) =>
+    app.inject({ method: 'POST', url: `/v1/resources/${id}/acceptance`, headers })
+
+  const stories = async () =>
+    (await app.inject({ method: 'GET', url: '/v1/resources?type=Story', headers: asAdmin })).json()
+      .items as { id: string; attributes: Record<string, unknown> }[]
+
+  it('records one proposal per node', async () => {
+    const { proposals } = await draftRun(['导出 PDF', '导出 CSV', '导出记录页'])
+    expect(proposals).toHaveLength(3)
+    expect(proposals.every((p) => p.attributes['rationale'] !== undefined)).toBe(true)
+  })
+
+  it('accepting one materialises exactly that object', async () => {
+    const { proposals } = await draftRun(['留下这个', '扔掉这个'])
+    const keep = proposals.find((p) => JSON.stringify(p.attributes).includes('留下这个'))!
+
+    const res = await accept(keep.id)
+    expect(res.statusCode).toBe(201)
+    expect(res.json().type).toBe('Story')
+
+    const made = await stories()
+    expect(made).toHaveLength(1)
+    expect(JSON.stringify(made[0]?.attributes)).toContain('留下这个')
+  })
+
+  it('rejecting one creates nothing', async () => {
+    const { proposals } = await draftRun(['不要这个'])
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/resources/${proposals[0]?.id}/transitions`,
+      headers: asAdmin,
+      payload: { to: 'Rejected' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(await stories()).toHaveLength(0)
+  })
+
+  it('keeps the accepted and the rejected apart in one tree', async () => {
+    // 这一条就是"逐节点"本身：同一次生成里，一部分被接受、一部分被拒绝
+    const { proposals } = await draftRun(['要 A', '不要 B', '要 C'])
+    const byTitle = (t: string) =>
+      proposals.find((p) => JSON.stringify(p.attributes).includes(t))!
+
+    await accept(byTitle('要 A').id)
+    await app.inject({
+      method: 'POST',
+      url: `/v1/resources/${byTitle('不要 B').id}/transitions`,
+      headers: asAdmin,
+      payload: { to: 'Rejected' },
+    })
+    await accept(byTitle('要 C').id)
+
+    const made = await stories()
+    expect(made).toHaveLength(2)
+    const titles = made.map((s) => String(s.attributes['title']))
+    expect(titles).toContain('要 A')
+    expect(titles).toContain('要 C')
+    expect(titles).not.toContain('不要 B')
+  })
+
+  it('links the materialised object back to its proposal', async () => {
+    // 事后要能问出"这个 Story 是谁提的、依据是什么"
+    const { proposals } = await draftRun(['可追溯的'])
+    const created = (await accept(proposals[0]!.id)).json()
+
+    const after = await get(proposals[0]!.id)
+    expect(after.attributes.materialisedId).toBe(created.id)
+    expect(created.labels).toContain('agent-generated')
+  })
+
+  it('refuses to accept the same proposal twice', async () => {
+    // 重复接受会创建第二个对象。这不是幂等问题，是"已经决定过了"
+    const { proposals } = await draftRun(['只能接受一次'])
+    expect((await accept(proposals[0]!.id)).statusCode).toBe(201)
+    expect((await accept(proposals[0]!.id)).statusCode).toBe(409)
+    expect(await stories()).toHaveLength(1)
+  })
+
+  it('refuses to accept something that is not a proposal', async () => {
+    const { run } = await seedRun('Draft')
+    const res = await accept(run.id)
+    expect(res.statusCode).toBe(422)
+    expect(res.json().message).toMatch(/not a Proposal/)
+  })
+
+  it('validates the draft against the ontology when it materialises', async () => {
+    // 提议里存的是一段 json。接受时走的是普通 create，
+    // 所以本体校验照常生效——**Agent 提议的对象和人建的对象没有区别**
+    const { run } = await seedRun('Draft', { attributes: { maxSteps: 4 } })
+    await runnerWith(
+      new ScriptedModelClient([
+        {
+          thought: '提一个缺必填字段的',
+          action: { kind: 'propose', resourceType: 'Story', attributes: {}, rationale: 'r' },
+        },
+        FINISH,
+      ]),
+    ).pollOnce()
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/v1/resources?type=Proposal',
+      headers: asAdmin,
+    })
+    const proposal = (listed.json().items as { id: string }[])[0]
+    const res = await accept(proposal!.id)
+    expect(res.statusCode).toBe(422)
+    expect(JSON.stringify(res.json())).toMatch(/title/)
+    void run
   })
 })
