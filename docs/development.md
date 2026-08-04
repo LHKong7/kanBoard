@@ -310,4 +310,5 @@ curl -X POST localhost:3000/v1/resources \
 
 - [M0 状态](m0-status.md)：地基层（本体、统一模型、权限、隔离）
 - [M1 状态](m1-status.md)：工作流引擎、自动化、看板 UI
+- [PRD 覆盖情况](prd-coverage.md)：102 条 Must 的交付进度，以及差得最远的两块
 - [Agent 层状态](agent-status.md)：Agent Runtime、Run 轨迹、协作模式与预算
