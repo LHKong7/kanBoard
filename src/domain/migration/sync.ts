@@ -203,14 +203,22 @@ export function decide(
   }
 }
 
-/** 哪些字段两边的值不一样 */
+/**
+ * 哪些字段两边的值不一样。
+ *
+ * **只比源系统声明的字段。** 迁移期间源是模式的权威：它没有的字段，
+ * 这边多出来不算"不一致"——本地对象一定带着源系统里没有的东西
+ * （状态、owner、审计字段…），双向比的话每一条记录都会显示为分叉，
+ * 而一份永远脏的对账报告等于没有对账。
+ *
+ * 反过来，源**有**而本地没有或对不上，一定会被抓到——那才是丢数据。
+ */
 function divergedFields(
   local: Record<string, unknown>,
   remote: Record<string, unknown>,
 ): string[] {
-  const keys = new Set([...Object.keys(local), ...Object.keys(remote)])
   const out: string[] = []
-  for (const key of keys) {
+  for (const key of Object.keys(remote)) {
     if (JSON.stringify(local[key]) !== JSON.stringify(remote[key])) out.push(key)
   }
   return out.sort()

@@ -9,10 +9,30 @@
  */
 
 /** 主体。Agent 与 User 同级——这是 ADR-0003 的核心：Agent 是一等身份主体。 */
-export type Principal = `user://${string}` | `agent://${string}` | 'system://internal'
+/**
+ * 谁可以行动。**封闭联合**，不是 `string`。
+ *
+ * 系统身份要一个一个列出来，是因为"系统"不是一个身份，是一组各自
+ * 权限不同的作业。写成 `system://${string}` 的话，新加一个后台作业
+ * 只要起个名字就能行动，而它的权限边界没有任何人审过。
+ */
+export type Principal =
+  | `user://${string}`
+  | `agent://${string}`
+  | 'system://internal'
+  | 'system://migration'
 
 /** 自动化引擎的身份。它不是 Agent（不受 Agent 护栏约束），也不是人（无法交互确认）。 */
 export const SYSTEM_PRINCIPAL: Principal = 'system://internal'
+
+/**
+ * 迁移作业的身份（FR-CON-007）。
+ *
+ * 和自动化分开是因为权限不同：自动化能推状态不能创建，
+ * 迁移能创建能改**不能推状态**——让迁移推状态机等于给它一把
+ * 绕开所有守卫的钥匙，而迁移正是最想绕开守卫的那个场景。
+ */
+export const MIGRATION_PRINCIPAL: Principal = 'system://migration'
 
 export function isAgent(principal: string): boolean {
   return principal.startsWith('agent://')

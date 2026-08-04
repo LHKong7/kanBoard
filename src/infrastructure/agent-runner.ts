@@ -1,3 +1,4 @@
+import { serviceIn } from './service-factory.ts'
 import { createDb, withTenant } from './db/client.ts'
 import type { Db } from './db/client.ts'
 import { BufferedAuditSink, flushAudit, PgOutbox } from './outbox.pg.ts'
@@ -289,14 +290,11 @@ export class AgentRunner {
   }
 
   #service(trx: Db, tenant: string, audit: BufferedAuditSink, clock: Clock): ResourceService {
-    return new ResourceService({
+    return serviceIn(trx, tenant, {
       registry: this.#deps.registry,
       workflows: this.#deps.workflows,
-      resources: new PgResourceRepository(trx, tenant),
-      relations: new PgRelationRepository(trx, tenant),
-      events: new PgOutbox(trx),
-      audit,
       policies: this.#deps.policies,
+      audit,
       clock,
     })
   }

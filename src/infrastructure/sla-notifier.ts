@@ -1,3 +1,4 @@
+import { serviceIn } from './service-factory.ts'
 import { withTenant } from './db/client.ts'
 import { createDb } from './db/client.ts'
 import { PgResourceRepository } from './resource-repository.pg.ts'
@@ -47,14 +48,11 @@ export function slaNotifier(
     const audit = new BufferedAuditSink()
 
     const id = await withTenant(db, tenant, async (trx) => {
-      const service = new ResourceService({
+      const service = serviceIn(trx, tenant, {
         registry: deps.registry,
-        resources: new PgResourceRepository(trx, tenant),
-        relations: new PgRelationRepository(trx, tenant),
-        events: new PgOutbox(trx),
-        audit,
-        policies: deps.policies,
         workflows: deps.workflows,
+        policies: deps.policies,
+        audit,
         clock,
       })
 

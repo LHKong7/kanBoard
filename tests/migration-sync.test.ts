@@ -223,6 +223,28 @@ describe('reconciliation proves nothing was lost (FR-CON-007)', () => {
     expect(r.extra).toEqual(['P-2'])
   })
 
+  it('does not call local-only fields a divergence', () => {
+    // 本地对象一定带着源系统里没有的东西（状态、owner、审计字段…）。
+    // 双向比的话每一条记录都会显示为分叉，而一份永远脏的对账
+    // 等于没有对账——然后真的分叉出现时没人会注意到
+    const r = reconcile(
+      [remote({ title: 'a' }, 'P-1')],
+      [local({ title: 'a', status: 'Doing', owner: 'user://bob' }, 'task_1', 'P-1')],
+    )
+    expect(r.clean).toBe(true)
+    expect(r.diverged).toEqual([])
+  })
+
+  it('still catches a field the source has and this side lost', () => {
+    // 反过来必须抓到：那才是丢数据
+    const r = reconcile(
+      [remote({ title: 'a', points: 5 }, 'P-1')],
+      [local({ title: 'a', status: 'Doing' }, 'task_1', 'P-1')],
+    )
+    expect(r.clean).toBe(false)
+    expect(r.diverged[0]?.fields).toEqual(['points'])
+  })
+
   it('an empty source does not read as a clean migration', () => {
     // 一次把源读空了的同步（认证过期、筛选条件写错）不该表现为"全对上了"
     const r = reconcile([], [local({ title: 'a' }, 'task_1', 'P-1')])

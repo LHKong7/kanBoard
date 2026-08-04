@@ -1,3 +1,4 @@
+import { serviceIn } from './service-factory.ts'
 import { createDb, withTenant } from './db/client.ts'
 import type { Db } from './db/client.ts'
 import { claimUnpublished, markPublished, BufferedAuditSink, flushAudit, PgOutbox } from './outbox.pg.ts'
@@ -117,14 +118,11 @@ export class OutboxPoller {
 
     try {
       const outcomes = await withTenant(this.#db, event.tenant, async (trx: Db) => {
-        const service = new ResourceService({
+        const service = serviceIn(trx, event.tenant, {
           registry: this.#deps.registry,
           workflows: this.#deps.workflows,
-          resources: new PgResourceRepository(trx, event.tenant),
-          relations: new PgRelationRepository(trx, event.tenant),
-          events: new PgOutbox(trx),
-          audit,
           policies: this.#deps.policies,
+          audit,
           clock,
         })
         const runner = new AutomationRunner({ service, rules: this.#deps.rules })

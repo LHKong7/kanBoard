@@ -1,3 +1,4 @@
+import { serviceIn } from '../infrastructure/service-factory.ts'
 import Fastify from 'fastify'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { ZodError } from 'zod'
@@ -151,15 +152,12 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
     try {
       return await withTenant(db, subject.tenant, async (trx: Db) => {
-        const service = new ResourceService({
+        const service = serviceIn(trx, subject.tenant, {
           registry: deps.registry,
           workflows: activeWorkflows,
-          resources: new PgResourceRepository(trx, subject.tenant),
-          relations: new PgRelationRepository(trx, subject.tenant),
-          events: new PgOutbox(trx),
+          policies: deps.policies,
           audit,
           approvals,
-          policies: deps.policies,
           clock,
         })
         return fn(service, caller)

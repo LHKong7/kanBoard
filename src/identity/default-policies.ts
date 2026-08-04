@@ -213,6 +213,56 @@ export function defaultPolicies(tenant: string): Policy[] {
       description: '自动化永远不删东西。需要删除时应当由人决定',
     },
 
+    // 迁移作业以 system://migration 身份执行（FR-CON-007）。
+    //
+    // 和自动化那组是**两个身份**，权限也不同：自动化能推状态不能创建，
+    // 迁移能创建能改**不能推状态**。
+    //
+    // 迁移不给 `*.Transition` 是这一组里最重要的一条：状态由映射表决定，
+    // 让迁移作业能推状态机，等于给它一把绕开所有守卫的钥匙——
+    // 而迁移正是最想绕开守卫的那个场景（"这批老数据不满足新规则"）。
+    // 满足不了就该出现在迁移报告里，由人决定怎么办。
+    {
+      id: 'pol-system-migration-create',
+      effect: 'Allow',
+      subject: 'system://migration',
+      action: '*.Create',
+      scope: { kind: 'tenant', tenant },
+      description: '迁移作业创建对象；本体校验与不变量照常生效',
+    },
+    {
+      id: 'pol-system-migration-update',
+      effect: 'Allow',
+      subject: 'system://migration',
+      action: '*.Update',
+      scope: { kind: 'tenant', tenant },
+      description: '迁移作业更新对象',
+    },
+    {
+      id: 'pol-system-migration-read',
+      effect: 'Allow',
+      subject: 'system://migration',
+      action: '*.Read',
+      scope: { kind: 'tenant', tenant },
+      description: '迁移作业读取对象以做对账',
+    },
+    {
+      id: 'pol-system-migration-no-delete',
+      effect: 'Deny',
+      subject: 'system://migration',
+      action: '*.Delete',
+      scope: { kind: 'tenant', tenant },
+      description: '迁移永远不删东西。「同步掉了」不该是一次删除的理由',
+    },
+    {
+      id: 'pol-system-migration-no-transition',
+      effect: 'Deny',
+      subject: 'system://migration',
+      action: '*.Transition',
+      scope: { kind: 'tenant', tenant },
+      description: '迁移不推状态机——那等于绕开守卫',
+    },
+
     // 删除限于资源 owner。
     //
     // 必须写成 Deny：上面的 `Task.*` / `Requirement.*` 已经把 Delete 包含在内，
