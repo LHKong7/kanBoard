@@ -668,3 +668,90 @@ describe('creating the same edge twice returns the edge that exists', () => {
     expect(forThisEdge).toHaveLength(1)
   })
 })
+
+/**
+ * 依赖不允许成环（FR-DOM-005）。
+ *
+ * 环意味着这几件事互相等对方先做完，谁也开不了工。这是能在写入时
+ * 判掉的错，而在排期会上才发现的话，代价大得多。
+ *
+ * "哪些关系不能成环"写在**本体**里（`acyclic: true`），不是服务层的一处 if：
+ * 新增一种依赖关系时，作者要回答的是一个建模问题，而不是记得去改代码。
+ */
+describe('acyclic relations (FR-DOM-005)', () => {
+  it('refuses a direct two-node cycle, and shows the path', async () => {
+    const a = await create('Task', { title: 'A' })
+    const b = await create('Task', { title: 'B' })
+    expect((await relate(a, 'blockedBy', b)).statusCode).toBe(201)
+
+    const res = await relate(b, 'blockedBy', a)
+    expect(res.statusCode).toBe(422)
+    expect(res.json().message).toMatch(/cycle/)
+    // 只说"会成环"的话，使用者得自己在图里找是哪几条边
+    expect(res.json().details.path).toBeDefined()
+  })
+
+  it('refuses a longer cycle', async () => {
+    const [a, b, c] = [
+      await create('Task', { title: 'A' }),
+      await create('Task', { title: 'B' }),
+      await create('Task', { title: 'C' }),
+    ]
+    await relate(a, 'blockedBy', b)
+    await relate(b, 'blockedBy', c)
+    expect((await relate(c, 'blockedBy', a)).statusCode).toBe(422)
+  })
+
+  it('refuses a self-loop', async () => {
+    const a = await create('Task', { title: 'A' })
+    const res = await relate(a, 'blockedBy', a)
+    expect(res.statusCode).toBe(422)
+    expect(res.json().message).toMatch(/itself/)
+  })
+
+  it('catches a cycle closed from the other direction', async () => {
+    // 一条边只存一行：A blocks B 可能是以 blockedBy 从 B 存过来的。
+    // 只查出边的话，从另一头建的依赖全部看不见，判环会漏掉一半
+    const a = await create('Task', { title: 'A' })
+    const b = await create('Task', { title: 'B' })
+    expect((await relate(a, 'blocks', b)).statusCode).toBe(201)
+
+    // a blocks b，因此 b 不能再 blocks a
+    expect((await relate(b, 'blocks', a)).statusCode).toBe(422)
+    // 换成等价的逆关系表达，同样要拦下
+    expect((await relate(a, 'blockedBy', b)).statusCode).toBe(422)
+  })
+
+  it('allows a diamond — shared dependencies are not cycles', async () => {
+    // 判环判过头会拦下大量合法建模。A 和 B 都依赖 C 是完全正常的
+    const [a, b, c] = [
+      await create('Task', { title: 'A' }),
+      await create('Task', { title: 'B' }),
+      await create('Task', { title: 'C' }),
+    ]
+    expect((await relate(a, 'blockedBy', c)).statusCode).toBe(201)
+    expect((await relate(b, 'blockedBy', c)).statusCode).toBe(201)
+  })
+
+  it('takes the rule from the ontology, not from a list in the service', async () => {
+    // "哪些关系不能成环"是建模决定。写死在服务层的话，
+    // 新增一种依赖关系时作者要记得去改一处 if——而他不会记得
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/ontology/relation-types',
+      headers: asAdmin,
+    })
+    const types = res.json().items as { name: string; acyclic?: boolean }[]
+    expect(types.find((t) => t.name === 'blockedBy')?.acyclic).toBe(true)
+    expect(types.find((t) => t.name === 'blocks')?.acyclic).toBe(true)
+    // 没标的关系不该被这条规则波及
+    expect(types.find((t) => t.name === 'explains')?.acyclic).toBeUndefined()
+  })
+
+  it('does not check relations that are not declared acyclic', async () => {
+    // `derivedFrom` 没标 acyclic，建立时不该走判环那条路径
+    const knowledge = await create('Knowledge', { title: 'K', body: 'b' })
+    const decision = await create('Decision', { question: 'q', chosen: 'c', rationale: 'r' })
+    expect((await relate(knowledge, 'derivedFrom', decision)).statusCode).toBe(201)
+  })
+})

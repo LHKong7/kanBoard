@@ -10,12 +10,12 @@
 | ARCH 架构 | 9 | 8 | 缺 FR-ARCH-011 全链路 `AbortSignal` 可取消 |
 | IAM 权限 | 13 | 9 | ⚠️ 缺口未逐条核对，见下 |
 | WF 工作流 | 9 | 8 | 见下；缺 FR-WF-006 外部事件触发 |
-| DOM 领域 | 8 | 5 | 见下 |
+| DOM 领域 | 8 | 6 | 见下 |
 | AGT Agent | 11 | 9 | 见 [Agent 层状态](agent-status.md)；工具调用经网关（FR-AGT-011 强化） |
 | DASH 指标 | 9 | 7 | 见下 |
 | AI 能力 | 12 | 1 | 只有运行时骨架；具体能力（WBS、拆分、估点…）未做 |
 | CON 连接器 | 12 | 8 | 契约与网关已交付；具体集成（GitHub/Jira/MCP/Browser）未做 |
-| **合计** | **102** | **74** | |
+| **合计** | **102** | **75** | |
 
 ## 这份表本身有多可信
 
@@ -100,7 +100,7 @@ RES 这一行此前记的是 **11/12，缺「FR-RES-010 事件订阅 / Webhook �
 | FR-DOM-008 Knowledge 必须有来源引用 | ✅ Published 守卫要求 `derivedFrom` |
 | FR-DOM-002 跨 BC 仅通过事件或只读引用 | ✅ 自动化规则带 `owningContext`；分层检查挡住直接写 |
 | FR-DOM-001 7 个 BC 的聚合与不变量 | ❌ 不变量在服务层，未按 BC 拆分目录 |
-| FR-DOM-005 Dependency 环检测 | ❌ 代码里搜不到 |
+| FR-DOM-005 Dependency 环检测 | ✅ `acyclic` 写在本体里；建边时判可达性，含逆向存储的边 |
 | FR-DOM-007 Release 只允许包含 Done 的 Task | ❌ 没有 Release 类型 |
 
 ## Dashboard 细分

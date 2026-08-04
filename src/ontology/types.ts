@@ -85,6 +85,18 @@ export type RelationTypeDef = {
   inverse: string
   /** 传递闭包关系（如 contains）可做深度遍历（FR-ONT-004） */
   transitive?: boolean
+  /**
+   * 不允许成环（FR-DOM-005）。
+   *
+   * 写在本体里而不是写死在服务层，理由和别的约束一样：
+   * "哪些关系不能成环"是**建模决定**，不是实现细节。
+   * 写死的话，新增一种依赖关系时没人知道还要去改一处 if。
+   *
+   * 只对同一种关系类型内部判环。跨类型的环（A blocks B，B contains A）
+   * 不在此列——那需要定义"哪几种关系算同一张图"，
+   * 而目前没有一个说得清的答案，硬判会拦下大量合法的建模。
+   */
+  acyclic?: boolean
   domain: readonly string[]
   range: readonly string[]
   cardinality?: Cardinality

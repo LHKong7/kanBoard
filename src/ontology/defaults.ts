@@ -258,6 +258,8 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
     name: 'contains',
     inverse: 'containedIn',
     transitive: true,
+    // 一个项目装着自己，会让传递闭包查询直接转不出来
+    acyclic: true,
     domain: ['Project'],
     range: ['Requirement', 'Story', 'Task', 'Decision', 'Knowledge', 'Acceptance'],
   },
@@ -265,6 +267,7 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
     name: 'containedIn',
     inverse: 'contains',
     transitive: true,
+    acyclic: true,
     domain: ['Requirement', 'Story', 'Task', 'Decision', 'Knowledge', 'Acceptance'],
     range: ['Project'],
   },
@@ -282,24 +285,30 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
   },
   {
     name: 'decomposedInto',
+    acyclic: true,
     inverse: 'partOf',
     domain: ['Story'],
     range: ['Task'],
   },
   {
     name: 'partOf',
+    acyclic: true,
     inverse: 'decomposedInto',
     domain: ['Task'],
     range: ['Story'],
   },
   {
+    // 依赖成环意味着这几件事互相等对方先做完，谁也开不了工。
+    // 这是能在写入时判掉的错，而在排期会上才发现的话，代价大得多
     name: 'blockedBy',
+    acyclic: true,
     inverse: 'blocks',
     domain: ['Task'],
     range: ['Task'],
   },
   {
     name: 'blocks',
+    acyclic: true,
     inverse: 'blockedBy',
     domain: ['Task'],
     range: ['Task'],

@@ -703,6 +703,7 @@ export class ResourceService {
     )
 
     this.#deps.registry.validateRelation(args.type, from.type, to.type)
+    await this.#assertNoCycle(args.type, from.id, to.id)
 
     const origin: RelationOrigin =
       args.origin ??
@@ -929,6 +930,56 @@ export class ResourceService {
 
   // ───────────────────────── 内部 ─────────────────────────
 
+  /**
+   * 标了 `acyclic` 的关系不允许成环（FR-DOM-005）。
+   *
+   * 判法是可达性：加 from → to 之前，先看从 `to` 出发能不能走回 `from`。
+   * 能走回去，这条边就会闭合一个环。
+   *
+   * 沿关系向前走 = 出边走 `type`，入边走它的逆关系。一条边只存一行，
+   * 所以"A blocks B"可能是以 `blockedBy` 从 B 存过来的——
+   * 只查出边的话，从另一头建的依赖全部看不见，判环会漏掉一半。
+   */
+  async #assertNoCycle(type: string, fromId: string, toId: string): Promise<void> {
+    const def = this.#deps.registry.relationType(type)
+    if (def.acyclic !== true) return
+
+    // 自环不需要遍历也能判，而且遍历判不出来（起点本来就在结果里）
+    if (fromId === toId) {
+      throw new ValidationError(`"${type}" cannot point an object at itself`, {
+        field: 'toId',
+        relation: type,
+      })
+    }
+
+    const reachable = await this.#deps.relations.traverse({
+      start: toId,
+      followOut: [type],
+      followIn: [def.inverse],
+      maxDepth: MAX_CYCLE_DEPTH,
+      limit: MAX_TRAVERSE_LIMIT,
+    })
+
+    const hit = reachable.hits.find((h) => h.id === fromId)
+    if (hit !== undefined) {
+      throw new ValidationError(
+        `adding this "${type}" would create a cycle: ${toId} already reaches ${fromId}`,
+        // 把路径给出来。只说"会成环"的话，使用者得自己在图里找是哪几条边
+        { field: 'toId', relation: type, path: hit.path },
+      )
+    }
+
+    if (reachable.truncated) {
+      // 遍历被截断时**不能说"没有环"**——只是没找到。
+      // 放过去的代价是一个悄悄成环的依赖图，症状是几件事互相等待，
+      // 没有人能看出为什么。拒绝是响的，而且罕见
+      throw new ValidationError(
+        `cannot verify that this "${type}" is acyclic: the graph beyond ${toId} exceeds the traversal limit`,
+        { field: 'toId', relation: type, limit: MAX_TRAVERSE_LIMIT },
+      )
+    }
+  }
+
   #lifecycleOf(resource: Resource) {
     const lifecycle = resource.lifecycle === null ? null : this.#deps.workflows.byId(resource.lifecycle)
     if (lifecycle === null) {
@@ -984,6 +1035,9 @@ function throwIfNotAllowed(decision: Decision): void {
  * 上限的意义不是"让这个查询变快"，而是让它**有上界**。
  */
 export const MAX_TRAVERSE_LIMIT = 5000
+
+/** 判环时向前看多少层。10 是遍历本身允许的上限 */
+const MAX_CYCLE_DEPTH = 10
 
 /** 把一条边翻转成请求方向的样子，使"正反向查询等价"在返回值上字面成立 */
 function flipRelation(relation: RelationInstance, asType: string): RelationInstance {
