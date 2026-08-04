@@ -219,6 +219,21 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
     ],
   },
   {
+    name: 'Release',
+    version: '1.0.0',
+    context: 'Execution',
+    lifecycle: 'release-default',
+    description:
+      '一次发布（FR-DOM-007）。它装的是 Task——"这次发了什么"必须是可枚举的对象，' +
+      '不是一段发布说明里的文字。',
+    attributes: [
+      { name: 'name', kind: 'string', required: true },
+      { name: 'version', kind: 'string', required: true },
+      { name: 'notes', kind: 'richtext' },
+      { name: 'releasedAt', kind: 'datetime', derived: true },
+    ],
+  },
+  {
     name: 'Acceptance',
     version: '1.0.0',
     context: 'Requirement',
@@ -241,6 +256,21 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
 ]
 
 export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
+  {
+    // Release ──ships──▶ Task
+    name: 'ships',
+    inverse: 'shippedIn',
+    acyclic: true,
+    domain: ['Release'],
+    range: ['Task'],
+  },
+  {
+    name: 'shippedIn',
+    inverse: 'ships',
+    acyclic: true,
+    domain: ['Task'],
+    range: ['Release'],
+  },
   {
     // Story ──acceptedBy──▶ Acceptance
     name: 'acceptedBy',

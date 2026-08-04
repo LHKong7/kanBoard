@@ -17,6 +17,13 @@ export type ResourceFilter = {
   owner?: string | undefined
   /** attributes 的精确匹配，键为属性名 */
   attributes?: Record<string, unknown> | undefined
+  /**
+   * 按 id 批量取。空数组表示"一个都不要"，与不传（不限制）不是一回事。
+   *
+   * 存在的理由是避免 N+1：守卫要看一批相关对象的状态，
+   * 逐个 findById 会让一次抽屉展开发出几十条查询。
+   */
+  ids?: readonly string[] | undefined
   includeDeleted?: boolean | undefined
   /**
    * 全文检索词（FR-RES-016）。

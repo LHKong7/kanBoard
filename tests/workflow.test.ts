@@ -8,7 +8,7 @@ import {
 import { buildDefaultWorkflowRegistry, TASK_LIFECYCLE } from '../src/workflow/defaults.ts'
 import { evaluateGuard } from '../src/workflow/guards.ts'
 import { TransitionError } from '../src/platform/errors.ts'
-import type { GuardContext, Lifecycle, TransitionDef } from '../src/workflow/types.ts'
+import type { Guard, GuardContext, Lifecycle, RelatedRef, TransitionDef } from '../src/workflow/types.ts'
 
 function ctx(overrides: Partial<GuardContext> = {}): GuardContext {
   return {
@@ -251,6 +251,87 @@ describe('available transitions drive the UI (FR-RES-008)', () => {
     const options = availableTransitions(TASK_LIFECYCLE, 'Task', 'Doing', ctx())
     const targets = options.map((o) => o.to)
     expect(new Set(targets).size).toBe(targets.length)
+  })
+})
+
+/**
+ * `allRelatedIn`（FR-DOM-007）。
+ *
+ * 这一组是**在集成测试没能抓住两个种下的缺陷之后补的**：
+ *   - "邻居状态没装配 → 当作通过"：HTTP 路径上永远装配得好，那条分支走不到。
+ *   - "只检查第一个邻居"：集成用例里未完成的那个恰好排在第一，
+ *     于是 `slice(0, 1)` 照样红不了——**它通过靠的是顺序，不是逻辑**。
+ * 直接对着守卫写，两个都能钉死。
+ */
+describe('allRelatedIn (FR-DOM-007)', () => {
+  const guard: Guard = {
+    kind: 'allRelatedIn',
+    type: 'ships',
+    direction: 'out',
+    targetType: 'Task',
+    states: ['Done', 'Cancelled'],
+  }
+  const withRelated = (refs: RelatedRef[]): GuardContext =>
+    ctx({ related: new Map([['ships:out', refs]]) })
+
+  it('passes when every related object is in an allowed state', () => {
+    const result = evaluateGuard(
+      guard,
+      withRelated([
+        { id: 'task_1', type: 'Task', status: 'Done' },
+        { id: 'task_2', type: 'Task', status: 'Cancelled' },
+      ]),
+    )
+    expect(result.ok).toBe(true)
+  })
+
+  it('fails on an offender in the LAST position', () => {
+    // 位置很重要：只看第一个的实现在这条用例上必然红
+    const result = evaluateGuard(
+      guard,
+      withRelated([
+        { id: 'task_1', type: 'Task', status: 'Done' },
+        { id: 'task_2', type: 'Task', status: 'Done' },
+        { id: 'task_late', type: 'Task', status: 'Doing' },
+      ]),
+    )
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.reason).toContain('task_late')
+  })
+
+  it('names several offenders and says how many more there are', () => {
+    const refs: RelatedRef[] = Array.from({ length: 6 }, (_, i) => ({
+      id: `task_${i}`,
+      type: 'Task',
+      status: 'Doing',
+    }))
+    const result = evaluateGuard(guard, withRelated(refs))
+    expect(result.ok === false && result.reason).toMatch(/and 3 more/)
+  })
+
+  it('passes on an empty set — a universal claim over nothing is true', () => {
+    // 要"至少有一条"就另加一条 hasRelation。合成一个守卫的话，
+    // 失败信息说不清到底是哪一件不满足
+    expect(evaluateGuard(guard, withRelated([])).ok).toBe(true)
+  })
+
+  it('ignores related objects of another type', () => {
+    const result = evaluateGuard(
+      guard,
+      withRelated([
+        { id: 'task_1', type: 'Task', status: 'Done' },
+        { id: 'note_1', type: 'Knowledge', status: 'Draft' },
+      ]),
+    )
+    expect(result.ok).toBe(true)
+  })
+
+  it('FAILS when the statuses were never assembled', () => {
+    // 这里返回"通过"会让不变量静默失效：发版守卫形同虚设，
+    // 而且看起来一切正常。装配漏了必须是响的
+    const result = evaluateGuard(guard, ctx())
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.reason).toMatch(/not assembled/)
   })
 })
 

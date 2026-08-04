@@ -248,6 +248,11 @@ export class PgResourceRepository implements ResourceRepository {
         b = b.where(sql<boolean>`strpos(lower(search_text), lower(${term})) > 0`)
       }
     }
+    if (filter.ids !== undefined) {
+      // 空数组要生成一个恒假条件，而不是被当成"没有这个过滤条件"。
+      // Kysely 的 `in []` 会生成 `in ()`，PG 直接语法错误
+      b = filter.ids.length === 0 ? b.where(sql<boolean>`false`) : b.where('id', 'in', filter.ids)
+    }
     if (filter.includeDeleted !== true) {
       b = b.where('deleted_at', 'is', null)
     }

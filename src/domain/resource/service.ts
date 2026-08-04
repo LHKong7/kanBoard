@@ -8,7 +8,7 @@ import {
   resolveTransition,
 } from '../../workflow/engine.ts'
 import type { AvailableTransition, WorkflowRegistry } from '../../workflow/engine.ts'
-import type { GuardContext } from '../../workflow/types.ts'
+import type { Guard, GuardContext, Lifecycle, RelatedRef } from '../../workflow/types.ts'
 import type { Clock } from '../../platform/clock.ts'
 import {
   ApprovalRequiredError,
@@ -441,7 +441,7 @@ export class ResourceService {
   ): Promise<Resource> {
     const existing = await this.#requireLive(id)
     const lifecycle = this.#lifecycleOf(existing)
-    const ctx = await this.#guardContext(existing)
+    const ctx = await this.#guardContext(existing, lifecycle)
 
     const resolved = resolveTransition(lifecycle, existing.type, existing.status, to, ctx)
 
@@ -524,7 +524,7 @@ export class ResourceService {
   async transitionsOf(caller: Caller, id: string): Promise<AvailableTransition[]> {
     const resource = await this.get(caller, id)
     const lifecycle = this.#lifecycleOf(resource)
-    const ctx = await this.#guardContext(resource)
+    const ctx = await this.#guardContext(resource, lifecycle)
     const all = availableTransitions(lifecycle, resource.type, resource.status, ctx)
 
     const permitted: AvailableTransition[] = []
@@ -991,22 +991,58 @@ export class ResourceService {
   }
 
   /** 装配守卫求值所需的上下文。关系类型在这里被收成集合，工作流层因此不必接触仓储。 */
-  async #guardContext(resource: Resource): Promise<GuardContext> {
+  async #guardContext(resource: Resource, lifecycle?: Lifecycle): Promise<GuardContext> {
     const relations = await this.#deps.relations.listFor(resource.id, 'both')
     const outgoing = new Set<string>()
     const incoming = new Set<string>()
+    /** `type:direction` → 对面的 id 集合 */
+    const neighbours = new Map<string, Set<string>>()
+
     for (const relation of relations) {
       // 被人工否决的关系不算数——它和不存在是一个意思
       if (relation.confirmed === false) continue
-      if (relation.fromId === resource.id) outgoing.add(relation.type)
-      if (relation.toId === resource.id) incoming.add(relation.type)
+      if (relation.fromId === resource.id) {
+        outgoing.add(relation.type)
+        addTo(neighbours, `${relation.type}:out`, relation.toId)
+      }
+      if (relation.toId === resource.id) {
+        incoming.add(relation.type)
+        addTo(neighbours, `${relation.type}:in`, relation.fromId)
+      }
     }
-    return {
+
+    const ctx: GuardContext = {
       attributes: resource.attributes,
       owner: resource.owner,
       outgoingRelationTypes: outgoing,
       incomingRelationTypes: incoming,
     }
+
+    // 只在这台状态机真的用到 allRelatedIn 时才去查邻居的状态。
+    // 无条件查的话，每展开一次抽屉都会多发一轮查询，
+    // 而绝大多数状态机根本不需要这个信息
+    const wanted = lifecycle === undefined ? [] : relationKeysNeedingStatus(lifecycle)
+    if (wanted.length === 0) return ctx
+
+    const ids = [...new Set(wanted.flatMap((key) => [...(neighbours.get(key) ?? [])]))]
+    const related = new Map<string, readonly RelatedRef[]>()
+    // 键必须**全部**建出来，哪怕一条边都没有：
+    // 守卫读不到键会当成"装配漏了"而拒绝，那是给漏装配准备的信号，
+    // 不该被"这个对象暂时没有关联"触发
+    for (const key of wanted) related.set(key, [])
+    if (ids.length === 0) return { ...ctx, related }
+
+    const page = await this.#deps.resources.query({ ids }, { size: Math.min(ids.length, 200) })
+    const byId = new Map(page.items.map((r) => [r.id, r]))
+    for (const key of wanted) {
+      const refs: RelatedRef[] = []
+      for (const id of neighbours.get(key) ?? []) {
+        const target = byId.get(id)
+        if (target !== undefined) refs.push({ id: target.id, type: target.type, status: target.status })
+      }
+      related.set(key, refs)
+    }
+    return { ...ctx, related }
   }
 
   async #requireLive(id: string): Promise<Resource> {
@@ -1034,6 +1070,44 @@ function throwIfNotAllowed(decision: Decision): void {
  * 序列化这么大的响应会把其他请求一起拖慢。
  * 上限的意义不是"让这个查询变快"，而是让它**有上界**。
  */
+function addTo(map: Map<string, Set<string>>, key: string, value: string): void {
+  const existing = map.get(key)
+  if (existing === undefined) map.set(key, new Set([value]))
+  else existing.add(value)
+}
+
+/**
+ * 这台状态机里 `allRelatedIn` 引用到的 `type:direction` 集合。
+ *
+ * 扫的是**整台状态机**而不是当前这一步：`availableTransitions` 会
+ * 一次性求值所有出边的守卫，只装配当前目标状态需要的，
+ * 别的出边就会拿到"没装配"而被判失败。
+ */
+function relationKeysNeedingStatus(lifecycle: Lifecycle): string[] {
+  const keys = new Set<string>()
+  const walk = (guard: Guard): void => {
+    switch (guard.kind) {
+      case 'allRelatedIn':
+        keys.add(`${guard.type}:${guard.direction}`)
+        return
+      case 'all':
+      case 'any':
+        guard.of.forEach(walk)
+        return
+      case 'not':
+        walk(guard.of)
+        return
+      default:
+        return
+    }
+  }
+  for (const state of lifecycle.states) (state.requires ?? []).forEach(walk)
+  for (const transition of lifecycle.transitions) {
+    if (transition.guard !== undefined) walk(transition.guard)
+  }
+  return [...keys]
+}
+
 export const MAX_TRAVERSE_LIMIT = 5000
 
 /** 判环时向前看多少层。10 是遍历本身允许的上限 */

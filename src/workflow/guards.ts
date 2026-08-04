@@ -37,6 +37,30 @@ export function evaluateGuard(guard: Guard, ctx: GuardContext): GuardResult {
         : fail(`a "${guard.type}" relation (${guard.direction}going) is required`)
     }
 
+    case 'allRelatedIn': {
+      const key = `${guard.type}:${guard.direction}`
+      const related = ctx.related?.get(key)
+      if (related === undefined) {
+        // 上下文里没装配这条关系，说明装配逻辑漏了它。
+        // 返回"通过"会让不变量**静默失效**——发版守卫形同虚设，
+        // 而且看起来一切正常。宁可拒绝并指名道姓
+        return fail(
+          `cannot evaluate "${guard.type}" (${guard.direction}going): related statuses were not assembled`,
+        )
+      }
+      const offenders = related
+        .filter((r) => guard.targetType === undefined || r.type === guard.targetType)
+        .filter((r) => !guard.states.includes(r.status))
+      if (offenders.length === 0) return OK
+      // 列出前几个，并说明一共有多少。只说"有未完成的"，
+      // 使用者还得自己去一个个翻
+      const shown = offenders.slice(0, 3).map((r) => `${r.id} (${r.status})`)
+      const suffix = offenders.length > shown.length ? ` and ${offenders.length - shown.length} more` : ''
+      return fail(
+        `every "${guard.type}" must be in ${JSON.stringify(guard.states)}; ${shown.join(', ')}${suffix} ${offenders.length === 1 ? 'is' : 'are'} not`,
+      )
+    }
+
     case 'ownerAssigned':
       return ctx.owner !== null && ctx.owner !== '' ? OK : fail('an owner must be assigned')
 
@@ -87,6 +111,8 @@ export function describe(guard: Guard): string {
       return `${guard.path} in ${JSON.stringify(guard.values)}`
     case 'hasRelation':
       return `has ${guard.direction}going "${guard.type}" relation`
+    case 'allRelatedIn':
+      return `every ${guard.direction}going "${guard.type}" is in ${JSON.stringify(guard.states)}`
     case 'ownerAssigned':
       return 'owner is assigned'
     case 'all':

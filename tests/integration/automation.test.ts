@@ -662,3 +662,95 @@ describe('a story needs acceptance criteria to enter execution (FR-DOM-004)', ()
     expect(res.statusCode).toBe(422)
   })
 })
+
+/**
+ * 一次发布只能装已完成的东西（FR-DOM-007）。
+ *
+ * 这个不变量必须由状态机守住，靠流程纪律守不住——
+ * 赶发版的时候纪律是第一个被放弃的东西，而"上线了一个没做完的东西"
+ * 的代价要到线上才知道。
+ */
+describe('a release ships only finished work (FR-DOM-007)', () => {
+  const release = () => create('Release', { name: 'v1', version: '1.0.0' })
+
+  async function doneTask(title: string) {
+    const id = await create('Task', { title, assignee: 'user://bob' })
+    for (const to of ['Doing', 'Done']) await move(id, to)
+    return id
+  }
+
+  it('refuses to release while a task is unfinished, and names it', async () => {
+    const rel = await release()
+    const done = await doneTask('做完了的')
+    const open = await create('Task', { title: '还没做完的', assignee: 'user://bob' })
+    await relate(rel, 'ships', done)
+    await relate(rel, 'ships', open)
+    await move(rel, 'Frozen')
+
+    const res = await move(rel, 'Released')
+    expect(res.statusCode).toBe(409)
+    // 只说"有未完成的"，使用者还得自己去一个个翻
+    expect(res.json().message).toContain(open)
+    expect(await statusOf(rel)).toBe('Frozen')
+  })
+
+  it('releases once everything is finished', async () => {
+    const rel = await release()
+    await relate(rel, 'ships', await doneTask('A'))
+    await relate(rel, 'ships', await doneTask('B'))
+    await move(rel, 'Frozen')
+
+    expect((await move(rel, 'Released')).statusCode).toBe(200)
+    expect(await statusOf(rel)).toBe('Released')
+  })
+
+  it('treats a cancelled task as shippable', async () => {
+    // 卡着取消掉的任务不让发版，只会逼人把关系删掉——
+    // 那样发布记录就不准了
+    const rel = await release()
+    const cancelled = await create('Task', { title: '取消了的', assignee: 'user://bob' })
+    await move(cancelled, 'Cancelled')
+    await relate(rel, 'ships', await doneTask('A'))
+    await relate(rel, 'ships', cancelled)
+    await move(rel, 'Frozen')
+
+    expect((await move(rel, 'Released')).statusCode).toBe(200)
+  })
+
+  it('will not freeze an empty release', async () => {
+    const rel = await release()
+    const res = await move(rel, 'Frozen')
+    expect(res.statusCode).toBe(409)
+    expect(res.json().message).toMatch(/ships/)
+  })
+
+  it('shows the blocking reason in the available-transitions list', async () => {
+    // 只在 POST 时才说不行的话，界面上那颗按钮看着是能点的
+    const rel = await release()
+    await relate(rel, 'ships', await create('Task', { title: '没做完', assignee: 'user://bob' }))
+    await move(rel, 'Frozen')
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${rel}/transitions`,
+      headers: asAdmin,
+    })
+    const released = (res.json().items as { to: string; ready: boolean; blockedBy: string | null }[])
+      .find((t) => t.to === 'Released')
+    expect(released?.ready).toBe(false)
+    expect(released?.blockedBy).toMatch(/must be in/)
+  })
+
+  it('does not make other lifecycles pay for the neighbour lookup', async () => {
+    // 邻居状态只为真的用到 allRelatedIn 的状态机装配。
+    // Task 的状态机没有这类守卫，它的可用迁移不该受影响
+    const task = await create('Task', { title: 't', assignee: 'user://bob' })
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/resources/${task}/transitions`,
+      headers: asAdmin,
+    })
+    const doing = (res.json().items as { to: string; ready: boolean }[]).find((t) => t.to === 'Doing')
+    expect(doing?.ready).toBe(true)
+  })
+})

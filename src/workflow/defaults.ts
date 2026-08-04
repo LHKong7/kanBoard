@@ -197,6 +197,51 @@ export const KNOWLEDGE_LIFECYCLE: Lifecycle = {
  * 需要 `Agreed` 这一档，是因为"写下来了"和"双方认可"是两回事：
  * 只要求存在一条验收标准的话，一句随手写的空话也能满足门槛。
  */
+/**
+ * 发布（FR-DOM-007）。
+ *
+ * 关键的一条守卫在 `Released` 上：**这次发布装着的 Task 必须全部 Done**。
+ * 这个不变量靠流程纪律是守不住的——赶发版的时候纪律是第一个被放弃的东西，
+ * 而"上线了一个没做完的东西"的代价要到线上才知道。
+ */
+export const RELEASE_LIFECYCLE: Lifecycle = {
+  id: 'release-default',
+  entityType: 'Release',
+  initial: 'Planned',
+  states: [
+    { name: 'Planned' },
+    {
+      name: 'Frozen',
+      // 封版意味着范围定了。至少得装着点什么，否则这一步没有意义
+      requires: [{ kind: 'hasRelation', type: 'ships', direction: 'out' }],
+      description: '范围冻结，不再加内容',
+    },
+    {
+      name: 'Released',
+      requires: [
+        {
+          kind: 'allRelatedIn',
+          type: 'ships',
+          direction: 'out',
+          targetType: 'Task',
+          // Cancelled 也放行：取消掉的任务不会被发出去，
+          // 卡着它不让发版，只会逼人把关系删掉——那样发布记录就不准了
+          states: ['Done', 'Cancelled'],
+        },
+      ],
+      entryActions: [{ kind: 'stampNow', path: 'releasedAt' }],
+      terminal: true,
+    },
+    { name: 'Abandoned', terminal: true },
+  ],
+  transitions: [
+    { from: ['Planned'], to: 'Frozen' },
+    { from: ['Frozen'], to: 'Planned', description: '解冻，继续加内容' },
+    { from: ['Frozen'], to: 'Released', capability: 'Release.Promote' },
+    { from: ['Planned', 'Frozen'], to: 'Abandoned' },
+  ],
+}
+
 export const ACCEPTANCE_LIFECYCLE: Lifecycle = {
   id: 'acceptance-default',
   entityType: 'Acceptance',
@@ -320,6 +365,7 @@ export const DEFAULT_LIFECYCLES: readonly Lifecycle[] = [
   AGENT_RUN_LIFECYCLE,
   NOTIFICATION_LIFECYCLE,
   ACCEPTANCE_LIFECYCLE,
+  RELEASE_LIFECYCLE,
 ]
 
 export function buildDefaultWorkflowRegistry(): WorkflowRegistry {

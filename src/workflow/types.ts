@@ -12,6 +12,25 @@ export type Guard =
   | { kind: 'attributeEquals'; path: string; value: string | number | boolean }
   | { kind: 'attributeIn'; path: string; values: readonly (string | number)[] }
   | { kind: 'hasRelation'; type: string; direction: 'out' | 'in' }
+  /**
+   * 沿某条关系走到的对象**全部**处于给定状态之一（FR-DOM-007）。
+   *
+   * 与 `hasRelation` 的区别是它看的是对面的状态，不只是边的存在。
+   * "Release 只能包含 Done 的 Task"这类不变量必须由状态机守住，
+   * 靠流程纪律守不住——赶发版的时候纪律是第一个被放弃的东西。
+   *
+   * 一条边都没有时**通过**：空集合上的全称命题为真。
+   * 需要"至少有一条"就再加一条 `hasRelation`——把两件事合成一个守卫，
+   * 失败信息就说不清到底是哪一件不满足了。
+   */
+  | {
+      kind: 'allRelatedIn'
+      type: string
+      direction: 'out' | 'in'
+      states: readonly string[]
+      /** 只看这个类型的对象；不传则看全部 */
+      targetType?: string
+    }
   | { kind: 'ownerAssigned' }
   | { kind: 'all'; of: readonly Guard[] }
   | { kind: 'any'; of: readonly Guard[] }
@@ -75,7 +94,16 @@ export type GuardContext = {
   outgoingRelationTypes: ReadonlySet<string>
   /** 入边的关系类型集合 */
   incomingRelationTypes: ReadonlySet<string>
+  /**
+   * 相关对象及其状态，键为 `${关系类型}:${方向}`。
+   *
+   * **只为 `allRelatedIn` 真正引用到的关系装配**——否则每次展开抽屉
+   * 都要把邻居全查一遍。没有这类守卫的状态机，这里是空的。
+   */
+  related?: ReadonlyMap<string, readonly RelatedRef[]>
 }
+
+export type RelatedRef = { id: string; type: string; status: string }
 
 /** 守卫求值结果。失败时必须说清楚缺什么——FR-WF-003 要求可读原因。 */
 export type GuardResult = { ok: true } | { ok: false; reason: string }
