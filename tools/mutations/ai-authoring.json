@@ -1,0 +1,54 @@
+{
+  "file": "src/domain/ai/authoring.ts",
+  "test": "tests/integration/ai-authoring.test.ts",
+  "env": {
+    "TEST_ADMIN_DATABASE_URL": "postgresql://postgres@127.0.0.1:5432/postgres"
+  },
+  "mutations": [
+    {
+      "name": "覆盖率不达标也照建",
+      "from": "  if (!coverage.ok) {\n    return { storyIds: [], coverage, uncovered: coverage.offenders }\n  }",
+      "to": "  if (false) {\n    return { storyIds: [], coverage, uncovered: coverage.offenders }\n  }"
+    },
+    {
+      "name": "不列出未覆盖项",
+      "from": "return { storyIds: [], coverage, uncovered: coverage.offenders }",
+      "to": "return { storyIds: [], coverage, uncovered: [] }"
+    },
+    {
+      "name": "拆出来的 Story 不挂回需求",
+      "from": "    await service.relate(caller, {\n      type: 'implements',\n      fromId: story.id,\n      toId: input.requirementId,\n    })",
+      "to": "    void input.requirementId"
+    },
+    {
+      "name": "不打 agent-generated 标签",
+      "from": "      labels: ['agent-generated'],\n    })\n    // 挂回父需求",
+      "to": "      labels: [],\n    })\n    // 挂回父需求"
+    },
+    {
+      "name": "无出处的内容删掉而不是标注",
+      "from": "const { text, unverified } = markUnverified(input.claims)",
+      "to": "const { text, unverified } = { text: input.claims.filter((c) => c.sourceIds.length > 0).map((c) => c.text).join(String.fromCharCode(10)), unverified: 0 }"
+    },
+    {
+      "name": "不建出处关系",
+      "from": "    await service.relate(caller, { type: 'derivedFrom', fromId: knowledge.id, toId: sourceId })",
+      "to": "    void sourceId"
+    },
+    {
+      "name": "没有负责人的行动项也建",
+      "from": "for (const item of actionable) {",
+      "to": "for (const item of input.items) {"
+    },
+    {
+      "name": "被拒的行动项不还回去",
+      "from": "return { taskIds, skipped: verdict.offenders, verdict }",
+      "to": "return { taskIds, skipped: [], verdict }"
+    },
+    {
+      "name": "负责人不写进 Task",
+      "from": "        assignee: item.assignee ?? '',",
+      "to": "        assignee: '',"
+    }
+  ]
+}
