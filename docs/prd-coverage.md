@@ -58,6 +58,23 @@ FR-ARCH-011 可取消。
 写在这里而不是悄悄改掉数字，是因为这份文档唯一的用处就是可信。
 一个被改对了但没人知道曾经错过的进度表，下次还会错。
 
+### 最坏的一次：本地全绿，CI 连续四个 commit 是红的
+
+前面几条都是"记错了"。这一条更糟：**报告出来的绿色是假的，而且假了四次。**
+
+把 `playwright` 从 devDependencies 挪到 dependencies 时没有重新生成
+`pnpm-lock.yaml`。CI 的第一步 `pnpm install --frozen-lockfile` 因此直接失败，
+**一个测试都没跑到**，连续四个 commit。而本地 `pnpm check` 每次都全绿——
+因为本地 `node_modules` 已经在了，install 根本不执行。
+
+这不是运气不好。**本地的检查清单漏掉了 CI 的第一步，那本地的绿色就不代表任何事**，
+而它读起来和真的一样。发现它靠的是去翻 CI 记录，不是靠任何一条检查报警——
+换句话说，这个缺陷本身也是"缺信号"，和它造成的后果是同一个毛病。
+
+修法有两部分：重新生成 lockfile，以及把 `lint:lockfile` 加进 `pnpm check`
+并排在最前面。加进去之后种了一个缺陷验证过：往 package.json 里塞一个
+lockfile 里没有的依赖，`pnpm check` 立刻红。
+
 ## Workflow 细分
 
 这一行之前记的是 **7/9，缺「SLA 超时、可视化编辑器」**。那两项分别是

@@ -49,12 +49,20 @@ jobs:
       # 一条从不执行的检查和没有这条检查是一回事，
       # 而它看起来是有的。现在 check 是唯一的清单。
       #
-      # check = typecheck（含 tests/ 与 tools/）
+      # check = lint:lockfile（lockfile 与 package.json 一致）
+      #       + typecheck（含 tests/ 与 tools/）
       #       + lint:layers（分层方向，FR-ARCH-001）
       #       + lint:network（Agent 不得直连网络，FR-CON-002）
       #       + lint:coverage（进度表的合计必须等于各行之和）
       #       + test（集成测试以非超级用户连接，RLS 是真的在生效）
       #       + test:ui（真实浏览器）
+      #
+      # lint:lockfile 排在最前面，因为它是 CI 的第一步在做的事。
+      # 它是补上去的：把 playwright 从 devDependencies 挪到 dependencies 之后
+      # 没有重新生成 lockfile，于是 CI 连续四个 commit 死在
+      # `pnpm install --frozen-lockfile`——**一个测试都没跑到**，
+      # 而本地 `pnpm check` 全绿，因为本地根本不执行 install。
+      # 本地检查漏掉了 CI 的第一步，就等于本地的绿色不代表任何事。
       - name: Check
         run: pnpm check
         env:
