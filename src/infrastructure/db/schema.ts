@@ -120,9 +120,21 @@ export type AgentRunStepsTable = {
   occurred_at: Date
 }
 
+export type ConnectorCallsTable = {
+  seq_id: Generated<number>
+  tenant: string
+  connector_id: string
+  operation: string
+  idempotency_key: string
+  subject: string
+  result: JSONColumnType<Record<string, unknown> | null, string, string>
+  occurred_at: Date
+}
+
 export type Database = {
   resources: ResourcesTable
   agent_run_steps: AgentRunStepsTable
+  connector_calls: ConnectorCallsTable
   relations: RelationsTable
   resource_history: ResourceHistoryTable
   outbox_events: OutboxEventsTable

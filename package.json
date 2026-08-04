@@ -18,7 +18,8 @@
     "bench:run": "node --experimental-strip-types bench/run.ts",
     "test:watch": "vitest",
     "lint:layers": "depcruise src --config .dependency-cruiser.cjs",
-    "check": "pnpm typecheck && pnpm lint:layers && pnpm test && pnpm test:ui"
+    "check": "pnpm typecheck && pnpm lint:layers && pnpm lint:network && pnpm test && pnpm test:ui",
+    "lint:network": "node --experimental-strip-types tools/check-no-direct-network.ts"
   },
   "dependencies": {
     "fastify": "^5.2.1",

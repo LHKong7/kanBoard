@@ -64,6 +64,33 @@ module.exports = {
       to: { path: '^src/(infrastructure|api)' },
     },
     {
+      // FR-CON-002：Agent 无法绕过 Connector 直连外部系统。
+      //
+      // 需求原文说"网络策略 + 代码审查证明无直连路径"。代码审查是人做的，
+      // 人会漏——所以这条改成 CI 强制：Agent 运行时里出现任何
+      // fetch / http / axios 的痕迹，构建就红。
+      //
+      // 绕过网关意味着那一次调用**没有审计、没有限流、没有脱敏，
+      // 而且凭据可能被写进 prompt**，且全部是静默发生的。
+      // 这不是"不应该"，是必须做不到。
+      name: 'agents-cannot-reach-the-network-directly',
+      severity: 'error',
+      comment:
+        'Agent 运行时只能经 ConnectorGateway 访问外部系统（FR-CON-002）。' +
+        '需要新的外部能力时，写一个 Connector，不要在这里发请求。',
+      from: { path: '^src/domain/agent' },
+      // 两种写法都要盖住，而且**都验证过会触发**：
+      //   npm 包  → 解析后是 node_modules/… 的完整路径
+      //   核心模块 → 解析后是裸名 `http`，**不是** `node:http`
+      // 第一版只写了 `^node:http$`，种了 `import http from 'node:http'` 也不报——
+      // 又一条从不触发的规则。这个项目在这上面栽过，不能再栽第二次。
+      to: {
+        path:
+          '(^|/)node_modules/(axios|node-fetch|got|undici|superagent)(/|$)' +
+          '|^(node:)?(http|https|net|dgram|tls)$',
+      },
+    },
+    {
       name: 'infrastructure-does-not-know-about-api',
       severity: 'error',
       from: { path: '^src/infrastructure' },
