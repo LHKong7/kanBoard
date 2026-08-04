@@ -20,6 +20,7 @@
     "lint:layers": "depcruise src --config .dependency-cruiser.cjs",
     "check": "pnpm lint:lockfile && pnpm typecheck && pnpm lint:layers && pnpm lint:network && pnpm lint:coverage && pnpm test && pnpm test:ui",
     "lint:lockfile": "pnpm install --frozen-lockfile --lockfile-only",
+    "mutate": "node --experimental-strip-types tools/mutate.ts",
     "lint:network": "node --experimental-strip-types tools/check-no-direct-network.ts",
     "lint:coverage": "node --experimental-strip-types tools/check-coverage-total.ts",
     "test:nocov": "vitest run"
