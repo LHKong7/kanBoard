@@ -6,6 +6,7 @@ import { buildServer } from '../../src/api/server.ts'
 import { buildDefaultRegistry } from '../../src/ontology/defaults.ts'
 import { buildDefaultWorkflowRegistry } from '../../src/workflow/defaults.ts'
 import { defaultPolicies } from '../../src/identity/default-policies.ts'
+import { MAX_PAGE_SIZE } from '../../src/domain/resource/ports.ts'
 import type { Policy } from '../../src/identity/types.ts'
 
 const TENANT = 't_acme'
@@ -422,7 +423,254 @@ describe('graph traversal (FR-ONT-004, FR-RES-007)', () => {
     })
     expect(res.statusCode).toBe(422)
   })
+
+  it('follows every declared relation type when follow is omitted', async () => {
+    // `follow` 的上限是 10，而本体里声明了 28 种关系。要"展开一个对象
+    // 周围的全部关系"，调用方只能截断——而截断掉的那些不会报错，
+    // 图只是安静地少了几种边。省略 follow 必须等于「全部」
+    const { decision, req, story } = await seedChain()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:traverse',
+      headers: asAdmin,
+      payload: { start: req, maxDepth: 2, direction: 'both' },
+    })
+    expect(res.statusCode).toBe(200)
+    const ids = (res.json().items as { id: string }[]).map((i) => i.id)
+    // 沿 implementedBy 向下、沿 explains 的逆向上——两个方向都跟到了
+    expect(ids).toContain(story)
+    expect(ids).toContain(decision)
+  })
 })
+
+/**
+ * 关系图（FR-ONT-012）。
+ *
+ * 比 `:traverse` 多两样东西，而这张图缺了任一样都画不出来：
+ * 节点上写什么（标题在 attributes 里），以及节点**彼此之间**怎么连。
+ */
+describe('subgraph (FR-ONT-012)', () => {
+  it('returns the start node itself, with attributes, alongside what it reaches', async () => {
+    const { decision, req, story, task } = await seedChain()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:subgraph',
+      headers: asAdmin,
+      payload: { start: req, maxDepth: 2, direction: 'both' },
+    })
+    expect(res.statusCode).toBe(200)
+    const nodes = res.json().nodes as { id: string; depth: number; attributes: { title?: string } }[]
+
+    // 起点自己在图上——`:traverse` 只回 depth > 0，圆心得自己补
+    const start = nodes.find((n) => n.id === req)
+    expect(start).toMatchObject({ depth: 0 })
+    // 标题跟着节点一起回来，否则画出来的是一圈没有名字的圆点
+    expect(start?.attributes.title).toBe('billing')
+    // direction: 'both' 也会沿 `explains` 的逆向上走到 Decision——
+    // 那正是这张图该有的样子：一个需求周围的东西不只在它下游
+    expect(nodes.map((n) => n.id).sort()).toEqual([decision, req, story, task].sort())
+
+    // 跳数必须跟着节点回来。图是按它分层画的（同心圆），
+    // 全算成 0 的话七个节点会叠在圆心上——**没有报错，只是那张图不再有意义**
+    const depthById = new Map(nodes.map((n) => [n.id, n.depth]))
+    expect(depthById.get(story)).toBe(1)
+    expect(depthById.get(task)).toBe(2)
+  })
+
+  it('includes edges between nodes at the same depth, which a traversal path cannot express', async () => {
+    // traverse 的 `DISTINCT ON (id)` 每个节点只留最短的那条路径，
+    // 于是同层之间的横向连边一条也不在结果里。少画一条边不是"简化"，
+    // 是**告诉看图的人那两个东西没关系**
+    const story = await create('Story', { title: 'root' })
+    const a = await create('Task', { title: 'a' })
+    const b = await create('Task', { title: 'b' })
+    await relate(story, 'decomposedInto', a)
+    await relate(story, 'decomposedInto', b)
+    await relate(a, 'blocks', b) // 同为 depth 1 的两个节点之间的边
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:subgraph',
+      headers: asAdmin,
+      payload: { start: story, maxDepth: 1, direction: 'both' },
+    })
+    const edges = res.json().edges as { fromId: string; toId: string; type: string }[]
+    expect(edges).toHaveLength(3)
+    expect(edges).toContainEqual(expect.objectContaining({ fromId: a, toId: b, type: 'blocks' }))
+  })
+
+  it('never draws an edge with a dangling end', async () => {
+    // 起点是无条件放进图里的，但 `query` 不返回软删除的对象。
+    // 拿"遍历命中的 id"去查边的话，这里会回来一条一端悬空的连线——
+    // **那条线本身就说出了"这里还有个东西"**
+    const story = await create('Story', { title: 'about to go' })
+    const task = await create('Task', { title: 'still here' })
+    await relate(story, 'decomposedInto', task)
+    const current = await app.inject({ method: 'GET', url: `/v1/resources/${story}`, headers: asAdmin })
+    const removed = await app.inject({
+      method: 'DELETE',
+      url: `/v1/resources/${story}`,
+      headers: { ...asAdmin, 'if-match': `"${current.json().version}"` },
+    })
+    expect(removed.statusCode).toBe(204)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:subgraph',
+      headers: asAdmin,
+      payload: { start: story, maxDepth: 2, direction: 'both' },
+    })
+    expect(res.statusCode).toBe(200)
+    // 起点自己不在节点里了（`query` 不返回软删除的对象），
+    // 于是那条 story → task 的边也必须一起消失
+    const nodes = res.json().nodes as { id: string }[]
+    expect(nodes.map((n) => n.id)).not.toContain(story)
+    expect(res.json().edges).toEqual([])
+    // 遍历本身照旧走得出去——邻居还在，只是没有任何边指回那个已删除的圆心。
+    // 这一条记下来是因为它容易被读成"图应该是空的"：不是，
+    // 空的是**边**，节点该在的还在
+    expect(nodes.map((n) => n.id)).toEqual([task])
+  })
+
+  it('returns an empty graph, not an error, when nothing at all is visible', async () => {
+    // 一个已删除、且没有任何活着的邻居的起点 —— 节点集是空的。
+    // 拿着空集合去查边必须短路：Kysely 的 `in []` 生成 `in ()`，PG 直接语法错误。
+    // 也就是说这里的"空集合提前返回"不是省一次往返，是**唯一没有炸掉的那条路**
+    const lonely = await create('Task', { title: 'nobody' })
+    const current = await app.inject({ method: 'GET', url: `/v1/resources/${lonely}`, headers: asAdmin })
+    await app.inject({
+      method: 'DELETE',
+      url: `/v1/resources/${lonely}`,
+      headers: { ...asAdmin, 'if-match': `"${current.json().version}"` },
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:subgraph',
+      headers: asAdmin,
+      payload: { start: lonely, maxDepth: 2, direction: 'both' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().nodes).toEqual([])
+    expect(res.json().edges).toEqual([])
+  })
+
+  it('drops a soft-deleted neighbour together with the edge that reached it', async () => {
+    const story = await create('Story', { title: 'visible' })
+    const task = await create('Task', { title: 'gone' })
+    await relate(story, 'decomposedInto', task)
+    const current = await app.inject({ method: 'GET', url: `/v1/resources/${task}`, headers: asAdmin })
+    await app.inject({
+      method: 'DELETE',
+      url: `/v1/resources/${task}`,
+      headers: { ...asAdmin, 'if-match': `"${current.json().version}"` },
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:subgraph',
+      headers: asAdmin,
+      payload: { start: story, maxDepth: 2, direction: 'both' },
+    })
+    expect((res.json().nodes as { id: string }[]).map((n) => n.id)).toEqual([story])
+    expect(res.json().edges).toEqual([])
+  })
+
+  it('stops the walk at the node cap instead of letting the page clamp eat the rest', async () => {
+    // 节点是用 `query` 一次取回来的，而它把 size 夹在 MAX_PAGE_SIZE。
+    // 遍历要是走得比这条线远，多出来的节点会被**静默丢掉**，
+    // 而 truncated 依然是 false——一张看起来完整的、缺了东西的图。
+    const hub = await create('Story', { title: 'hub' })
+    const kids = await Promise.all(
+      Array.from({ length: MAX_PAGE_SIZE + 5 }, (_, i) => create('Task', { title: `t${i}` })),
+    )
+    await Promise.all(kids.map((k) => relate(hub, 'decomposedInto', k)))
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:subgraph',
+      headers: asAdmin,
+      // limit 不传，用服务端默认值（500）——它比上界大，正是会踩到那个坑的用法
+      payload: { start: hub, maxDepth: 1, direction: 'both' },
+    })
+    expect(res.statusCode).toBe(200)
+    const nodes = res.json().nodes as unknown[]
+    expect(nodes.length).toBeLessThanOrEqual(MAX_PAGE_SIZE)
+    // **被截断了就必须说**。这一条才是真正的断言：节点数上限本身可以商量，
+    // "少了而不告诉你"不行
+    expect(res.json().truncated).toBe(true)
+  })
+
+  it('draws a rejected edge between two visible nodes, but never walks through one', async () => {
+    // 否决 ≠ 删除。遍历里的边是**通路**，否决过的走不过去；
+    // 图上的边是**说明**，两端本来就在图上，画成虚线说的是
+    // "有人看过这条关系并且否掉了它"。藏起来的后果是下周有人再推断一次同样的边，
+    // 而图上没有任何痕迹说明这事发生过
+    const asAgent = {
+      'x-principal': 'agent://knowledge@1.0.0',
+      'x-tenant': TENANT,
+      'x-roles': 'AIAgent',
+      'x-capabilities': 'Knowledge.Update,Knowledge.Read,Task.Read',
+    }
+    const project = await create('Project', { key: 'PX', name: 'hub' })
+    const task = await create('Task', { title: 'reachable' })
+    const knowledge = await create('Knowledge', { title: 'k', body: 'b' })
+    const orphan = await create('Task', { title: 'only via a rejected edge' })
+    expect((await relate(project, 'contains', task)).statusCode).toBe(201)
+    expect((await relate(project, 'contains', knowledge)).statusCode).toBe(201)
+
+    // 两条 Agent 推断的边，都否掉：一条在两个已经在图上的节点之间，
+    // 一条通往一个别无他路可达的节点
+    for (const toId of [task, orphan]) {
+      const inferred = await app.inject({
+        method: 'POST',
+        url: `/v1/resources/${knowledge}/relations`,
+        headers: asAgent,
+        payload: { type: 'derivedFrom', toId, confidence: 0.8 },
+      })
+      await app.inject({
+        method: 'POST',
+        url: `/v1/relations/${inferred.json().id}/confirmation`,
+        headers: asAdmin,
+        payload: { confirmed: false },
+      })
+    }
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:subgraph',
+      headers: asAdmin,
+      payload: { start: project, maxDepth: 2, direction: 'both' },
+    })
+    const nodes = (res.json().nodes as { id: string }[]).map((n) => n.id)
+    // 只能靠一条被否决的边走到的节点**不在图上**——否决过的边不产生可达性
+    expect(nodes).not.toContain(orphan)
+    expect(nodes.sort()).toEqual([project, task, knowledge].sort())
+
+    const edges = res.json().edges as { fromId: string; toId: string; confirmed: boolean | null }[]
+    const rejected = edges.find((e) => e.fromId === knowledge && e.toId === task)
+    expect(rejected?.confirmed).toBe(false)
+    // 通往 orphan 的那条边一端不在图上，绝不能画出来
+    expect(edges.some((e) => e.toId === orphan || e.fromId === orphan)).toBe(false)
+  })
+
+  it('reports truncation for a graph smaller than the cap too', async () => {
+    const hub = await create('Story', { title: 'small hub' })
+    for (let i = 0; i < 12; i++) {
+      await relate(hub, 'decomposedInto', await create('Task', { title: `t${i}` }))
+    }
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/graph:subgraph',
+      headers: asAdmin,
+      payload: { start: hub, maxDepth: 1, direction: 'both', limit: 5 },
+    })
+    expect(res.json().truncated).toBe(true)
+    // 起点 + limit 个
+    expect((res.json().nodes as unknown[]).length).toBe(6)
+  })
+})
+
 
 describe('shortest path (FR-ONT-005)', () => {
   it('connects an incident back to the decision that explains it', async () => {

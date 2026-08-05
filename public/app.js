@@ -33,8 +33,13 @@ const state = {
   /** @type {{id: string, version: number}|null} */ editing: null,
   /** 当前检索词。空串表示不过滤。 */
   /** @type {string} */ search: '',
-  /** 当前视图：某个类型的看板，或 Dashboard */
-  /** @type {'board'|'dashboard'} */ view: 'board',
+  /** 当前视图：某个类型的看板、Dashboard、本体浏览器、流程编辑器 */
+  /** @type {'board'|'dashboard'|'graph'|'process'} */ view: 'board',
+  /** 本体浏览器（FR-ONT-012）：从哪个对象出发、展开几跳 */
+  /** @type {{start: string, depth: number, nodes: any[], edges: any[]}} */
+  graph: { start: '', depth: 2, nodes: [], edges: [] },
+  /** 流程编辑器（FR-WF-014）：正在编辑的那台状态机 */
+  /** @type {any|null} */ editingLifecycle: null,
   /** @type {any[]} */ metrics: [],
   /**
    * 这一页是否被截断了。
@@ -174,7 +179,10 @@ let boardableTypes = []
  * 两边各存一份状态迟早会对不上。
  */
 function applyUrl(params, boardable) {
-  state.view = params.get('view') === 'dashboard' ? 'dashboard' : 'board'
+  const view = params.get('view')
+  state.view = view === 'dashboard' || view === 'graph' || view === 'process' ? view : 'board'
+  state.graph.start = params.get('start') ?? ''
+  state.graph.depth = Number(params.get('depth') ?? '2') || 2
   const wanted = params.get('type')
   const valid = boardable.some((t) => t.name === wanted)
   // URL 里写了个不存在的类型就退回第一个，而不是留在空白看板上
@@ -186,8 +194,15 @@ function applyUrl(params, boardable) {
 /** 把当前视图写回地址栏。`replace` 用于不该在历史里留一条记录的变化（如输入中的搜索） */
 function syncUrl(replace = false) {
   const params = new URLSearchParams()
-  if (state.view === 'dashboard') params.set('view', 'dashboard')
-  else if (state.activeType !== '') params.set('type', state.activeType)
+  if (state.view !== 'board') {
+    params.set('view', state.view)
+    // 图浏览器的"从哪儿出发、展开几跳"也要进 URL：
+    // 一张展开好的关系图，分享出去必须还是那一张
+    if (state.view === 'graph' && state.graph.start !== '') {
+      params.set('start', state.graph.start)
+      params.set('depth', String(state.graph.depth))
+    }
+  } else if (state.activeType !== '') params.set('type', state.activeType)
   if (state.search !== '' && state.view === 'board') params.set('q', state.search)
   const qs = params.toString()
   const url = qs === '' ? location.pathname : `${location.pathname}?${qs}`
@@ -220,6 +235,23 @@ function renderTabs(types) {
     await refresh()
   }
 
+  /** 非看板视图的标签。三个都长一样，只是切到不同的 view */
+  const viewTab = (view, label) => {
+    const btn = document.createElement('button')
+    btn.className = 'type-tab'
+    btn.textContent = label
+    btn.dataset.view = view
+    btn.setAttribute('aria-selected', String(state.view === view))
+    btn.onclick = async () => {
+      state.view = view
+      syncUrl()
+      renderTabs(types)
+      closeDrawer()
+      await refresh()
+    }
+    return btn
+  }
+
   el.typeTabs.replaceChildren(
     ...types.map((t) => {
       const btn = document.createElement('button')
@@ -238,13 +270,21 @@ function renderTabs(types) {
       return btn
     }),
     dashboard,
+    viewTab('graph', '关系图'),
+    viewTab('process', '流程'),
   )
 }
 
 // ── 看板 ────────────────────────────────────────────
 
 async function refresh() {
+  // 看板之外的三个视图不是"列"。容器的布局跟着视图走，
+  // 否则它们会被那套横向列布局裁掉下半截（见 style.css 里 .board-plain）
+  el.board.classList.toggle('board-plain', state.view !== 'board')
+
   if (state.view === 'dashboard') return refreshDashboard()
+  if (state.view === 'graph') return refreshGraph()
+  if (state.view === 'process') return refreshProcess()
   if (state.activeType === '') return
   // 走 GET 而不是 POST :query。
   //
@@ -360,7 +400,7 @@ async function openBreakdown(value, group) {
       const row = document.createElement('button')
       row.className = 'rel-row'
       row.dataset['id'] = item.id
-      row.textContent = `${item.type} · ${item.attributes.title ?? item.attributes.name ?? item.id} · ${item.status}`
+      row.textContent = `${item.type} · ${displayTitle(item)} · ${item.status}`
       row.onclick = () => void openDrawer(item.id)
       section.append(row)
     }
@@ -475,7 +515,7 @@ function renderCard(item) {
 
   const title = document.createElement('div')
   title.className = 'card-title'
-  title.textContent = item.attributes.title ?? item.attributes.name ?? item.attributes.question ?? item.id
+  title.textContent = displayTitle(item)
 
   const meta = document.createElement('div')
   meta.className = 'card-meta'
@@ -592,8 +632,7 @@ async function openDrawer(id) {
     ])
 
     el.drawerType.textContent = `${item.type} · ${item.status}`
-    el.drawerTitle.textContent =
-      item.attributes.title ?? item.attributes.name ?? item.attributes.question ?? item.id
+    el.drawerTitle.textContent = displayTitle(item)
 
     el.drawerBody.replaceChildren(
       sectionTransitions(id, transitions.items),
@@ -860,7 +899,7 @@ async function openRelationModal(item) {
     for (const candidate of options) {
       const option = document.createElement('option')
       option.value = candidate.id
-      const title = candidate.attributes.title ?? candidate.attributes.name ?? candidate.id
+      const title = displayTitle(candidate)
       option.textContent = `${candidate.type} · ${title}`
       targetSelect.append(option)
     }
@@ -1307,6 +1346,21 @@ function heading(text) {
 }
 
 /**
+ * 一个对象在界面上叫什么。
+ *
+ * 本体不强制每种类型都有 `title`——Question 用 `question`，
+ * 有些类型用 `name`。挨个 `??` 下来，最后落到 id：**宁可显示 id
+ * 也不显示空白**，空白的那一行点不动也搜不着。
+ *
+ * 这段话原来在四个地方各写了一遍，而且写得不一样：关系行和下拉框
+ * 漏了 `question`，于是同一个 Question 在卡片上有标题、在关系列表里
+ * 是一串 id。同一个问题只该有一个答案。
+ */
+function displayTitle(item) {
+  return item.attributes.title ?? item.attributes.name ?? item.attributes.question ?? item.id
+}
+
+/**
  * 空状态 / 提示。
  *
  * `inline` 用于抽屉内部：看板级的大号居中样式放进抽屉会盖过真正的内容。
@@ -1376,6 +1430,319 @@ document.addEventListener('keydown', (event) => {
     else if (!el.drawer.hidden) closeDrawer()
   }
 })
+
+// ── 本体可视化浏览器（FR-ONT-012） ───────────────────
+//
+// 验收标准：**可从任一实体出发展开 N 跳关系图。**
+//
+// 用 SVG 手画而不是引一个图库：这张图要显示的东西很少
+// （节点、边、类型、方向），而一个图库会带着自己的版本节奏、
+// 主题系统和一套需要学的布局 API 进来。真需要力导向布局时再说。
+
+/** 一次展开最多取多少个节点。服务端还会再夹一次，这里只是别白要 */
+const GRAPH_LIMIT = 200
+
+async function refreshGraph() {
+  const form = document.createElement('form')
+  form.className = 'graph-controls'
+  form.onsubmit = async (e) => {
+    e.preventDefault()
+    state.graph.start = /** @type {HTMLInputElement} */ (form.querySelector('#graphStart')).value.trim()
+    state.graph.depth = Number(/** @type {HTMLInputElement} */ (form.querySelector('#graphDepth')).value)
+    syncUrl()
+    await refresh()
+  }
+  form.innerHTML = `
+    <label>起点 <input id="graphStart" value="${escapeAttr(state.graph.start)}"
+      placeholder="粘贴一个对象 id" autocomplete="off"></label>
+    <label>展开 <input id="graphDepth" type="number" min="1" max="6" value="${state.graph.depth}"> 跳</label>
+    <button class="btn primary" type="submit">展开</button>`
+
+  const canvas = document.createElement('div')
+  canvas.className = 'graph-canvas'
+  canvas.id = 'graphCanvas'
+  el.board.replaceChildren(form, canvas)
+
+  if (state.graph.start === '') {
+    canvas.replaceChildren(hint('从任一对象出发', '粘贴一个 id，或在看板上点开一张卡片再回来'))
+    return
+  }
+
+  canvas.replaceChildren(hint('展开中…', '', true))
+  // **不传 follow**：沿本体里声明的每一种关系走。
+  // 前端一旦开始列关系名，这张图能看见什么就变成了前端的知识——
+  // 本体里新加一种关系，图上不会出现，也不会有人发现
+  let result
+  try {
+    result = await api('/v1/graph:subgraph', {
+      method: 'POST',
+      body: JSON.stringify({
+        start: state.graph.start,
+        maxDepth: state.graph.depth,
+        direction: 'both',
+        limit: GRAPH_LIMIT,
+      }),
+    })
+  } catch (error) {
+    canvas.replaceChildren(hint('展开失败', String(error.message)))
+    return
+  }
+
+  state.graph.nodes = result.nodes ?? []
+  state.graph.edges = result.edges ?? []
+  // 起点自己总在节点里，所以"只有一个节点"才是"没有关系"。
+  // 判 length === 0 的话，一个孤立对象会渲染出一张只有圆心的图，
+  // 看起来像是加载失败
+  if (state.graph.nodes.length <= 1) {
+    canvas.replaceChildren(hint('没有可展开的关系', '这个对象还没有任何关系'))
+    return
+  }
+  canvas.replaceChildren(drawGraph(state.graph.nodes, state.graph.edges, result.truncated === true))
+}
+
+/**
+ * 画图。按**距起点的跳数**分层——同心圆布局。
+ *
+ * 分层而不是随机撒点：跳数是这张图里唯一有意义的空间语义，
+ * 让它对应半径，"谁离得近"一眼就能看出来。
+ */
+function drawGraph(nodes, edges, truncated) {
+  const wrap = document.createElement('div')
+  if (truncated) {
+    // 截断必须说。不说的话用户看到的就是"全部"
+    wrap.append(hint('只显示了前 200 个节点', '缩小跳数，或从更具体的对象出发'))
+  }
+
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  const rings = new Map()
+  for (const n of nodes) {
+    const d = n.depth ?? 0
+    rings.set(d, [...(rings.get(d) ?? []), n])
+  }
+  const maxDepth = Math.max(...rings.keys(), 1)
+  const size = 640
+  const centre = size / 2
+  const pos = new Map()
+  for (const [depth, ring] of [...rings].sort((a, b) => a[0] - b[0])) {
+    const radius = depth === 0 ? 0 : (depth / maxDepth) * (centre - 60)
+    ring.forEach((n, i) => {
+      const angle = (i / ring.length) * Math.PI * 2 - Math.PI / 2
+      pos.set(n.id, { x: centre + radius * Math.cos(angle), y: centre + radius * Math.sin(angle) })
+    })
+  }
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`)
+  svg.setAttribute('class', 'graph-svg')
+  svg.setAttribute('role', 'img')
+  svg.setAttribute('aria-label', `关系图：${nodes.length} 个对象，${edges.length} 条关系`)
+
+  for (const e of edges) {
+    const a = pos.get(e.fromId)
+    const b = pos.get(e.toId)
+    if (a === undefined || b === undefined) continue
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+    line.setAttribute('x1', String(a.x))
+    line.setAttribute('y1', String(a.y))
+    line.setAttribute('x2', String(b.x))
+    line.setAttribute('y2', String(b.y))
+    line.setAttribute('class', e.confirmed === false ? 'graph-edge rejected' : 'graph-edge')
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title')
+    title.textContent = e.type
+    line.append(title)
+    svg.append(line)
+  }
+
+  for (const n of nodes) {
+    const p = pos.get(n.id)
+    if (p === undefined) continue
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+    g.setAttribute('class', 'graph-node')
+    g.setAttribute('data-id', n.id)
+    g.setAttribute('data-type', n.type)
+    g.setAttribute('tabindex', '0')
+    g.setAttribute('role', 'button')
+
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+    circle.setAttribute('cx', String(p.x))
+    circle.setAttribute('cy', String(p.y))
+    circle.setAttribute('r', n.depth === 0 ? '14' : '9')
+    svg.append(g)
+    g.append(circle)
+
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    label.setAttribute('x', String(p.x))
+    label.setAttribute('y', String(p.y - 16))
+    label.setAttribute('text-anchor', 'middle')
+    label.textContent = String(displayTitle(n)).slice(0, 12)
+    g.append(label)
+
+    // 点一个节点就以它为新起点。**这就是"从任一实体出发"**——
+    // 起点不是配置项，是你正在看的那个东西
+    const recentre = () => {
+      state.graph.start = n.id
+      syncUrl()
+      refresh().catch(() => {})
+    }
+    g.addEventListener('click', recentre)
+    g.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault()
+        recentre()
+      }
+    })
+  }
+
+  wrap.append(svg)
+  const legend = document.createElement('p')
+  legend.className = 'graph-legend'
+  legend.textContent = `${nodes.length} 个对象 · ${edges.length} 条关系 · 点节点可换起点`
+  wrap.append(legend)
+  return wrap
+}
+
+// ── 可视化流程编辑器（FR-WF-014） ────────────────────
+//
+// 验收标准：**拖拽编辑状态机并保存。**
+//
+// 拖的是"从哪个状态到哪个状态"——把一个状态拖到另一个上面就是加一条迁移。
+// 拖坐标（把方框摆好看）在这里没有意义：状态机的语义是**边**，
+// 不是布局，而存一份布局意味着还要维护它。
+
+async function refreshProcess() {
+  const lifecycles = state.lifecycles.length > 0 ? state.lifecycles : (await api('/v1/workflows')).items
+  state.lifecycles = lifecycles
+
+  const picker = document.createElement('div')
+  picker.className = 'graph-controls'
+  const select = document.createElement('select')
+  select.id = 'processPicker'
+  select.append(
+    ...lifecycles.map((l) => {
+      const o = document.createElement('option')
+      o.value = l.id
+      o.textContent = `${l.entityType} · ${l.id}`
+      return o
+    }),
+  )
+  const current = state.editingLifecycle ?? lifecycles[0]
+  if (current !== undefined) select.value = current.id
+  select.onchange = () => {
+    state.editingLifecycle = structuredClone(lifecycles.find((l) => l.id === select.value))
+    renderProcessEditor()
+  }
+  picker.append(select)
+
+  const save = document.createElement('button')
+  save.className = 'btn primary'
+  save.id = 'processSave'
+  save.textContent = '保存'
+  save.onclick = async () => {
+    const draft = state.editingLifecycle
+    if (draft === null) return
+    try {
+      await api(`/v1/workflows/${draft.id}`, { method: 'PUT', body: JSON.stringify(draft) })
+      toast('已保存', '下一批新实例即时生效')
+      state.lifecycles = (await api('/v1/workflows')).items
+    } catch (error) {
+      // 保存失败要说清是哪条规则不让存——服务端会返回原因
+      toast('保存失败', String(error.message), 'error')
+    }
+  }
+  picker.append(save)
+
+  const canvas = document.createElement('div')
+  canvas.className = 'process-canvas'
+  canvas.id = 'processCanvas'
+  el.board.replaceChildren(picker, canvas)
+
+  state.editingLifecycle = structuredClone(current ?? null)
+  renderProcessEditor()
+}
+
+function renderProcessEditor() {
+  const canvas = document.getElementById('processCanvas')
+  if (canvas === null) return
+  const lc = state.editingLifecycle
+  if (lc === null || lc === undefined) {
+    canvas.replaceChildren(hint('没有可编辑的状态机', ''))
+    return
+  }
+
+  const grid = document.createElement('div')
+  grid.className = 'process-grid'
+
+  for (const st of lc.states) {
+    const box = document.createElement('div')
+    box.className = 'process-state'
+    box.draggable = true
+    box.dataset.state = st.name
+    box.tabIndex = 0
+
+    const name = document.createElement('strong')
+    name.textContent = st.name
+    box.append(name)
+
+    if (st.terminal === true) box.append(chip('终态'))
+    for (const t of lc.transitions.filter((x) => x.from.includes(st.name))) {
+      const edge = document.createElement('div')
+      edge.className = 'process-edge'
+      edge.textContent = `→ ${t.to}`
+      const remove = document.createElement('button')
+      remove.className = 'icon-btn'
+      remove.textContent = '×'
+      remove.title = `删除 ${st.name} → ${t.to}`
+      remove.onclick = () => {
+        // 只摘掉这一个来源，不是删掉整条迁移：一条迁移可以有多个 from
+        t.from = t.from.filter((f) => f !== st.name)
+        lc.transitions = lc.transitions.filter((x) => x.from.length > 0)
+        renderProcessEditor()
+      }
+      edge.append(remove)
+      box.append(edge)
+    }
+
+    box.addEventListener('dragstart', (ev) => {
+      ev.dataTransfer?.setData('text/plain', st.name)
+    })
+    box.addEventListener('dragover', (ev) => {
+      ev.preventDefault()
+      box.classList.add('drop-target')
+    })
+    box.addEventListener('dragleave', () => box.classList.remove('drop-target'))
+    box.addEventListener('drop', (ev) => {
+      ev.preventDefault()
+      box.classList.remove('drop-target')
+      const from = ev.dataTransfer?.getData('text/plain') ?? ''
+      addTransition(lc, from, st.name)
+    })
+    grid.append(box)
+  }
+
+  canvas.replaceChildren(grid)
+  const note = document.createElement('p')
+  note.className = 'graph-legend'
+  note.textContent = '把一个状态拖到另一个上面即可新增迁移；× 删除。改完点保存'
+  canvas.append(note)
+}
+
+/** 新增一条迁移。**同一对状态只留一条**，否则保存时会被服务端拒 */
+function addTransition(lc, from, to) {
+  if (from === '' || from === to) return
+  const exists = lc.transitions.some((t) => t.from.includes(from) && t.to === to)
+  if (exists) {
+    toast('已经有这条迁移了', `${from} → ${to}`)
+    return
+  }
+  const sameTarget = lc.transitions.find((t) => t.to === to)
+  if (sameTarget === undefined) lc.transitions.push({ from: [from], to })
+  else sameTarget.from = [...sameTarget.from, from]
+  renderProcessEditor()
+}
+
+function escapeAttr(value) {
+  return String(value).replace(/"/g, '&quot;')
+}
 
 /**
  * 定时刷新。

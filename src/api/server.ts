@@ -547,6 +547,27 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       return { items: result.hits, truncated: result.truncated }
     }
 
+    // 关系图（FR-ONT-012）：节点带完整对象，外加它们**之间**的边。
+    // 和 :traverse 分成两条而不是给它加参数——一个只回 id 的遍历
+    // 和一张要画出来的图，负载差着一个数量级，上界也不该是同一个
+    if (action === 'subgraph') {
+      const body = traverseSchema.parse(request.body)
+      const graph = await inTenant(request, (service, caller) =>
+        service.subgraph(caller, {
+          start: body.start,
+          follow: body.follow,
+          maxDepth: body.maxDepth,
+          direction: body.direction,
+          limit: body.limit,
+        }),
+      )
+      return {
+        nodes: graph.nodes.map((n) => ({ ...toWire(n.resource), depth: n.depth })),
+        edges: graph.edges.map((e) => ({ ...e, createdAt: e.createdAt.toISOString() })),
+        truncated: graph.truncated,
+      }
+    }
+
     if (action === 'path') {
       const body = pathSchema.parse(request.body)
       const path = await inTenant(request, (service, caller) =>

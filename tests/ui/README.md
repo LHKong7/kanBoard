@@ -18,6 +18,16 @@ pnpm test:ui
 
 `vitest.config.ts` 中排除了 `tests/ui/**`，两套互不干扰。
 
+## 为什么是 `--test-concurrency=1`
+
+`setupTestDb()` 每次都 `DROP DATABASE ... CREATE DATABASE`，**用的是同一个库名**。
+`node --test` 默认按 CPU 核数并行跑文件，于是两个用例文件会同时建同一个库，
+报 `duplicate key value violates unique constraint "pg_database_datname_index"`。
+
+这个竞态一直都在，只是文件数少的时候没撞上——加第三个文件的时候撞出来了。
+串行跑是这里正确的选择：并行的收益是几秒，而代价是**每个文件都在互相清空对方的数据**，
+撞库只是它最吵的那个表现。
+
 ## 环境变量
 
 | 变量 | 说明 |

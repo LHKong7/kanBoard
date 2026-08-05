@@ -13,7 +13,7 @@
     "start": "node --experimental-strip-types src/main.ts",
     "migrate": "node --experimental-strip-types src/platform/db/migrate.ts",
     "test": "vitest run --coverage",
-    "test:ui": "node --experimental-strip-types --test tests/ui/*.test.ts",
+    "test:ui": "node --experimental-strip-types --test --test-concurrency=1 tests/ui/*.test.ts",
     "bench:seed": "node --experimental-strip-types bench/seed.ts",
     "bench:run": "node --experimental-strip-types bench/run.ts",
     "test:watch": "vitest",

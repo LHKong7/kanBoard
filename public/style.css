@@ -178,6 +178,20 @@ body {
   align-items: stretch;
 }
 
+/*
+ * 非看板视图（Dashboard / 关系图 / 流程编辑器）。
+ *
+ * `.board` 那套横向列布局 + `overflow-y: hidden` 是**为"列"设计的**：
+ * 列自己纵向滚，容器不滚。把一张纵向铺开的图放进去，超出首屏的部分
+ * 既不换行也滚不到——七个状态的状态机里，Done 就落在视口外面，
+ * 而页面看起来完全正常。**没有报错，只是下半截不存在。**
+ */
+.board.board-plain {
+  display: block;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 .column {
   background: var(--surface-2);
   border: 1px solid transparent;
@@ -531,3 +545,58 @@ body {
 .metric-group .count { font-variant-numeric: tabular-nums; font-weight: 600; }
 .metric-definition { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
 .metric-failed { font-size: 12px; color: var(--danger, #c92a2a); }
+
+/* ── 本体浏览器（FR-ONT-012）与流程编辑器（FR-WF-014） ── */
+
+.graph-controls {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  padding: 14px 18px;
+  flex-wrap: wrap;
+}
+.graph-controls label { display: grid; gap: 4px; font-size: 12px; color: var(--muted, #6b7280); }
+.graph-controls input, .graph-controls select {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 8px;
+  min-width: 120px;
+}
+.graph-controls #graphStart { min-width: 320px; }
+
+.graph-canvas, .process-canvas { padding: 0 18px 24px; }
+.graph-svg { width: 100%; max-width: 720px; height: auto; }
+.graph-edge { stroke: var(--line, #d1d5db); stroke-width: 1.2; }
+/* 被否决的关系画成虚线：它还在，但不再产生效力（FR-ONT-006） */
+.graph-edge.rejected { stroke-dasharray: 4 3; opacity: 0.5; }
+.graph-node circle { fill: var(--accent, #2563eb); cursor: pointer; }
+.graph-node:hover circle, .graph-node:focus circle { fill: var(--accent-strong, #1d4ed8); }
+.graph-node:focus { outline: none; }
+.graph-node:focus circle { stroke: var(--accent, #2563eb); stroke-width: 3; }
+.graph-node text { font-size: 11px; fill: var(--fg, #111827); pointer-events: none; }
+.graph-legend { font-size: 12px; color: var(--muted, #6b7280); margin-top: 10px; }
+
+.process-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+.process-state {
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--card, #fff);
+  display: grid;
+  gap: 6px;
+  cursor: grab;
+}
+.process-state.drop-target { border-color: var(--accent, #2563eb); background: var(--accent-soft, #eff6ff); }
+.process-edge {
+  font-size: 12px;
+  color: var(--muted, #6b7280);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}

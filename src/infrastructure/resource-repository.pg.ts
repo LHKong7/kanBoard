@@ -1,6 +1,7 @@
 import { sql } from 'kysely'
 import type { Db } from './db/client.ts'
 import type { FieldChange } from './db/schema.ts'
+import { MAX_PAGE_SIZE } from '../domain/resource/ports.ts'
 import type {
   GroupCount,
   GroupableField,
@@ -261,7 +262,7 @@ export class PgResourceRepository implements ResourceRepository {
   }
 
   async query(filter: ResourceFilter, page: Page): Promise<PageResult<Resource>> {
-    const size = Math.min(Math.max(page.size, 1), 200)
+    const size = Math.min(Math.max(page.size, 1), MAX_PAGE_SIZE)
 
     let q = this.#applyFilter(
       this.#db.selectFrom('resources').select(RESOURCE_COLUMNS),
@@ -384,7 +385,7 @@ export class PgResourceRepository implements ResourceRepository {
   }
 
   async history(resourceId: string, page: Page): Promise<PageResult<HistoryEntry>> {
-    const size = Math.min(Math.max(page.size, 1), 200)
+    const size = Math.min(Math.max(page.size, 1), MAX_PAGE_SIZE)
     let q = this.#db
       .selectFrom('resource_history')
       .selectAll()

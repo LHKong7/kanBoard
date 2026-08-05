@@ -133,6 +133,32 @@ export class PgRelationRepository implements RelationRepository {
     return rows.map((r) => toRelation(r as unknown as RelationRow))
   }
 
+  /**
+   * 诱导子图：两端都落在 `ids` 里的边。
+   *
+   * **被否决的边（`confirmed = false`）也返回**，和 `traverse` 不同，
+   * 而这个不同是有意的：遍历里的边是**通路**，否决过的不该让人走过去；
+   * 这里的边是**说明**，两端本来就已经在图上了，画出来（虚线）
+   * 说的是"有人看过这条关系并且否掉了它"。把它藏起来的后果是
+   * 同一个人下周再推断一次同样的边，而图上没有任何痕迹说明这事发生过。
+   *
+   * 关键在于两端都必须在 `ids` 里——否则会画出一条一端悬空的线。
+   */
+  async edgesAmong(ids: readonly string[]): Promise<RelationInstance[]> {
+    // 空集合天然没有内部边。交给 SQL 也对，但 `= ANY('{}')` 白跑一次往返
+    if (ids.length === 0) return []
+
+    const rows = await this.#db
+      .selectFrom('relations')
+      .selectAll()
+      .where('tenant', '=', this.#tenant)
+      .where('from_id', 'in', [...ids])
+      .where('to_id', 'in', [...ids])
+      .orderBy('created_at', 'desc')
+      .execute()
+    return rows.map((r) => toRelation(r as unknown as RelationRow))
+  }
+
   async setConfirmed(relationId: string, confirmed: boolean): Promise<boolean> {
     const result = await this.#db
       .updateTable('relations')

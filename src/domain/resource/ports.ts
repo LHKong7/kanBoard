@@ -43,6 +43,18 @@ export type GroupCount = {
   count: number
 }
 
+/**
+ * 一页最多返回多少条。
+ *
+ * 这是**契约的一部分**，不是某个仓储的内部选择：传更大的 `size`
+ * 不会报错，多出来的那些会被安静地夹掉。调用方要是自己算过一遍
+ * "我要取 300 个"，那 100 个的消失不会有任何信号。
+ *
+ * 写成常量而不是各处的字面量 200，是为了让依赖它的地方
+ * （比如关系图的节点上界）跟它一起变，而不是各自记着一个数字。
+ */
+export const MAX_PAGE_SIZE = 200
+
 export type Page = {
   size: number
   /** 游标即上一页最后一条的 id。ULID 有序，因此 id 就是稳定游标（FR-RES-012）。 */
@@ -148,6 +160,17 @@ export interface RelationRepository {
   /** direction=out 查 from_id，in 查 to_id；both 合并 */
   listFor(resourceId: string, direction: 'out' | 'in' | 'both', type?: string): Promise<RelationInstance[]>
   traverse(spec: TraverseSpec): Promise<TraverseResult>
+  /**
+   * 一批对象**之间**的边（诱导子图）。
+   *
+   * `traverse` 回答的是"能走到谁"，回答不了"他们彼此之间怎么连"——
+   * 它的 `DISTINCT ON (id)` 每个节点只保留最短的那条路径，
+   * 于是同层节点之间的横向连边一条都不在结果里。画图要的是后者：
+   * 少画一条边不是"简化"，是**告诉看图的人那两个东西没关系**。
+   *
+   * 逐个 `listFor` 也能拼出来，但那是节点数量级的往返。
+   */
+  edgesAmong(ids: readonly string[]): Promise<RelationInstance[]>
   shortestPath(from: string, to: string, maxDepth: number): Promise<PathHit | null>
   setConfirmed(relationId: string, confirmed: boolean): Promise<boolean>
 }

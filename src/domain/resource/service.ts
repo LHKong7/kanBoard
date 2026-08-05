@@ -27,6 +27,7 @@ import {
   resourceStatusChanged,
   resourceUpdated,
 } from '../events.ts'
+import { MAX_PAGE_SIZE } from './ports.ts'
 import type {
   AuditSink,
   EventSink,
@@ -1040,7 +1041,77 @@ export class ResourceService {
     caller: Caller,
     spec: {
       start: string
-      follow: readonly string[]
+      /**
+       * 跟哪些关系类型走。**不传 = 本体里声明的全部。**
+       *
+       * 这个默认值不是图省事。要展开"一个对象周围的关系图"，调用方
+       * 只能把 28 个关系名全列出来——而请求体的 `follow` 上限是 10，
+       * 于是他会截断，而截断掉的恰好是 `decomposedInto` 这种最该跟的。
+       * 一张少了 18 种关系的图不会报错，只会**看起来是全的**。
+       * 「全部」这个意图必须能直接表达，而不是让每个调用方去枚举。
+       */
+      follow?: readonly string[] | undefined
+      maxDepth: number
+      direction: 'out' | 'in' | 'both'
+      limit: number
+    },
+  ): Promise<TraverseResult> {
+    return this.#traverse(caller, spec)
+  }
+
+  /**
+   * 关系图（FR-ONT-012）：节点 + 它们**之间**的边。
+   *
+   * 和 `traverse` 的区别在于 `traverse` 只回答"能走到谁"。画一张图还需要
+   * 两样它给不了的东西：节点上写什么（标题在 attributes 里，遍历不返回），
+   * 以及节点彼此怎么连（见 `edgesAmong`）。
+   *
+   * 节点走 `query({ids})` 取回，于是**可见性与权限跟列表页完全同一条路径**——
+   * 看不到的对象不会因为"它在图上"就被看到。
+   */
+  async subgraph(
+    caller: Caller,
+    spec: {
+      start: string
+      follow?: readonly string[] | undefined
+      maxDepth: number
+      direction: 'out' | 'in' | 'both'
+      limit: number
+    },
+  ): Promise<{
+    nodes: readonly { resource: Resource; depth: number }[]
+    edges: readonly RelationInstance[]
+    truncated: boolean
+  }> {
+    // 上界压到仓储那一层的分页硬顶之下。`query` 内部把 size 夹到 200，
+    // 传更大的节点集进去会**被静默截掉**——而那时 truncated 是 false，
+    // 图看起来完整。宁可在这里少走几步，也不要给一张骗人的全图
+    const limit = Math.min(spec.limit, GRAPH_NODE_MAX - 1)
+    const walked = await this.#traverse(caller, { ...spec, limit })
+    // 起点自己不在 traverse 结果里（它只回 depth > 0），但它是这张图的圆心
+    const depthOf = new Map<string, number>([[spec.start, 0]])
+    for (const hit of walked.hits) depthOf.set(hit.id, hit.depth)
+
+    const found = await this.query(caller, { ids: [...depthOf.keys()] }, { size: depthOf.size })
+    const nodes = found.items.map((resource) => ({
+      resource,
+      depth: depthOf.get(resource.id) ?? 0,
+    }))
+    // 边只在**真正取回来的**节点之间找，而不是在遍历命中的 id 之间。
+    //
+    // 两者会不一致，今天就有一个口子：起点是无条件加进去的（`get` 读得到
+    // 软删除的对象），但 `query` 不会把它返回。拿命中 id 去查边的话，
+    // 图上会出现一条一端悬空的连线——**那条线本身就说出了"这里还有个东西"**。
+    const visible = new Set(nodes.map((n) => n.resource.id))
+    const edges = await this.#deps.relations.edgesAmong([...visible])
+    return { nodes, edges, truncated: walked.truncated }
+  }
+
+  async #traverse(
+    caller: Caller,
+    spec: {
+      start: string
+      follow?: readonly string[] | undefined
       maxDepth: number
       direction: 'out' | 'in' | 'both'
       limit: number
@@ -1054,19 +1125,21 @@ export class ResourceService {
       throw new ValidationError(`limit must be between 1 and ${MAX_TRAVERSE_LIMIT}`, { field: 'limit' })
     }
 
+    const follow = spec.follow ?? this.#deps.registry.relationTypes().map((r) => r.name)
+
     // 与 relationsOf 同一个道理：沿 `implementedBy` 走时，
     // 存成 `implements` 的边也必须能走通，否则遍历结果取决于当初是从哪一头建的关系。
-    const inverses = spec.follow.map((t) => this.#deps.registry.relationType(t).inverse)
+    const inverses = follow.map((t) => this.#deps.registry.relationType(t).inverse)
 
     const followOut =
-      spec.direction === 'out' ? spec.follow
+      spec.direction === 'out' ? follow
       : spec.direction === 'in' ? inverses
-      : [...spec.follow, ...inverses]
+      : [...follow, ...inverses]
 
     const followIn =
       spec.direction === 'out' ? inverses
-      : spec.direction === 'in' ? spec.follow
-      : [...spec.follow, ...inverses]
+      : spec.direction === 'in' ? follow
+      : [...follow, ...inverses]
 
     return this.#deps.relations.traverse({
       start: spec.start,
@@ -1310,6 +1383,16 @@ function relationKeysNeedingStatus(lifecycle: Lifecycle): string[] {
 }
 
 export const MAX_TRAVERSE_LIMIT = 5000
+
+/**
+ * 一张关系图最多返回多少个节点。
+ *
+ * 它**等于**一页的上限，不是碰巧一样：图上的节点是用 `query` 一次取回来的，
+ * 超过那条线的部分会被静默丢掉，而那时 `truncated` 还是 false——
+ * 一张骗人的全图。所以遍历必须先停在这条线以内。
+ * 写成引用而不是再抄一个 200，是为了那边改了这边跟着改。
+ */
+export const GRAPH_NODE_MAX = MAX_PAGE_SIZE
 
 /** 判环时向前看多少层。10 是遍历本身允许的上限 */
 const MAX_CYCLE_DEPTH = 10

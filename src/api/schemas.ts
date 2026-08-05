@@ -127,7 +127,14 @@ export const relateSchema = z.object({
 
 export const traverseSchema = z.object({
   start: resourceIdSchema,
-  follow: z.array(z.string().min(1).max(64)).min(1).max(10),
+  /**
+   * 跟哪些关系类型走。**不传 = 本体里声明的全部。**
+   *
+   * 上限 10 是给"我只关心这几种"用的。要画一张关系图的调用方
+   * 得列出 28 个名字，塞不下就只能 slice——而被 slice 掉的部分
+   * 不会报错，只会让图安静地少掉几种关系。省略它来表达「全部」。
+   */
+  follow: z.array(z.string().min(1).max(64)).min(1).max(10).optional(),
   maxDepth: z.number().int().min(1).max(10).default(3),
   direction: z.enum(['out', 'in', 'both']).default('out'),
   /** 返回节点数上限。默认值刻意保守：超出部分由响应里的 truncated 显式告知 */

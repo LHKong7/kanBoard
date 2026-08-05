@@ -1,0 +1,39 @@
+{
+  "file": "src/domain/resource/service.ts",
+  "test": "tests/integration/graph.test.ts",
+  "env": {
+    "TEST_ADMIN_DATABASE_URL": "postgresql://postgres@127.0.0.1:5432/postgres"
+  },
+  "mutations": [
+    {
+      "name": "只跟前 10 种关系（follow 的请求上限）",
+      "from": "    const follow = spec.follow ?? this.#deps.registry.relationTypes().map((r) => r.name)",
+      "to": "    const follow = spec.follow ?? this.#deps.registry.relationTypes().map((r) => r.name).slice(0, 10)"
+    },
+    {
+      "name": "起点自己不在图上",
+      "from": "    const depthOf = new Map<string, number>([[spec.start, 0]])",
+      "to": "    const depthOf = new Map<string, number>()"
+    },
+    {
+      "name": "边按遍历命中的 id 找，而不是按真正取回来的节点",
+      "from": "    const edges = await this.#deps.relations.edgesAmong([...visible])",
+      "to": "    const edges = await this.#deps.relations.edgesAmong([...depthOf.keys()])"
+    },
+    {
+      "name": "去掉节点数上界，让分页的硬夹静默吃掉多的那些",
+      "from": "    const limit = Math.min(spec.limit, GRAPH_NODE_MAX - 1)",
+      "to": "    const limit = spec.limit"
+    },
+    {
+      "name": "从不上报截断",
+      "from": "    return { nodes, edges, truncated: walked.truncated }",
+      "to": "    return { nodes, edges, truncated: false }"
+    },
+    {
+      "name": "节点深度一律算 0（同心圆塌成一个点）",
+      "from": "      depth: depthOf.get(resource.id) ?? 0,",
+      "to": "      depth: 0,"
+    }
+  ]
+}
