@@ -5,6 +5,7 @@ import { DEFAULT_AUTOMATION_RULES } from './workflow/automation.ts'
 import { OutboxPoller } from './infrastructure/poller.ts'
 import { SlaSweeper } from './infrastructure/sla-sweeper.pg.ts'
 import { slaNotifier } from './infrastructure/sla-notifier.ts'
+import { summarise, sweepOntologyHealth } from './infrastructure/ontology-health.pg.ts'
 import { AgentRunner } from './infrastructure/agent-runner.ts'
 import { ScriptedModelClient } from './infrastructure/model/scripted.ts'
 import { defaultPolicies } from './identity/default-policies.ts'
@@ -100,6 +101,18 @@ const sweeper =
 let sweepTimer: NodeJS.Timeout | null = null
 
 /**
+ * 本体一致性巡检（FR-ONT-010 验收标准：**每日报告**）。
+ *
+ * 默认一天一次。这类问题（孤儿、断链、环）是**慢慢积累**出来的，
+ * 分钟级地扫一遍全租户只是把库占住，而结论一天都不会变。
+ *
+ * 和 SLA 巡检同一个约定：设成 0 显式关掉，启动时说清楚它在不在跑——
+ * 一个悄悄没起来的巡检表现出来就是"这个系统的数据一直很干净"。
+ */
+const healthIntervalMs = Number(process.env['PROJECTOS_HEALTH_SWEEP_MS'] ?? 24 * 60 * 60 * 1000)
+let healthTimer: NodeJS.Timeout | null = null
+
+/**
  * Agent Runner（ADR-0008 的第三种进程角色）。
  *
  * 模型客户端目前只有确定性实现：真实供应商的适配器要凭据，
@@ -131,6 +144,7 @@ const shutdown = async (signal: string): Promise<void> => {
   poller?.stop()
   runner?.stop()
   if (sweepTimer !== null) clearInterval(sweepTimer)
+  if (healthTimer !== null) clearInterval(healthTimer)
   await app.close()
   await pool.end()
   process.exit(0)
@@ -164,4 +178,22 @@ if (sweeper !== null) {
   sweepTimer.unref()
 } else if (role !== 'api') {
   console.log('sla sweeper disabled (PROJECTOS_SLA_SWEEP_MS=0)')
+}
+
+if (role !== 'api' && healthIntervalMs > 0) {
+  const runHealth = (): void => {
+    void sweepOntologyHealth({ pool, registry, workflows, policies }, tenant)
+      .then((result) => console.log(`[ontology-health] ${summarise(result)}`))
+      // 巡检失败不该把进程带走，但必须说出来——一个安静停掉的巡检
+      // 和"数据一直很干净"长得一模一样
+      .catch((error: unknown) => console.error('[ontology-health] sweep failed:', error))
+  }
+  console.log(`ontology health sweep started (every ${Math.round(healthIntervalMs / 3_600_000)}h)`)
+  // 先跑一次再进入周期。等满一天才出第一份报告的话，
+  // 一个刚上线就有问题的租户要等到第二天才知道
+  runHealth()
+  healthTimer = setInterval(runHealth, healthIntervalMs)
+  healthTimer.unref()
+} else if (role !== 'api') {
+  console.log('ontology health sweep disabled (PROJECTOS_HEALTH_SWEEP_MS=0)')
 }

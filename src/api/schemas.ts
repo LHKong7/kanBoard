@@ -141,6 +141,18 @@ export const traverseSchema = z.object({
   limit: z.number().int().min(1).max(5000).default(500),
 }).strict()
 
+/**
+ * 巡检的扫描上界（FR-ONT-010）。
+ *
+ * 默认值大到覆盖任何真实规模的租户，同时**仍然是个有限的数**——
+ * 一次没有上界的全表扫描不是"偶尔慢"，是这条端点被谁调一下就能
+ * 把库拖住。超出的部分由响应里的 `complete: false` 说出来。
+ */
+export const healthParamsSchema = z.object({
+  maxResources: z.coerce.number().int().min(1).max(200_000).default(50_000),
+  maxRelations: z.coerce.number().int().min(1).max(200_000).default(50_000),
+})
+
 export const pathSchema = z.object({
   from: resourceIdSchema,
   to: resourceIdSchema,

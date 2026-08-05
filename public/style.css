@@ -600,3 +600,42 @@ body {
   align-items: center;
   gap: 6px;
 }
+
+/* ── 本体巡检（FR-ONT-010） ───────────────────────── */
+.health-panel { padding: 4px 18px 24px; }
+.health-summary { font-size: 13px; color: var(--text-dim); margin-bottom: 10px; }
+.health-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.health-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.health-chip[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); }
+.health-list { display: flex; flex-direction: column; gap: 6px; }
+.health-row {
+  display: grid;
+  grid-template-columns: 88px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.health-kind { font-weight: 600; }
+.health-detail { color: var(--text-dim); word-break: break-word; }
+.health-targets { display: flex; flex-wrap: wrap; gap: 4px; }
+.health-target {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.health-target:hover { border-color: var(--accent); color: var(--accent); }

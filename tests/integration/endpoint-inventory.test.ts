@@ -57,6 +57,7 @@ const EXPECTED = [
   'GET /v1/metrics/:id/items',
   'GET /v1/metrics:automation-rate',
   'GET /v1/ontology/entity-types',
+  'GET /v1/ontology/health',
   'GET /v1/ontology/relation-types',
   'GET /v1/resources',
   'GET /v1/resources/:id',

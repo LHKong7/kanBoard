@@ -28,6 +28,8 @@ import {
   resourceUpdated,
 } from '../events.ts'
 import { MAX_PAGE_SIZE } from './ports.ts'
+import { sweep } from '../ontology-health/sweep.ts'
+import type { HealthReport, RelationSnapshot, ResourceSnapshot } from '../ontology-health/sweep.ts'
 import type {
   AuditSink,
   EventSink,
@@ -1148,6 +1150,73 @@ export class ResourceService {
       maxDepth: spec.maxDepth,
       limit: spec.limit,
     })
+  }
+
+  /**
+   * 本体一致性巡检（FR-ONT-010）。
+   *
+   * 判定规则是纯函数（`sweep`），这里只负责**把快照凑齐**。分开的理由是
+   * 判定规则是要被逐条讨论和测试的那部分，而混在 SQL 里的判定测不了。
+   *
+   * 两个扫描都有上界，而且**扫不完必须说**（`complete`）。一份
+   * "发现 0 个问题"的报告，如果它其实只扫了前 5000 个对象，
+   * 那它比没有报告更坏——它会让人不再去看。
+   */
+  async ontologyHealth(
+    caller: Caller,
+    limits: { maxResources: number; maxRelations: number },
+  ): Promise<{ report: HealthReport; complete: boolean }> {
+    // 一份巡检报告会列出全租户的对象 id，所以它要的是**不限类型的读权限**，
+    // 和"看一眼列表"是同一道闸
+    await this.#authorize(caller, 'Resource.Read', { tenant: caller.subject.tenant })
+
+    const resources: ResourceSnapshot[] = []
+    let cursor: string | undefined
+    let resourcesComplete = false
+    while (resources.length < limits.maxResources) {
+      // includeDeleted：断链判定要知道**哪些被删了**。只取活着的对象，
+      // 指向已删除对象的关系会被当成"指向不存在的东西"——结论碰巧一样，
+      // 但那是运气，而且 detail 里说不清是删了还是从来没有过
+      const page = await this.#deps.resources.query(
+        { includeDeleted: true },
+        { size: Math.min(MAX_PAGE_SIZE, limits.maxResources - resources.length), ...(cursor === undefined ? {} : { cursor }) },
+      )
+      resources.push(
+        ...page.items.map((r) => ({ id: r.id, type: r.type, deletedAt: r.deletedAt, project: r.project })),
+      )
+      if (page.nextCursor === null) {
+        resourcesComplete = true
+        break
+      }
+      cursor = page.nextCursor
+    }
+
+    const relations: RelationSnapshot[] = []
+    let after: string | null = null
+    let relationsComplete = false
+    while (relations.length < limits.maxRelations) {
+      const size = Math.min(MAX_PAGE_SIZE, limits.maxRelations - relations.length)
+      const batch: RelationInstance[] = await this.#deps.relations.scanAll(after, size)
+      relations.push(
+        ...batch.map((r) => ({
+          id: r.id,
+          type: r.type,
+          fromId: r.fromId,
+          toId: r.toId,
+          confirmed: r.confirmed,
+        })),
+      )
+      if (batch.length < size) {
+        relationsComplete = true
+        break
+      }
+      after = batch[batch.length - 1]?.id ?? null
+    }
+
+    return {
+      report: sweep(this.#deps.registry, resources, relations),
+      complete: resourcesComplete && relationsComplete,
+    }
   }
 
   async shortestPath(caller: Caller, from: string, to: string, maxDepth: number): Promise<PathHit | null> {

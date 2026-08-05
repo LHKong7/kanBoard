@@ -159,6 +159,18 @@ export class PgRelationRepository implements RelationRepository {
     return rows.map((r) => toRelation(r as unknown as RelationRow))
   }
 
+  async scanAll(after: string | null, limit: number): Promise<RelationInstance[]> {
+    let q = this.#db
+      .selectFrom('relations')
+      .selectAll()
+      .where('tenant', '=', this.#tenant)
+      .orderBy('id', 'asc')
+      .limit(limit)
+    if (after !== null) q = q.where('id', '>', after)
+    const rows = await q.execute()
+    return rows.map((r) => toRelation(r as unknown as RelationRow))
+  }
+
   async setConfirmed(relationId: string, confirmed: boolean): Promise<boolean> {
     const result = await this.#db
       .updateTable('relations')

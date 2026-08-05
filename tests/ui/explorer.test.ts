@@ -191,6 +191,56 @@ describe('本体可视化浏览器（FR-ONT-012）', () => {
   })
 })
 
+describe('本体巡检（FR-ONT-010）', () => {
+  it('把问题列出来，并且可以按种类筛', async () => {
+    // 验收标准的后半句是「问题对象可在 UI 中筛选」。
+    // 这个视图本身就是筛过的清单——它只显示有问题的对象
+    const orphan = await create('Task', { title: '没归属的' })
+
+    await page.goto(`${baseUrl}/?view=health`)
+    await page.waitForSelector('.health-row', { timeout: 15_000 })
+
+    assert.ok(
+      (await page.locator('.health-row[data-kind="orphan"]').count()) >= 1,
+      '应当报出孤儿对象',
+    )
+
+    // 筛到"环"这一类：孤儿那些行就该消失
+    await page.locator('.health-chip[data-kind="cycle"]').click()
+    await page.waitForFunction(
+      () => document.querySelectorAll('.health-row[data-kind="orphan"]').length === 0,
+      undefined,
+      { timeout: 10_000 },
+    )
+    // 而且筛选写进了地址栏——这份清单分享出去还是这一份
+    assert.match(page.url(), /kind=cycle/)
+
+    // 点回全部，孤儿又回来了
+    await page.locator('.health-chip[data-kind=""]').click()
+    await page.waitForSelector(`.health-target[data-id="${orphan}"]`, { timeout: 10_000 })
+  })
+
+  it('点一个问题对象就打开它，而不是只告诉你它有问题', async () => {
+    const orphan = await create('Story', { title: '点得开的' })
+    await page.goto(`${baseUrl}/?view=health`)
+    await page.waitForSelector('.health-row')
+
+    await page.locator(`.health-target[data-id="${orphan}"]`).click()
+    await page.waitForSelector('#drawerTitle', { timeout: 10_000 })
+    assert.equal(await page.locator('#drawerTitle').innerText(), '点得开的')
+  })
+
+  it('结论永远和分母一起出现', async () => {
+    // "发现 0 个问题"在 10 个对象和 10 万个对象里是完全不同的两句话
+    await create('Project', { key: 'PU', name: '干净' })
+    await page.goto(`${baseUrl}/?view=health`)
+    await page.waitForSelector('#healthSummary')
+    const text = await page.locator('#healthSummary').innerText()
+    assert.match(text, /扫描了 \d+ 个对象、\d+ 条关系/)
+    assert.match(text, /发现 \d+ 个问题/)
+  })
+})
+
 describe('可视化流程编辑器（FR-WF-014）', () => {
   it('把状态机画出来，状态与迁移都来自服务端', async () => {
     await page.goto(`${baseUrl}/?view=process`)

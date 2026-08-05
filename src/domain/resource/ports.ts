@@ -171,6 +171,14 @@ export interface RelationRepository {
    * 逐个 `listFor` 也能拼出来，但那是节点数量级的往返。
    */
   edgesAmong(ids: readonly string[]): Promise<RelationInstance[]>
+  /**
+   * 按 id 顺序扫全租户的边，用于巡检（FR-ONT-010）。
+   *
+   * 游标是上一批最后一条的 id，和资源那边同一个套路：
+   * 用 OFFSET 的话，扫描期间新建的边会让后面的批次**整体错位**，
+   * 于是漏掉的和重复的都有，而报告不会说这件事。
+   */
+  scanAll(after: string | null, limit: number): Promise<RelationInstance[]>
   shortestPath(from: string, to: string, maxDepth: number): Promise<PathHit | null>
   setConfirmed(relationId: string, confirmed: boolean): Promise<boolean>
 }

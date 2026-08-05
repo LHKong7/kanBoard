@@ -34,12 +34,14 @@ const state = {
   /** 当前检索词。空串表示不过滤。 */
   /** @type {string} */ search: '',
   /** 当前视图：某个类型的看板、Dashboard、本体浏览器、流程编辑器 */
-  /** @type {'board'|'dashboard'|'graph'|'process'} */ view: 'board',
+  /** @type {'board'|'dashboard'|'graph'|'process'|'health'} */ view: 'board',
   /** 本体浏览器（FR-ONT-012）：从哪个对象出发、展开几跳 */
   /** @type {{start: string, depth: number, nodes: any[], edges: any[]}} */
   graph: { start: '', depth: 2, nodes: [], edges: [] },
   /** 流程编辑器（FR-WF-014）：正在编辑的那台状态机 */
   /** @type {any|null} */ editingLifecycle: null,
+  /** 本体巡检（FR-ONT-010）：只看这一类问题。空串 = 全部 */
+  /** @type {string} */ healthKind: '',
   /** @type {any[]} */ metrics: [],
   /**
    * 这一页是否被截断了。
@@ -180,7 +182,9 @@ let boardableTypes = []
  */
 function applyUrl(params, boardable) {
   const view = params.get('view')
-  state.view = view === 'dashboard' || view === 'graph' || view === 'process' ? view : 'board'
+  const views = ['dashboard', 'graph', 'process', 'health']
+  state.view = views.includes(view ?? '') ? /** @type {any} */ (view) : 'board'
+  state.healthKind = params.get('kind') ?? ''
   state.graph.start = params.get('start') ?? ''
   state.graph.depth = Number(params.get('depth') ?? '2') || 2
   const wanted = params.get('type')
@@ -202,6 +206,8 @@ function syncUrl(replace = false) {
       params.set('start', state.graph.start)
       params.set('depth', String(state.graph.depth))
     }
+    // 筛到某一类问题也要能分享出去：「这是我说的那批孤儿对象」
+    if (state.view === 'health' && state.healthKind !== '') params.set('kind', state.healthKind)
   } else if (state.activeType !== '') params.set('type', state.activeType)
   if (state.search !== '' && state.view === 'board') params.set('q', state.search)
   const qs = params.toString()
@@ -272,6 +278,7 @@ function renderTabs(types) {
     dashboard,
     viewTab('graph', '关系图'),
     viewTab('process', '流程'),
+    viewTab('health', '巡检'),
   )
 }
 
@@ -285,6 +292,7 @@ async function refresh() {
   if (state.view === 'dashboard') return refreshDashboard()
   if (state.view === 'graph') return refreshGraph()
   if (state.view === 'process') return refreshProcess()
+  if (state.view === 'health') return refreshHealth()
   if (state.activeType === '') return
   // 走 GET 而不是 POST :query。
   //
@@ -1599,6 +1607,140 @@ function drawGraph(nodes, edges, truncated) {
   legend.textContent = `${nodes.length} 个对象 · ${edges.length} 条关系 · 点节点可换起点`
   wrap.append(legend)
   return wrap
+}
+
+// ── 本体一致性巡检（FR-ONT-010） ─────────────────────
+//
+// 验收标准：**每日报告，问题对象可在 UI 中筛选。**
+// 「每日」在服务端（main.ts 的定时任务），这里是「可筛选」那一半。
+//
+// 这个视图本身就是一份筛过的清单：它只显示有问题的对象，
+// 再按问题种类收窄一次。点一行直接打开那个对象——
+// 一份说得出"哪儿不对"却点不进去的报告，读完还是不知道该动哪里。
+
+/** 问题种类。名字来自服务端，中文只是显示 */
+const HEALTH_KINDS = [
+  { key: 'orphan', label: '孤儿对象' },
+  { key: 'broken-link', label: '断链' },
+  { key: 'cycle', label: '环' },
+]
+
+async function refreshHealth() {
+  el.board.replaceChildren(hint('巡检中…', '', true))
+
+  let report
+  try {
+    report = await api('/v1/ontology/health')
+  } catch (error) {
+    el.board.replaceChildren(hint('巡检失败', String(error.message)))
+    return
+  }
+
+  const wrap = document.createElement('div')
+  wrap.className = 'health-panel'
+  wrap.id = 'healthPanel'
+
+  // 分母永远和结论一起出现。"发现 0 个问题"在 10 个对象和 10 万个对象里
+  // 是完全不同的两句话
+  const summary = document.createElement('p')
+  summary.className = 'health-summary'
+  summary.id = 'healthSummary'
+  summary.textContent =
+    `扫描了 ${report.scanned.resources} 个对象、${report.scanned.relations} 条关系，` +
+    `发现 ${report.findings.length} 个问题`
+  wrap.append(summary)
+
+  if (report.complete !== true) {
+    // 扫不完必须说。不说的话，一份"0 个问题"会被当成"一切正常"
+    wrap.append(
+      hint('这份报告不完整', '对象或关系的数量超过了单次扫描上限，下面只是其中一部分', true),
+    )
+  }
+
+  const filters = document.createElement('div')
+  filters.className = 'health-filters'
+  const chipFor = (key, label, count) => {
+    const btn = document.createElement('button')
+    btn.className = 'health-chip'
+    btn.dataset.kind = key
+    btn.textContent = count === null ? label : `${label} ${count}`
+    btn.setAttribute('aria-pressed', String(state.healthKind === key))
+    btn.onclick = async () => {
+      state.healthKind = key
+      syncUrl()
+      await refresh()
+    }
+    return btn
+  }
+  filters.append(chipFor('', '全部', report.findings.length))
+  for (const kind of HEALTH_KINDS) {
+    filters.append(
+      chipFor(kind.key, kind.label, report.findings.filter((f) => f.kind === kind.key).length),
+    )
+  }
+  wrap.append(filters)
+
+  const shown =
+    state.healthKind === ''
+      ? report.findings
+      : report.findings.filter((f) => f.kind === state.healthKind)
+
+  if (shown.length === 0) {
+    wrap.append(
+      hint(
+        report.findings.length === 0 ? '没有发现问题' : '这一类没有问题',
+        report.findings.length === 0 ? '孤儿对象、断链、环都没有' : '换一个筛选看看',
+      ),
+    )
+    el.board.replaceChildren(wrap)
+    return
+  }
+
+  const list = document.createElement('div')
+  list.className = 'health-list'
+  for (const finding of shown) {
+    list.append(healthRow(finding))
+  }
+  wrap.append(list)
+  el.board.replaceChildren(wrap)
+}
+
+/**
+ * 一条问题。
+ *
+ * 环那一类没有单一的"问题对象"——它是一串对象。所以它的行给出整条环，
+ * 每个环节都能点。只挑第一个来点的话，看的人会以为问题出在那一个身上。
+ */
+function healthRow(finding) {
+  const row = document.createElement('div')
+  row.className = 'health-row'
+  row.dataset.kind = finding.kind
+
+  const kind = document.createElement('span')
+  kind.className = 'health-kind'
+  kind.textContent = HEALTH_KINDS.find((k) => k.key === finding.kind)?.label ?? finding.kind
+  row.append(kind)
+
+  const detail = document.createElement('span')
+  detail.className = 'health-detail'
+  detail.textContent = finding.detail
+  row.append(detail)
+
+  const targets = document.createElement('span')
+  targets.className = 'health-targets'
+  const ids = finding.kind === 'cycle' ? finding.resourceIds : [finding.resourceId]
+  for (const id of ids) {
+    const btn = document.createElement('button')
+    btn.className = 'health-target'
+    btn.dataset.id = id
+    // 显示短 id：整串 26 位的 ULID 会把这一行挤没
+    btn.textContent = id.slice(0, id.indexOf('_') + 5)
+    btn.title = id
+    btn.onclick = () => void openDrawer(id)
+    targets.append(btn)
+  }
+  row.append(targets)
+  return row
 }
 
 // ── 可视化流程编辑器（FR-WF-014） ────────────────────

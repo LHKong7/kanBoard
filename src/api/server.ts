@@ -32,6 +32,7 @@ import {
   metricBreakdownSchema,
   automationRateSchema,
   confirmRelationSchema,
+  healthParamsSchema,
   relateSchema,
   relationDirectionSchema,
   resourceIdSchema,
@@ -194,6 +195,28 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.get('/v1/ontology/relation-types', async () => ({
     items: deps.registry.relationTypes(),
   }))
+
+  /**
+   * 本体一致性巡检（FR-ONT-010）。
+   *
+   * 验收标准是「每日报告，问题对象可在 UI 中筛选」。这条端点是
+   * 报告本身；每日那一半在 main.ts（定时跑一次并把结论打出来），
+   * 筛选那一半在界面上（`affectedIds` 直接喂给看板的检索）。
+   */
+  app.get('/v1/ontology/health', async (request) => {
+    const q = healthParamsSchema.parse(request.query ?? {})
+    const result = await inTenant(request, (service, caller) =>
+      service.ontologyHealth(caller, { maxResources: q.maxResources, maxRelations: q.maxRelations }),
+    )
+    return {
+      findings: result.report.findings,
+      scanned: result.report.scanned,
+      affectedIds: result.report.affectedIds,
+      // 扫不完必须说。一份"0 个问题"的报告要是只扫了前一万个对象，
+      // 它比没有报告更坏——它会让人不再去看
+      complete: result.complete,
+    }
+  })
 
   // 生命周期定义。UI 靠它渲染看板的列，而不是把状态硬编码在前端。
   app.get('/v1/workflows', async () => {
