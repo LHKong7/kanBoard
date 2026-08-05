@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "dev": "node --watch --experimental-strip-types src/main.ts",
     "start": "node --experimental-strip-types src/main.ts",
-    "migrate": "node --experimental-strip-types src/platform/db/migrate.ts",
+    "migrate": "node --experimental-strip-types src/infrastructure/db/migrate.ts",
     "test": "vitest run --coverage",
     "test:ui": "node --experimental-strip-types --test --test-concurrency=1 tests/ui/*.test.ts",
     "bench:seed": "node --experimental-strip-types bench/seed.ts",
