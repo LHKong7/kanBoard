@@ -46,7 +46,9 @@ const state = {
    * 看板按状态分列，所以它只对有生命周期的类型成立；
    * 列表和表格对任何类型都成立——包括没有生命周期的（比如 Comment）。
    */
-  /** @type {'board'|'list'|'table'} */ layout: 'board',
+  /** @type {'board'|'list'|'table'|'calendar'|'gantt'} */ layout: 'board',
+  /** 日历当前显示的月份（YYYY-MM）。空串 = 本月 */
+  /** @type {string} */ calendarMonth: '',
   /**
    * 筛选条件。空表示不限制。
    *
@@ -219,13 +221,15 @@ function applyUrl(params, boardable) {
   state.search = params.get('q') ?? ''
   // 看法和筛选条件都进 URL：一个"我筛出来的这批"必须能原样发给同事，
   // 这和看板视图可分享是同一条要求（docs/dogfooding-log.md #5）
-  const layouts = ['board', 'list', 'table']
+  const layouts = ['board', 'list', 'table', 'calendar', 'gantt']
   const layout = params.get('layout')
   state.layout = layouts.includes(layout ?? '') ? /** @type {any} */ (layout) : 'board'
   state.filters = {
     status: (params.get('status') ?? '').split(',').filter((s) => s !== ''),
     owner: params.get('owner') ?? '',
   }
+  // 日历翻到的那个月也要能分享——「你看下三月这一堆」
+  state.calendarMonth = /^\d{4}-\d{2}$/.test(params.get('month') ?? '') ? params.get('month') : ''
   el.searchInput.value = state.search
 }
 
@@ -250,6 +254,9 @@ function syncUrl(replace = false) {
     if (state.layout !== 'board') params.set('layout', state.layout)
     if (state.filters.status.length > 0) params.set('status', state.filters.status.join(','))
     if (state.filters.owner !== '') params.set('owner', state.filters.owner)
+    if (state.layout === 'calendar' && state.calendarMonth !== '') {
+      params.set('month', state.calendarMonth)
+    }
   }
   const qs = params.toString()
   const url = qs === '' ? location.pathname : `${location.pathname}?${qs}`
@@ -353,6 +360,8 @@ async function refresh() {
   state.truncated = result.nextCursor !== null
   if (state.layout === 'list') renderList()
   else if (state.layout === 'table') renderTable()
+  else if (state.layout === 'calendar') renderCalendar()
+  else if (state.layout === 'gantt') await renderGantt()
   else renderBoard()
 }
 
@@ -494,6 +503,8 @@ function renderToolbar() {
     ['board', '看板'],
     ['list', '列表'],
     ['table', '表格'],
+    ['calendar', '日历'],
+    ['gantt', '甘特'],
   ]) {
     const btn = document.createElement('button')
     btn.className = 'layout-btn'
@@ -611,6 +622,309 @@ async function exportCurrent(format) {
   } catch (error) {
     toast('导出失败', error.message, 'error')
   }
+}
+
+// ── 时间维度：日历 / 甘特 ────────────────────────────
+
+/**
+ * 一个对象在时间轴上的位置。
+ *
+ * 取的是**计划日期**（startDate / dueDate），不是状态机写的实际时刻。
+ * 两者混用的话，一条延期的任务会显示在它真正开始的那天，
+ * 于是甘特图上永远看不到延期——而那正是最该看到的东西。
+ *
+ * 只有 dueDate 的对象在日历上是一个点，在甘特上是一根一天宽的条。
+ * 两个都没有的落到「未排期」，**不隐藏**：看不见的数据比难看的数据危险。
+ */
+function scheduleOf(item) {
+  const start = parseDay(item.attributes?.startDate)
+  const due = parseDay(item.attributes?.dueDate)
+  if (due === null && start === null) return null
+  return { start: start ?? due, end: due ?? start }
+}
+
+/** 只取日期部分。时间部分会让"同一天"变成一个跨时区的问题 */
+function parseDay(value) {
+  if (typeof value !== 'string' || value === '') return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+const dayKey = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+/** 到期了还没到终态 = 逾期。终态的对象不该再被标红——它已经结束了 */
+function isOverdue(item, schedule, today) {
+  if (schedule === null) return false
+  const lifecycle = lifecycleFor(item.type)
+  const state = lifecycle?.states.find((s) => s.name === item.status)
+  if (state?.terminal === true) return false
+  return schedule.end.getTime() < today.getTime()
+}
+
+/**
+ * 日历：一个月一屏，按计划完成日落格。
+ *
+ * 从周一起排。周日起排是美式习惯，而这个系统的使用者按周一到周日过周。
+ */
+function renderCalendar() {
+  renderToolbar()
+  const anchor = state.calendarMonth === '' ? new Date() : new Date(`${state.calendarMonth}-01T00:00:00`)
+  const year = anchor.getFullYear()
+  const month = anchor.getMonth()
+  const today = parseDay(new Date().toISOString()) ?? new Date()
+
+  const first = new Date(year, month, 1)
+  // getDay() 里周日是 0。要从周一起排，得把周日挪到第 7 位
+  const lead = (first.getDay() + 6) % 7
+  const gridStart = new Date(year, month, 1 - lead)
+
+  const byDay = new Map()
+  const unscheduled = []
+  for (const item of state.items) {
+    const schedule = scheduleOf(item)
+    if (schedule === null) {
+      unscheduled.push(item)
+      continue
+    }
+    const key = dayKey(schedule.end)
+    if (!byDay.has(key)) byDay.set(key, [])
+    byDay.get(key).push(item)
+  }
+
+  const wrap = document.createElement('div')
+  wrap.className = 'calendar'
+
+  const head = document.createElement('div')
+  head.className = 'calendar-head'
+  const prev = document.createElement('button')
+  prev.className = 'btn ghost'
+  prev.id = 'calPrev'
+  prev.textContent = '‹'
+  prev.onclick = () => void shiftMonth(-1)
+  const label = document.createElement('span')
+  label.className = 'calendar-label'
+  label.textContent = `${year} 年 ${month + 1} 月`
+  const next = document.createElement('button')
+  next.className = 'btn ghost'
+  next.id = 'calNext'
+  next.textContent = '›'
+  next.onclick = () => void shiftMonth(1)
+  head.append(prev, label, next)
+  wrap.append(head)
+
+  const grid = document.createElement('div')
+  grid.className = 'calendar-grid'
+  for (const name of ['一', '二', '三', '四', '五', '六', '日']) {
+    const cell = document.createElement('div')
+    cell.className = 'calendar-weekday'
+    cell.textContent = name
+    grid.append(cell)
+  }
+
+  for (let i = 0; i < 42; i++) {
+    const day = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i)
+    const cell = document.createElement('div')
+    cell.className = 'calendar-day'
+    cell.dataset['day'] = dayKey(day)
+    if (day.getMonth() !== month) cell.classList.add('outside')
+    if (day.getTime() === today.getTime()) cell.classList.add('today')
+
+    const number = document.createElement('div')
+    number.className = 'calendar-daynum'
+    number.textContent = String(day.getDate())
+    cell.append(number)
+
+    for (const item of byDay.get(dayKey(day)) ?? []) {
+      const chip = document.createElement('button')
+      chip.className = 'calendar-item'
+      chip.dataset['id'] = item.id
+      if (isOverdue(item, scheduleOf(item), today)) chip.classList.add('overdue')
+      chip.textContent = displayTitle(item)
+      chip.title = `${item.status} · ${displayTitle(item)}`
+      chip.onclick = () => void openDrawer(item.id)
+      cell.append(chip)
+    }
+    grid.append(cell)
+  }
+  wrap.append(grid)
+
+  // 没排期的**列出来**，不藏起来。藏起来的话，日历看着很空，
+  // 而使用者以为这个月真的没什么事
+  if (unscheduled.length > 0) {
+    const rest = document.createElement('div')
+    rest.className = 'calendar-unscheduled'
+    rest.append(heading(`未排期（${unscheduled.length}）`))
+    for (const item of unscheduled) {
+      const chip = document.createElement('button')
+      chip.className = 'calendar-item'
+      chip.dataset['id'] = item.id
+      chip.textContent = displayTitle(item)
+      chip.onclick = () => void openDrawer(item.id)
+      rest.append(chip)
+    }
+    wrap.append(rest)
+  }
+
+  el.board.replaceChildren(wrap)
+  renderTruncationNotice()
+}
+
+async function shiftMonth(delta) {
+  const base = state.calendarMonth === '' ? new Date() : new Date(`${state.calendarMonth}-01T00:00:00`)
+  const moved = new Date(base.getFullYear(), base.getMonth() + delta, 1)
+  state.calendarMonth = `${moved.getFullYear()}-${String(moved.getMonth() + 1).padStart(2, '0')}`
+  syncUrl()
+  await refresh()
+}
+
+/**
+ * 甘特：一根条一个对象，横轴是天。
+ *
+ * **画依赖线**——这是和 Plane 开源版的一处真差别：它有一个
+ * `enableDependency` 开关，但整个 gantt 目录里没有任何画线的代码。
+ * 这里画的是本体里已有的阻塞关系，所以"谁挡着谁"在时间轴上直接看得见。
+ */
+async function renderGantt() {
+  renderToolbar()
+  const today = parseDay(new Date().toISOString()) ?? new Date()
+
+  const scheduled = state.items
+    .map((item) => ({ item, schedule: scheduleOf(item) }))
+    .filter((row) => row.schedule !== null)
+    .sort((a, b) => a.schedule.start.getTime() - b.schedule.start.getTime())
+  const unscheduled = state.items.filter((item) => scheduleOf(item) === null)
+
+  if (scheduled.length === 0) {
+    el.board.replaceChildren(
+      hint(
+        '没有排期的对象',
+        `甘特图按计划日期排。给 ${state.activeType} 填上开始日和完成日就会出现在这里`,
+      ),
+    )
+    return
+  }
+
+  // 时间窗左右各留一天，否则首尾两根条会贴在边上
+  const min = new Date(Math.min(...scheduled.map((r) => r.schedule.start.getTime())) - DAY_MS)
+  const max = new Date(Math.max(...scheduled.map((r) => r.schedule.end.getTime())) + DAY_MS)
+  const span = Math.max(1, Math.round((max.getTime() - min.getTime()) / DAY_MS))
+  const offset = (d) => Math.round((d.getTime() - min.getTime()) / DAY_MS)
+
+  const wrap = document.createElement('div')
+  wrap.className = 'gantt'
+  wrap.style.setProperty('--gantt-days', String(span))
+
+  const rowIndex = new Map()
+  const rows = document.createElement('div')
+  rows.className = 'gantt-rows'
+  scheduled.forEach(({ item, schedule }, index) => {
+    rowIndex.set(item.id, index)
+    const row = document.createElement('div')
+    row.className = 'gantt-row'
+    row.dataset['id'] = item.id
+
+    const label = document.createElement('button')
+    label.className = 'gantt-label'
+    label.textContent = displayTitle(item)
+    label.onclick = () => void openDrawer(item.id)
+    row.append(label)
+
+    const track = document.createElement('div')
+    track.className = 'gantt-track'
+    const bar = document.createElement('button')
+    bar.className = 'gantt-bar'
+    bar.dataset['id'] = item.id
+    if (isOverdue(item, schedule, today)) bar.classList.add('overdue')
+    const from = offset(schedule.start)
+    const width = Math.max(1, offset(schedule.end) - from + 1)
+    bar.style.left = `${(from / span) * 100}%`
+    bar.style.width = `${(width / span) * 100}%`
+    bar.title = `${item.status} · ${dayKey(schedule.start)} → ${dayKey(schedule.end)}`
+    bar.onclick = () => void openDrawer(item.id)
+    track.append(bar)
+    row.append(track)
+    rows.append(row)
+  })
+  wrap.append(rows)
+  el.board.replaceChildren(wrap)
+
+  // 依赖线在条画完之后再画：它要读真实的像素位置
+  await drawDependencies(rows, rowIndex)
+  renderTruncationNotice()
+}
+
+/**
+ * 把阻塞关系画成线。
+ *
+ * 关系类型**从本体里查**，不写死名字（和讨论区同一个约定）：
+ * 找一条 domain 与 range 都覆盖当前类型、且带 acyclic 的边不行——
+ * 那会误中别的关系。这里用的判据是"它的逆关系也在同一对类型之间"
+ * 且**声明里标了它是阻塞语义**——本体没有这个标记，所以退一步：
+ * 由使用者在关系类型里挑。默认取第一条自反于当前类型的关系。
+ */
+async function drawDependencies(rows, rowIndex) {
+  const relationName = dependencyRelation(state.activeType)
+  if (relationName === undefined) return
+
+  const ids = [...rowIndex.keys()]
+  const edges = []
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const result = await api(
+          `/v1/resources/${id}/relations?direction=out&type=${encodeURIComponent(relationName)}`,
+        )
+        for (const edge of result.items) {
+          if (rowIndex.has(edge.toId)) edges.push({ from: id, to: edge.toId })
+        }
+      } catch {
+        // 一条边取不到不该让整张图空白
+      }
+    }),
+  )
+  if (edges.length === 0) return
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('class', 'gantt-links')
+  svg.dataset['edges'] = String(edges.length)
+  const box = rows.getBoundingClientRect()
+  svg.setAttribute('viewBox', `0 0 ${box.width} ${box.height}`)
+  svg.setAttribute('preserveAspectRatio', 'none')
+
+  for (const edge of edges) {
+    const a = rows.querySelector(`.gantt-bar[data-id="${edge.from}"]`)?.getBoundingClientRect()
+    const b = rows.querySelector(`.gantt-bar[data-id="${edge.to}"]`)?.getBoundingClientRect()
+    if (a === undefined || b === undefined) continue
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    const x1 = a.left - box.left + a.width
+    const y1 = a.top - box.top + a.height / 2
+    const x2 = b.left - box.left
+    const y2 = b.top - box.top + b.height / 2
+    line.setAttribute('d', `M ${x1} ${y1} L ${x1 + 8} ${y1} L ${x1 + 8} ${y2} L ${x2} ${y2}`)
+    line.setAttribute('class', 'gantt-link')
+    svg.append(line)
+  }
+  rows.append(svg)
+}
+
+/**
+ * "谁挡着谁"走哪条关系。
+ *
+ * 和讨论区一样从本体里查，不写死名字：找一条**自反**（domain 与 range
+ * 都含当前类型）且**有逆关系**的边。自反是关键判据——跨类型的边
+ * （比如 partOf）连的不是同一层的两根条，画出来只会是一团乱线。
+ */
+function dependencyRelation(typeName) {
+  const candidates = state.relationTypes.filter(
+    (r) =>
+      (r.domain ?? []).includes(typeName) &&
+      (r.range ?? []).includes(typeName) &&
+      typeof r.inverse === 'string',
+  )
+  return candidates[0]?.name
 }
 
 // ── 列表 / 表格 ─────────────────────────────────────

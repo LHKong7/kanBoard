@@ -90,11 +90,13 @@ async function open(query: string, ready: string): Promise<void> {
   await page.waitForSelector(ready)
 }
 
-describe('同一批对象有三种看法', () => {
-  it('工具条列出看板、列表、表格', async () => {
+describe('同一批对象有五种看法', () => {
+  it('工具条列出全部五种', async () => {
     await task('导出账单')
     await open('', '.column')
-    assert.deepEqual(await page.locator('.layout-btn').allTextContents(), ['看板', '列表', '表格'])
+    assert.deepEqual(await page.locator('.layout-btn').allTextContents(), [
+      '看板', '列表', '表格', '日历', '甘特',
+    ])
   })
 
   it('列表一行一个对象', async () => {

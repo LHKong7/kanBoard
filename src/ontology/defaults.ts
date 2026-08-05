@@ -68,7 +68,9 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   },
   {
     name: 'Story',
-    version: '1.2.0',
+    // 1.2 → 1.3：新增两个**可选**属性（startDate / dueDate）。
+    // 按 FR-ONT-007 的口径这是 minor，旧数据照常读写
+    version: '1.3.0',
     context: 'Requirement',
     lifecycle: 'story-default',
     description: '可独立交付的最小需求单元',
@@ -78,6 +80,19 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'capability', kind: 'text', description: '我希望 <能力>' },
       { name: 'value', kind: 'text', description: '以便 <价值>' },
       { name: 'storyPoint', kind: 'int' },
+      /**
+       * 计划的起止日期（不是状态机写的那两个实际时刻）。
+       *
+       * 和 `startedAt` / `completedAt` 分得很开，因为它们回答的不是同一件事：
+       * 计划日期是**人许下的承诺**，实际时刻是**系统观察到的事实**。
+       * 混成一对的话，"这条延期了吗"就永远问不出来——延期正是两者之差。
+       *
+       * 两个都可选：只填 dueDate 就是一个截止日（日历上看得到），
+       * 两个都填才排得进甘特。逼着必填只会让人随手填一个日期，
+       * 而随手填的日期比没有日期更糟——它看起来像个承诺。
+       */
+      { name: 'startDate', kind: 'datetime', description: '计划开始日' },
+      { name: 'dueDate', kind: 'datetime', description: '计划完成日（承诺，不是实际）' },
       { name: 'estimateRationale', kind: 'text', description: '估点依据，AI 估点时必填' },
       { name: 'startedAt', kind: 'datetime', derived: true },
       { name: 'completedAt', kind: 'datetime', derived: true },
@@ -85,7 +100,8 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   },
   {
     name: 'Task',
-    version: '1.2.0',
+    // 同上：新增可选属性 = minor
+    version: '1.3.0',
     context: 'Execution',
     lifecycle: 'task-default',
     description: '执行单元。assignee 可以是 User 也可以是 Agent',
@@ -95,6 +111,19 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'assignee', kind: 'string', description: 'user://… 或 agent://…' },
       { name: 'estimate', kind: 'float' },
       { name: 'blockReason', kind: 'text', description: '进入 Blocked 状态时必填' },
+      /**
+       * 计划的起止日期（不是状态机写的那两个实际时刻）。
+       *
+       * 和 `startedAt` / `completedAt` 分得很开，因为它们回答的不是同一件事：
+       * 计划日期是**人许下的承诺**，实际时刻是**系统观察到的事实**。
+       * 混成一对的话，"这条延期了吗"就永远问不出来——延期正是两者之差。
+       *
+       * 两个都可选：只填 dueDate 就是一个截止日（日历上看得到），
+       * 两个都填才排得进甘特。逼着必填只会让人随手填一个日期，
+       * 而随手填的日期比没有日期更糟——它看起来像个承诺。
+       */
+      { name: 'startDate', kind: 'datetime', description: '计划开始日' },
+      { name: 'dueDate', kind: 'datetime', description: '计划完成日（承诺，不是实际）' },
       {
         name: 'ciStatus',
         kind: 'enum',
