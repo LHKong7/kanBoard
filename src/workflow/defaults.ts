@@ -349,6 +349,66 @@ export const RECOMMENDATION_LIFECYCLE: Lifecycle = {
   ],
 }
 
+/**
+ * 举措的生命周期（企业级，对照 Plane pro 档的 Initiative）。
+ *
+ * 有 `Abandoned` 这个终态而不是只有"完成"：一个跨项目的举措被放弃
+ * 是常事，而把它硬推到 Achieved 或者永远挂在 Active 上，
+ * 都会让"我们今年到底做成了几件事"这个数字失真。
+ */
+export const INITIATIVE_LIFECYCLE: Lifecycle = {
+  id: 'initiative-default',
+  entityType: 'Initiative',
+  initial: 'Planned',
+  states: [
+    { name: 'Planned' },
+    { name: 'Active' },
+    { name: 'Achieved', terminal: true },
+    { name: 'Abandoned', terminal: true },
+  ],
+  transitions: [
+    { from: ['Planned'], to: 'Active' },
+    { from: ['Active'], to: 'Achieved' },
+    { from: ['Planned', 'Active'], to: 'Abandoned' },
+  ],
+}
+
+/**
+ * 工时的生命周期（对照 Plane business 档的"工时单 + 审批"）。
+ *
+ * 报工时**默认是草稿**，提交之后才等审批。三档而不是两档的理由：
+ * 少了 Draft 的话，手滑报错一条 8 小时就直接进了别人的待审队列，
+ * 而撤回一条已提交的记录比改一条草稿麻烦得多。
+ *
+ * 审批人不能是自己——那条不在状态机里，在 default-policies 的
+ * Deny 策略里（和"Agent 不能批准自己的产出"是同一条思路）。
+ */
+export const WORKLOG_LIFECYCLE: Lifecycle = {
+  id: 'worklog-default',
+  entityType: 'Worklog',
+  initial: 'Draft',
+  states: [
+    { name: 'Draft' },
+    { name: 'Submitted' },
+    {
+      name: 'Approved',
+      entryActions: [{ kind: 'stampNow', path: 'approvedAt' }],
+      terminal: true,
+    },
+    { name: 'Rejected', terminal: true },
+  ],
+  transitions: [
+    { from: ['Draft'], to: 'Submitted' },
+    // 审批走**单独的 capability**，不是通用的 Worklog.Transition。
+    // 有了它，"不能批自己报的工时"才写得出来——否则那条 Deny 会
+    // 连"提交"一起挡掉，而提交本来就该由本人做
+    { from: ['Submitted'], to: 'Approved', capability: 'Worklog.Approve' },
+    { from: ['Submitted'], to: 'Rejected', capability: 'Worklog.Approve' },
+    // 打回来的可以撤回改，所以这条边留着
+    { from: ['Submitted'], to: 'Draft' },
+  ],
+}
+
 export const BUDGET_LIFECYCLE: Lifecycle = {
   id: 'budget-default',
   entityType: 'Budget',
@@ -558,6 +618,8 @@ export const DEFAULT_LIFECYCLES: readonly Lifecycle[] = [
   RISK_LIFECYCLE,
   RECOMMENDATION_LIFECYCLE,
   BUDGET_LIFECYCLE,
+  INITIATIVE_LIFECYCLE,
+  WORKLOG_LIFECYCLE,
 ]
 
 export function buildDefaultWorkflowRegistry(): WorkflowRegistry {

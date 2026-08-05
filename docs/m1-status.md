@@ -35,6 +35,9 @@ M0 交付的是地基，没有任何面向用户的功能。M1 开始产出可�
 | **计划日期**：Task / Story 加 `startDate` / `dueDate`，与状态机写的实际时刻分开 | FR-ONT-007（minor 升级） | `src/ontology/defaults.ts` |
 | **日历视图**：按计划完成日落格，未排期的单独列出 | — | `public/app.js` |
 | **甘特视图**：按计划区间画条，**并画依赖线**（关系名从本体查） | — | `public/app.js` |
+| **企业级对象**：Teamspace / Initiative / Template / Worklog / SavedView / Baseline | 对照 Plane 付费档 | `src/ontology/defaults.ts` |
+| **工时审批**：单独的 `Worklog.Approve` capability + 不能批自己那条的 Deny | FR-IAM-002 | `src/workflow/defaults.ts`、`src/identity/default-policies.ts` |
+| **React 企业版界面** | — | `web/`，构建到 `public/app/` |
 | 身份切换，用于观察权限过滤 | — | 同上 |
 | **就地编辑属性**：表单由本体生成，乐观锁冲突显式处理 | FR-RES-003/005 | 同上 |
 | **管理关系**：建立（类型由本体定义域筛选）、删除、确认/否决 | FR-ONT-006 | `unrelate` / `confirmRelation` |

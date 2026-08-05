@@ -27,7 +27,8 @@ pnpm dev         # 启动，默认 :3000
 
 | 命令 | 作用 |
 | --- | --- |
-| `pnpm typecheck` | `tsc --strict`，零容忍 |
+| `pnpm typecheck` | `tsc --strict`，零容忍（含 `web/` 的 React 代码） |
+| `pnpm build:web` | 构建企业版 React 界面到 `public/app/` |
 | `pnpm lint:layers` | 分层依赖方向校验（FR-ARCH-001） |
 | `pnpm test` | 单元 + 集成测试 |
 | `pnpm test:ui` | 看板 UI，真实浏览器（见 [tests/ui/README.md](../tests/ui/README.md)） |
@@ -146,6 +147,29 @@ pnpm test
 
 测试会自建 `projectos_test` 库并**以非超级用户连接**——超级用户绕过 RLS，
 用它跑测试等于把租户隔离的验证全部作废。
+
+## 两个前端
+
+| 路径 | 技术 | 内容 |
+| --- | --- | --- |
+| `/` | 原生 JS（`public/app.js`） | 看板 / 列表 / 表格 / 日历 / 甘特、Dashboard、关系图、流程编辑器、巡检、问答 |
+| `/app` | **React**（`web/`，vite 构建） | 企业级对象：举措、团队空间、工时、模板、保存的视图、基线 |
+
+**React 是往后的前端技术栈**，`/` 那一套是存量，会逐步迁过去。
+现在不一次性重写，是因为那边有 83 条真实浏览器用例锁着行为——
+一次性重写等于同时改实现和改验收标准，出了问题分不清是哪一头。
+
+React 源码放在 `web/` 而不是 `src/`：`src/` 由 dependency-cruiser 按七层
+依赖方向管着，前端代码塞进去会让那套规则失去意义。
+
+产物是**固定文件名**（不带内容 hash），因为 `src/api/static.ts` 用的是
+白名单而不是拼路径。hash 文件名会逼着静态服务改成"放开一个目录"，
+用一点缓存效率换掉一条挡死目录穿越的结构性保证。
+
+```bash
+pnpm build:web    # 构建到 public/app/
+pnpm test:ui      # 会先构建，再跑浏览器用例
+```
 
 ## 目录结构与分层
 

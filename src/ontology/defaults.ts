@@ -304,6 +304,127 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       '不另存一份清单——两份会漂移，而正文是唯一改得动的那份。',
     attributes: [{ name: 'body', kind: 'richtext', required: true }],
   },
+  /**
+   * ── 企业级对象 ───────────────────────────────────────
+   *
+   * 对照 Plane 的付费档（docs/research/plane-enterprise-features.md）。
+   * 值得记一笔的是**它们在这里有多便宜**：统一 Resource 模型（ADR-0002）
+   * 意味着写进本体就自带 CRUD、查询、权限、审计、历史与图关系——
+   * 不需要新端点、不需要迁移、不需要另一套权限。
+   *
+   * 换句话说，Plane 拿去分档卖的这些东西，在这套地基上主要是**声明**，
+   * 不是代码。这正是当初把本体做成元模型想换的东西。
+   */
+  {
+    name: 'Teamspace',
+    version: '1.0.0',
+    context: 'Project',
+    // 没有 lifecycle：团队空间不是一个会流转的东西。
+    // 要停用一个团队，停用的是它的成员关系，不是给它安一个 Archived 状态
+    description:
+      '团队空间：跨项目的人的集合（Plane business 档）。' +
+      '它回答"这些项目归谁管"，而项目本身回答"要做什么"。',
+    attributes: [
+      { name: 'name', kind: 'string', required: true },
+      { name: 'mission', kind: 'text', description: '这个团队负责什么' },
+      { name: 'lead', kind: 'string', description: 'user://… 团队负责人' },
+    ],
+  },
+  {
+    name: 'Initiative',
+    version: '1.0.0',
+    context: 'Project',
+    lifecycle: 'initiative-default',
+    description:
+      '举措：**跨项目**的目标（Plane pro 档）。' +
+      '比 Project 高一层——一件事要动三个项目才做得成时，它是那个"一件事"。',
+    attributes: [
+      { name: 'name', kind: 'string', required: true },
+      { name: 'objective', kind: 'text', required: true, description: '要达成什么' },
+      { name: 'startDate', kind: 'datetime' },
+      { name: 'dueDate', kind: 'datetime' },
+      {
+        name: 'health',
+        kind: 'enum',
+        values: ['OnTrack', 'AtRisk', 'OffTrack'],
+        description: '人判断的健康度。刻意不自动算——自动算出来的绿灯没人信',
+      },
+    ],
+  },
+  {
+    name: 'Template',
+    version: '1.0.0',
+    context: 'Project',
+    // 模板没有状态：它要么在那儿要么不在
+    description:
+      '模板：预填好的一份属性，套用时生成目标对象（Plane pro / business 档）。' +
+      '存的是 draft 而不是"生成器"——一个能执行的模板等于在配置里嵌了代码。',
+    attributes: [
+      { name: 'name', kind: 'string', required: true },
+      { name: 'targetType', kind: 'string', required: true, description: '套用后生成哪一类对象' },
+      {
+        name: 'draft',
+        kind: 'json',
+        required: true,
+        description: '预填属性。套用时与调用方给的属性合并，调用方的优先',
+      },
+    ],
+  },
+  {
+    name: 'Worklog',
+    version: '1.0.0',
+    context: 'Execution',
+    lifecycle: 'worklog-default',
+    description:
+      '一条工时记录（Plane one 档起，business 档带审批）。' +
+      '做成领域对象而不是工作项上的一个数字：于是它能被审批、被审计、被按人按周汇总，' +
+      '而一个累加字段只能回答"总共多少"，回答不了"谁在哪天报的"。',
+    attributes: [
+      { name: 'hours', kind: 'float', required: true, description: '工时数' },
+      { name: 'spentOn', kind: 'datetime', required: true, description: '哪一天的工' },
+      { name: 'note', kind: 'text', description: '做了什么' },
+      { name: 'approvedAt', kind: 'datetime', derived: true },
+    ],
+  },
+  {
+    name: 'SavedView',
+    version: '1.0.0',
+    context: 'Project',
+    description:
+      '存下来的一组筛选条件（Plane pro 档的 Shared Views）。' +
+      '筛选条件本来就能序列化成 URL，所以这里存的就是那串东西——' +
+      '存成结构化查询会让"看到的"和"存下来的"变成两套实现。',
+    attributes: [
+      { name: 'name', kind: 'string', required: true },
+      { name: 'targetType', kind: 'string', required: true, description: '看哪一类对象' },
+      { name: 'query', kind: 'json', required: true, description: '筛选条件（与列表接口同构）' },
+      {
+        name: 'shared',
+        kind: 'bool',
+        description: '是否对同租户其他人可见。默认只有自己看得到',
+      },
+    ],
+  },
+  {
+    name: 'Baseline',
+    version: '1.0.0',
+    context: 'Project',
+    // 快照是不可变的，没有状态可言
+    description:
+      '基线：某一刻的计划快照（Plane business 档的 Baselines And Deviations）。' +
+      '有了它，"这个计划比原计划晚了多少"才问得出来——' +
+      '没有基线的话，改完计划之后原计划就消失了，偏差永远是零。',
+    attributes: [
+      { name: 'name', kind: 'string', required: true },
+      { name: 'capturedAt', kind: 'datetime', required: true, description: '这份快照是哪一刻的' },
+      {
+        name: 'snapshot',
+        kind: 'json',
+        required: true,
+        description: '当时每个对象的计划日期，形如 { id: { startDate, dueDate } }',
+      },
+    ],
+  },
   {
     name: 'Release',
     version: '1.0.0',
@@ -725,6 +846,54 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
     inverse: 'commentsOn',
     domain: COMMENTABLE,
     range: ['Comment'],
+  },
+  /**
+   * ── 企业级对象之间的边 ─────────────────────────────
+   *
+   * 全部用关系而不是 id 属性，理由和评论那对一样：属性点不动、
+   * 也走不进图遍历，而这几类对象的价值恰恰在"能沿着它往下看"。
+   */
+  {
+    // 团队空间管着哪些项目
+    name: 'teamOwns',
+    inverse: 'ownedByTeam',
+    domain: ['Teamspace'],
+    range: ['Project'],
+  },
+  { name: 'ownedByTeam', inverse: 'teamOwns', domain: ['Project'], range: ['Teamspace'] },
+  {
+    // 一个举措要动哪些项目 / 需求。跨项目正是它存在的理由
+    name: 'initiativeIncludes',
+    inverse: 'includedInInitiative',
+    domain: ['Initiative'],
+    range: ['Project', 'Requirement', 'Milestone'],
+  },
+  {
+    name: 'includedInInitiative',
+    inverse: 'initiativeIncludes',
+    domain: ['Project', 'Requirement', 'Milestone'],
+    range: ['Initiative'],
+  },
+  {
+    // 这条工时报在哪个工作项上
+    name: 'loggedOn',
+    inverse: 'hasWorklogs',
+    domain: ['Worklog'],
+    range: ['Task', 'Story'],
+  },
+  { name: 'hasWorklogs', inverse: 'loggedOn', domain: ['Task', 'Story'], range: ['Worklog'] },
+  {
+    // 这份基线是给谁拍的
+    name: 'baselineOf',
+    inverse: 'hasBaselines',
+    domain: ['Baseline'],
+    range: ['Project', 'Sprint', 'Initiative'],
+  },
+  {
+    name: 'hasBaselines',
+    inverse: 'baselineOf',
+    domain: ['Project', 'Sprint', 'Initiative'],
+    range: ['Baseline'],
   },
 ]
 

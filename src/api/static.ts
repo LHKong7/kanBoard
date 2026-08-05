@@ -17,6 +17,17 @@ const ASSETS: Record<string, { file: string; type: string }> = {
   '/index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
   '/style.css': { file: 'style.css', type: 'text/css; charset=utf-8' },
+  /**
+   * 企业版（React）。产物文件名在 `vite.config.ts` 里固定住了，
+   * 就是为了让这份白名单还写得出来——hash 文件名会逼着这里改成
+   * "放开一个目录"，用一点缓存效率换掉一条结构性的安全保证。
+   */
+  // 只登记 `/app`，不另登记 `/app/`：端点清册把末尾斜杠归一化，
+  // 两条会变成同一个条目，让那份清册第一次出现重复项。
+  // 页面里的资源引用是绝对路径（vite base = /app/），所以无斜杠也能加载
+  '/app': { file: 'app/index.html', type: 'text/html; charset=utf-8' },
+  '/app/index.html': { file: 'app/index.html', type: 'text/html; charset=utf-8' },
+  '/app/enterprise.js': { file: 'app/enterprise.js', type: 'text/javascript; charset=utf-8' },
 }
 
 export function registerStatic(app: FastifyInstance): void {

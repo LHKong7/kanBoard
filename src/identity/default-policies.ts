@@ -38,6 +38,45 @@ export function defaultPolicies(tenant: string): Policy[] {
      * 反过来给四个角色各写一条的话，第五个角色加进来时会**默认不能评论**，
      * 而那不会有任何报错，只会表现为"这个角色的人好像不爱说话"。
      */
+    /**
+     * 企业级对象（docs/research/plane-enterprise-features.md）。
+     *
+     * 和 `pol-member-comment` 同一个写法：这一道回答"这个租户允不允许
+     * 做这类事"，"**谁**能做"由能力那一道回答。Guest 的能力集是 `*.Read`，
+     * 所以它看得到举措和工时，但一条都建不了。
+     */
+    {
+      id: 'pol-member-enterprise-objects',
+      effect: 'Allow',
+      subject: '*',
+      action: 'Initiative.*',
+      scope: { kind: 'tenant', tenant },
+      description: '跨项目举措',
+    },
+    { id: 'pol-member-teamspace', effect: 'Allow', subject: '*', action: 'Teamspace.*', scope: { kind: 'tenant', tenant } },
+    { id: 'pol-member-template', effect: 'Allow', subject: '*', action: 'Template.*', scope: { kind: 'tenant', tenant } },
+    { id: 'pol-member-savedview', effect: 'Allow', subject: '*', action: 'SavedView.*', scope: { kind: 'tenant', tenant } },
+    { id: 'pol-member-baseline', effect: 'Allow', subject: '*', action: 'Baseline.*', scope: { kind: 'tenant', tenant } },
+    { id: 'pol-member-worklog', effect: 'Allow', subject: '*', action: 'Worklog.*', scope: { kind: 'tenant', tenant } },
+    /**
+     * **不能批准自己报的工时。**
+     *
+     * 和"Agent 不能批准自己的产出"是同一条思路：一个既能报又能批的人，
+     * 等于这道审批不存在。做成 Deny 而不是靠角色分工——角色是配出来的，
+     * 而这条不该配得掉。
+     *
+     * 挡的是 `Worklog.Approve`（审批那两条迁移单独声明的 capability），
+     * 不是通用的 `Worklog.Transition`：本人当然要能提交和撤回自己的工时。
+     */
+    {
+      id: 'pol-worklog-no-self-approve',
+      effect: 'Deny',
+      subject: '*',
+      action: 'Worklog.Approve',
+      scope: { kind: 'tenant', tenant },
+      condition: { notOwner: true },
+      description: '报工时的人不能批自己那一条',
+    },
     {
       id: 'pol-member-comment',
       effect: 'Allow',

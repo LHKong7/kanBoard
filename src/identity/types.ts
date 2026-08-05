@@ -65,6 +65,17 @@ export type PolicyScope =
 export type PolicyCondition = {
   /** 仅资源 owner 可操作 */
   ownerOnly?: boolean
+  /**
+   * **不是** owner 才可操作——即"不能处理自己的东西"。
+   *
+   * 与 `ownerOnly` 不是同一条的取反：`ownerOnly` 说的是"只有本人能做"，
+   * 这条说的是"唯独本人不能做"。审批就属于后者：谁都可以批，除了报的人自己。
+   *
+   * 需要单开一个字段，是因为 Deny 的条件语义已经被"条件不满足才生效"
+   * 占掉了（见 `conditionHolds`）——用 `ownerOnly` 写 Deny 得到的是
+   * "不是 owner 就拒绝"，正好相反。
+   */
+  notOwner?: boolean
   /** 要求已完成 MFA */
   mfa?: boolean
   /** 允许的数据分级（不在其中即拒绝） */

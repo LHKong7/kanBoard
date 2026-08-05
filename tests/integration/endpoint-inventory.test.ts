@@ -49,6 +49,12 @@ afterAll(async () => {
 const EXPECTED = [
   'GET /',
   'GET /app.js',
+  // 企业版（React）的三条静态路由。产物文件名在 vite.config.ts 里固定住，
+  // 就是为了它们还能被逐条登记——hash 文件名会逼着静态服务放开一个目录，
+  // 而那正是这份清册想挡住的东西
+  'GET /app',
+  'GET /app/enterprise.js',
+  'GET /app/index.html',
   'GET /health',
   'GET /index.html',
   'GET /style.css',

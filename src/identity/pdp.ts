@@ -34,9 +34,16 @@ const ROLE_CAPABILITIES: Record<Role, readonly string[]> = {
     'Dashboard.Read',
     'Knowledge.Read',
     'Comment.*',
+    // 企业级对象（docs/research/plane-enterprise-features.md）
+    'Initiative.*',
+    'Teamspace.*',
+    'Template.*',
+    'SavedView.*',
+    'Baseline.*',
+    'Worklog.Approve',
   ],
-  RD: ['Task.*', 'Code.*', 'PR.Create', 'Requirement.Read', 'Story.Read', 'Knowledge.*', 'Comment.*'],
-  QA: ['TestCase.*', 'Issue.*', 'Acceptance.Verify', 'Task.Read', 'Requirement.Read', 'Comment.*'],
+  RD: ['Task.*', 'Code.*', 'PR.Create', 'Requirement.Read', 'Story.Read', 'Knowledge.*', 'Comment.*', 'Worklog.*', 'SavedView.*'],
+  QA: ['TestCase.*', 'Issue.*', 'Acceptance.Verify', 'Task.Read', 'Requirement.Read', 'Comment.*', 'Worklog.*', 'SavedView.*'],
   Leader: [
     '*.Read',
     'Approve.*',
@@ -44,6 +51,10 @@ const ROLE_CAPABILITIES: Record<Role, readonly string[]> = {
     'Dashboard.Read',
     'Requirement.Approve',
     'Comment.*',
+    'Initiative.*',
+    'Teamspace.*',
+    'Baseline.*',
+    'Worklog.Approve',
   ],
   Admin: ['*'],
   // Guest 仍然只读：看得到讨论，插不上话。要放开是一个产品决定，不是默认值
@@ -120,6 +131,9 @@ function conditionHolds(policy: Policy, profile: SubjectProfile, ctx: DecisionCo
 
   if (cond.ownerOnly === true && ctx.resourceOwner !== profile.principal) {
     return `policy ${policy.id} is owner-only and ${profile.principal} is not the owner`
+  }
+  if (cond.notOwner === true && ctx.resourceOwner === profile.principal) {
+    return `policy ${policy.id} forbids acting on your own resource`
   }
   if (cond.mfa === true && ctx.mfa !== true) {
     return `policy ${policy.id} requires MFA`
