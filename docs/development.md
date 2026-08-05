@@ -101,9 +101,41 @@ Agent Runner 另外要 `PROJECTOS_MODEL`：
 | --- | --- |
 | `none`（默认） | **不启动 runner**。没有模型凭据时明确地什么都不做 |
 | `scripted` | 用确定性模型跑通链路，不做真实推理 |
+| `pi` | 经 [pi](https://github.com/earendil-works/pi) 接真实供应商（[ADR-0013](adr/0013-pi-as-model-substrate.md)） |
 
 默认不启动是刻意的：退回到某个"看起来能跑"的假实现，会让线上安静地
 产出一堆无意义的草稿——而草稿是会被人当真的。
+
+### 接真实模型
+
+```bash
+export PROJECTOS_MODEL=pi
+export PROJECTOS_AI_PROVIDERS=anthropic      # 已批准的供应商，逗号分隔
+export ANTHROPIC_API_KEY=sk-...              # 凭据按 pi 的约定从环境读
+pnpm start
+```
+
+| 变量 | 说明 |
+| --- | --- |
+| `PROJECTOS_AI_PROVIDERS` | 已批准的供应商白名单（FR-AI-014）。**空 = 一个都没批准**，不是"全部放行" |
+| `PROJECTOS_AI_MAX_CLASSIFICATION` | 允许出境的最高分级，`public` / `internal` / `confidential`（默认）。再往上不是环境变量该决定的事 |
+| `PROJECTOS_MODEL_TIER_LOW` | 低档模型，形如 `anthropic/claude-haiku-4-5` |
+| `PROJECTOS_MODEL_TIER_MID` | 中档，默认 `anthropic/claude-sonnet-4-5` |
+| `PROJECTOS_MODEL_TIER_HIGH` | 高档，默认 `anthropic/claude-opus-5` |
+
+档位由每个 Agent 自己声明（`AgentSpec.tier`），这三个变量只负责把档位
+翻译成具体模型——**换模型不用改代码**（FR-AGT-013 的验收标准）。
+
+三件事会让进程**起不来**，而不是带病运行：
+
+- 路由指向 `PROJECTOS_AI_PROVIDERS` 之外的供应商（白名单形同虚设比没有更糟）
+- 模型 id 在 pi 的目录里不存在（打错一个字母，第一次 Run 才会炸）
+- 该供应商没有凭据（降级会让系统安静地产出无意义的草稿）
+
+白名单**不从路由推导**：推导出来的白名单恒等于路由，于是"这一档到底
+发给谁"再没有第二个人核对过。目前所有档位必须在同一家——出境审计记的是
+一个供应商（[ADR-0006](adr/0006-model-data-egress.md)），三档指向三家时
+写进审计的那个必然是错的。
 
 集成测试需要一个可连的 Postgres：
 

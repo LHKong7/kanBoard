@@ -34,6 +34,8 @@ ADR 记录**为什么这样决定**，而不是**系统是什么样**。
 | [0009](0009-custom-ontology-metamodel.md) | 自定义本体元模型，保留 RDF 导出能力 | Accepted |
 | [0010](0010-graph-on-postgres.md) | 图查询用 PG 递归 CTE，不引入独立图库 | Accepted |
 | [0011](0011-dogfooding-first.md) | 先内部自用，M3 后再对外 | Accepted |
+| [0012](0012-reopen-is-an-explicit-edge.md) | 重开是一条显式的边，不是终态的例外 | Accepted |
+| [0013](0013-pi-as-model-substrate.md) | 模型接入采用 pi，Agent 语义留在自己手里 | Accepted |
 
 ## 新增
 

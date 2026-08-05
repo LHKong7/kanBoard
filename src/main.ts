@@ -10,6 +10,9 @@ import { sweepOverdueRuns } from './infrastructure/process-sweeper.ts'
 import { RELEASE_PROCESS } from './workflow/release-process.ts'
 import { AgentRunner } from './infrastructure/agent-runner.ts'
 import { ScriptedModelClient } from './infrastructure/model/scripted.ts'
+import { createPiModelClient, modelPolicyFromEnv } from './infrastructure/model/pi.ts'
+import type { AiPolicy, DataClassification } from './domain/agent/egress.ts'
+import type { ModelClient } from './domain/agent/types.ts'
 import { defaultPolicies } from './identity/default-policies.ts'
 import { createPool } from './infrastructure/db/client.ts'
 import { migrate } from './infrastructure/db/migrate.ts'
@@ -135,14 +138,82 @@ let processTimer: NodeJS.Timeout | null = null
 /**
  * Agent Runner（ADR-0008 的第三种进程角色）。
  *
- * 模型客户端目前只有确定性实现：真实供应商的适配器要凭据，
- * 而**没有凭据时应当明确地什么都不做**，不该退回到某个"看起来能跑"的假实现，
- * 否则线上会安静地产出一堆无意义的草稿。所以这里的默认是
- * 不启动 runner——想在本地跑通链路时用 PROJECTOS_MODEL=scripted 显式打开。
+ * 三种模型底座：
+ *
+ * | PROJECTOS_MODEL | 是什么 | 用在哪 |
+ * | --- | --- | --- |
+ * | `none`（缺省） | 不启动 runner | 没配模型的部署 |
+ * | `scripted` | 确定性回复，不出网 | 验证链路本身是不是通的 |
+ * | `pi` | 经 pi 接真实供应商（ADR-0013） | 真正干活 |
+ *
+ * 缺省是 `none` 而不是某个"看起来能跑"的假实现：后者会安静地产出
+ * 一堆无意义的草稿，而草稿是会被人当真的。
  */
 const modelKind = process.env['PROJECTOS_MODEL'] ?? 'none'
+
+/**
+ * 租户级 AI 策略（FR-AI-012/014，决策见 ADR-0006）。
+ *
+ * v1 单租户（ADR-0005），所以这几项从环境变量读；开放多租户时它们
+ * 变成租户上的配置，`AgentRuntime` 那一侧一个字都不用改。
+ *
+ * **`PROJECTOS_MODEL=none` 就是 FR-AI-012 的那个开关**：没有底座，
+ * 什么都出不去。所以配了底座即视为 enabled，而不是再要一个独立开关——
+ * 一个必须同时打开两处才生效的配置，实际效果是第二处永远忘了打开。
+ *
+ * 供应商白名单**不从路由推导**。推导出来的白名单恒等于路由，
+ * 于是"这一档到底发给谁"就再没有第二个人核对过——一个永远通过的
+ * 检查和没有检查是一回事。它是一份独立配置，路由必须是它的子集。
+ */
+const approvedProviders = (process.env['PROJECTOS_AI_PROVIDERS'] ?? '')
+  .split(',')
+  .map((p) => p.trim())
+  .filter((p) => p !== '')
+
+const maxClassification = readMaxClassification(process.env['PROJECTOS_AI_MAX_CLASSIFICATION'])
+
+let model: ModelClient | null = null
+let modelProvider = 'unconfigured'
+let aiPolicy: AiPolicy = { enabled: false, approvedProviders: [], maxClassification }
+
+if (role !== 'api' && role !== 'poller' && modelKind !== 'none') {
+  if (modelKind === 'pi') {
+    const client = await createPiModelClient({
+      policy: modelPolicyFromEnv(),
+      approvedProviders,
+    })
+    /**
+     * 出境审计记的是**一个**供应商（ADR-0006 的字段表），而档位是每个
+     * Agent 各自声明的。三档指向三家的话，这里挑哪一个写进审计都是错的。
+     *
+     * 所以宁可不让它起来。`client.providerFor(tier)` 已经备好了，
+     * 等 `RuntimeDeps.provider` 改成按档位取值时，这道限制就可以拆掉。
+     */
+    if (client.providers.length > 1) {
+      throw new Error(
+        `PROJECTOS_MODEL=pi currently needs every tier on one provider, got: ${client.providers.join(', ')}. ` +
+          'The egress audit records one provider per run (ADR-0006).',
+      )
+    }
+    model = client
+    modelProvider = client.providers[0] ?? 'unconfigured'
+    aiPolicy = { enabled: true, approvedProviders, maxClassification }
+  } else if (modelKind === 'scripted') {
+    model = new ScriptedModelClient([
+      { thought: '（确定性模型：不做实际推理）', action: { kind: 'finish', summary: '未接入真实模型' } },
+    ])
+    // 确定性实现不出网，所以"批准"它不是一个数据出境决定。但它仍然要
+    // 有名字、仍然要过白名单——否则本地跑通的那条链路与生产跑的那条
+    // 在出境这一段上是两回事，而那正是最不该只在生产上第一次执行的一段
+    modelProvider = 'scripted'
+    aiPolicy = { enabled: true, approvedProviders: [modelProvider], maxClassification }
+  } else {
+    throw new Error(`unknown PROJECTOS_MODEL="${modelKind}" (expected: none | scripted | pi)`)
+  }
+}
+
 const runner =
-  role === 'api' || role === 'poller' || modelKind === 'none'
+  model === null
     ? null
     : new AgentRunner({
         pool,
@@ -150,13 +221,35 @@ const runner =
         workflows,
         policies,
         tenants: [tenant],
-        model: new ScriptedModelClient([
-          { thought: '（确定性模型：不做实际推理）', action: { kind: 'finish', summary: '未接入真实模型' } },
-        ]),
+        model,
+        aiPolicy,
+        provider: modelProvider,
       })
 
-if (modelKind === 'none' && role !== 'api' && role !== 'poller') {
-  console.log('agent runner disabled: no model configured (set PROJECTOS_MODEL=scripted for a dry run)')
+if (runner === null && role !== 'api' && role !== 'poller') {
+  console.log(
+    'agent runner disabled: no model configured ' +
+      '(set PROJECTOS_MODEL=pi with PROJECTOS_AI_PROVIDERS, or =scripted for a dry run)',
+  )
+}
+
+/**
+ * 允许出境的最高分级。
+ *
+ * 刻意只认到 `confidential`——ADR-0006 的缺省值。再往上（pii / secret）
+ * 不是一个环境变量该决定的事：`prepareEgress` 无论如何都会脱敏 PII、
+ * 无论如何都不放 secret 出去，而把上限写成它们只会让人以为可以。
+ */
+function readMaxClassification(raw: string | undefined): DataClassification {
+  const allowed: readonly DataClassification[] = ['public', 'internal', 'confidential']
+  if (raw === undefined || raw.trim() === '') return 'confidential'
+  const value = raw.trim() as DataClassification
+  if (!allowed.includes(value)) {
+    throw new Error(
+      `PROJECTOS_AI_MAX_CLASSIFICATION must be one of ${allowed.join(' | ')}, got "${raw}"`,
+    )
+  }
+  return value
 }
 
 const shutdown = async (signal: string): Promise<void> => {
@@ -185,7 +278,7 @@ if (poller !== null) {
 }
 
 if (runner !== null) {
-  console.log(`agent runner started (model=${modelKind})`)
+  console.log(`agent runner started (model=${modelKind}, provider=${modelProvider})`)
   void runner.run()
 }
 
