@@ -1,4 +1,5 @@
 import { DomainError } from '../../platform/errors.ts'
+import { mentionsExcluding } from '../collaboration/mentions.ts'
 import type { AutomationAction, AutomationRule } from '../../workflow/automation.ts'
 import type { DomainEvent } from '../events.ts'
 import type { Caller, ResourceService } from '../resource/service.ts'
@@ -257,6 +258,44 @@ export class AutomationRunner {
 
       case 'notify': {
         const subject = await this.#deps.service.get(caller, event.resourceId)
+
+        // ── `mentions`：一条规则发多封 ──────────────────────
+        //
+        // 收件人从**正文当场解析**，不读任何存下来的清单，
+        // 也不接受客户端自报（见 collaboration/mentions.ts）。
+        if (action.recipient === 'mentions') {
+          const targets = mentionsExcluding(subject.attributes['body'], subject.owner)
+          if (targets.length === 0) {
+            // 没 @ 任何人是**正常**的——大多数评论都不 @ 人。
+            // 记成 failed 会让自动化面板被一片红淹掉，真正的失败就看不见了
+            return {
+              ruleId: rule.id,
+              action: action.kind,
+              status: 'skipped',
+              detail: 'no one was mentioned',
+            }
+          }
+          for (const recipient of targets) {
+            await this.#deps.service.create(caller, {
+              type: 'Notification',
+              workspace: subject.workspace,
+              project: subject.project,
+              attributes: {
+                title: action.title,
+                recipient,
+                about: subject.id,
+                severity: action.severity ?? 'info',
+              },
+            })
+          }
+          return {
+            ruleId: rule.id,
+            action: action.kind,
+            status: 'applied',
+            detail: `notified ${targets.length} mentioned: ${targets.join(', ')}`,
+          }
+        }
+
         const recipient = action.recipient === 'owner' ? subject.owner : action.recipient
         if (recipient === null || recipient === '') {
           // 没有收件人的通知不该被安静地丢掉——它意味着一条规则

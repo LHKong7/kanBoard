@@ -11,6 +11,25 @@ import type { EntityTypeDef, RelationTypeDef } from './types.ts'
  * 由 Workflow Engine 管理（M1）。在 attributes 里再放一个 status 会造成双写。
  */
 
+/**
+ * 可以被评论的类型。
+ *
+ * 列出来而不是"除了几个之外都行"：白名单会随着新类型加入被**重新审视一次**，
+ * 黑名单只会让新类型默认可评论，而没有人做过那个决定。
+ */
+const COMMENTABLE: readonly string[] = [
+  'Project',
+  'Requirement',
+  'Story',
+  'Task',
+  'Decision',
+  'Knowledge',
+  'Risk',
+  'Release',
+  'Milestone',
+  'Sprint',
+]
+
 export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   {
     name: 'Project',
@@ -234,6 +253,27 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       },
       { name: 'readAt', kind: 'datetime', derived: true },
     ],
+  },
+  {
+    name: 'Comment',
+    version: '1.0.0',
+    context: 'Execution',
+    /**
+     * **刻意没有 lifecycle。**
+     *
+     * 一条评论没有状态可言——它被说出来了，就这样。硬安一个
+     * `Open → Resolved` 的状态机，会让"回复了没有"变成一件要有人去点的事，
+     * 而实际上没人会去点，于是这个字段永远停在初值，看起来像所有评论都没解决。
+     *
+     * 副作用正好是想要的：看板标签页只列有生命周期的类型
+     * （`public/app.js` 的 `boardable`），所以评论不会自己长出一个看板。
+     */
+    description:
+      '一条评论（协作的最小闭环）。做成领域对象而不是挂在资源上的一个数组：' +
+      '于是它天然受租户隔离与资源级权限约束，能被查询、被审计、被 Agent 当作上下文读到。' +
+      '被 @ 到的人由正文解析得出（src/domain/collaboration/mentions.ts），' +
+      '不另存一份清单——两份会漂移，而正文是唯一改得动的那份。',
+    attributes: [{ name: 'body', kind: 'richtext', required: true }],
   },
   {
     name: 'Release',
@@ -631,6 +671,31 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
     inverse: 'evidencedBy',
     domain: ['Task', 'Decision', 'Requirement', 'Sprint', 'Release'],
     range: ['Risk'],
+  },
+  /**
+   * 评论挂在它所讨论的对象上。
+   *
+   * 用**关系**而不是一个 `about` 属性——`src/domain/agent/runtime.ts` 末尾
+   * 那段注释把理由写清楚了：在这个系统里"可点击到实体"的意思是关系，
+   * 不是属性。一个字符串 id 点不动，也走不进图遍历。
+   *
+   * 走关系换来三件属性给不了的事：评论出现在关系图里；
+   * Agent 装配上下文时可以沿 `hasComments` 把讨论一起读进来；
+   * 删除目标对象时的引用完整性由关系层统一管，不用每处自己记得清理。
+   */
+  {
+    name: 'commentsOn',
+    inverse: 'hasComments',
+    domain: ['Comment'],
+    // 值域列举而不是放开：允许评论任何东西的话，评论会长到
+    // Notification、Approval 这类系统自己产生的对象上，而那些没人该去讨论
+    range: COMMENTABLE,
+  },
+  {
+    name: 'hasComments',
+    inverse: 'commentsOn',
+    domain: COMMENTABLE,
+    range: ['Comment'],
   },
 ]
 

@@ -35,6 +35,27 @@ const state = {
   /** @type {string} */ search: '',
   /** 当前视图：某个类型的看板、Dashboard、本体浏览器、流程编辑器 */
   /** @type {'board'|'dashboard'|'graph'|'process'|'health'|'ask'} */ view: 'board',
+  /**
+   * 同一批对象的**看法**。看板之外还有列表和表格。
+   *
+   * 与 `view` 分开是因为它们回答的不是同一个问题：`view` 决定"看什么"
+   * （对象 / 指标 / 关系图），`layout` 决定"怎么看这批对象"。
+   * 混成一个枚举的话，"在表格里看 Task"和"看关系图"会变成互斥的选项，
+   * 而它们本来就不是一回事。
+   *
+   * 看板按状态分列，所以它只对有生命周期的类型成立；
+   * 列表和表格对任何类型都成立——包括没有生命周期的（比如 Comment）。
+   */
+  /** @type {'board'|'list'|'table'} */ layout: 'board',
+  /**
+   * 筛选条件。空表示不限制。
+   *
+   * 交给服务端，不在前端过滤已加载的那一页——理由和搜索一样：
+   * 前端过滤筛的永远只是"最近 200 条里的"，而用户以为筛的是全部。
+   */
+  /** @type {{status: string[], owner: string}} */ filters: { status: [], owner: '' },
+  /** 当前对象的评论。跟着抽屉走，关掉就清空 */
+  /** @type {any[]} */ comments: [],
   /** 本体浏览器（FR-ONT-012）：从哪个对象出发、展开几跳 */
   /** @type {{start: string, depth: number, nodes: any[], edges: any[]}} */
   graph: { start: '', depth: 2, nodes: [], edges: [] },
@@ -56,6 +77,7 @@ const state = {
 
 const el = {
   board: /** @type {HTMLElement} */ (document.getElementById('board')),
+  toolbar: /** @type {HTMLElement} */ (document.getElementById('toolbar')),
   typeTabs: /** @type {HTMLElement} */ (document.getElementById('typeTabs')),
   identityBtn: /** @type {HTMLElement} */ (document.getElementById('identityBtn')),
   identityLabel: /** @type {HTMLElement} */ (document.getElementById('identityLabel')),
@@ -195,6 +217,15 @@ function applyUrl(params, boardable) {
   // URL 里写了个不存在的类型就退回第一个，而不是留在空白看板上
   state.activeType = valid ? wanted : (boardable[0]?.name ?? '')
   state.search = params.get('q') ?? ''
+  // 看法和筛选条件都进 URL：一个"我筛出来的这批"必须能原样发给同事，
+  // 这和看板视图可分享是同一条要求（docs/dogfooding-log.md #5）
+  const layouts = ['board', 'list', 'table']
+  const layout = params.get('layout')
+  state.layout = layouts.includes(layout ?? '') ? /** @type {any} */ (layout) : 'board'
+  state.filters = {
+    status: (params.get('status') ?? '').split(',').filter((s) => s !== ''),
+    owner: params.get('owner') ?? '',
+  }
   el.searchInput.value = state.search
 }
 
@@ -215,6 +246,11 @@ function syncUrl(replace = false) {
     if (state.view === 'ask' && state.question !== '') params.set('ask', state.question)
   } else if (state.activeType !== '') params.set('type', state.activeType)
   if (state.search !== '' && state.view === 'board') params.set('q', state.search)
+  if (state.view === 'board') {
+    if (state.layout !== 'board') params.set('layout', state.layout)
+    if (state.filters.status.length > 0) params.set('status', state.filters.status.join(','))
+    if (state.filters.owner !== '') params.set('owner', state.filters.owner)
+  }
   const qs = params.toString()
   const url = qs === '' ? location.pathname : `${location.pathname}?${qs}`
   if (url === location.pathname + location.search) return
@@ -293,7 +329,7 @@ function renderTabs(types) {
 async function refresh() {
   // 看板之外的三个视图不是"列"。容器的布局跟着视图走，
   // 否则它们会被那套横向列布局裁掉下半截（见 style.css 里 .board-plain）
-  el.board.classList.toggle('board-plain', state.view !== 'board')
+  el.board.classList.toggle('board-plain', state.view !== 'board' || state.layout !== 'board')
 
   if (state.view === 'dashboard') return refreshDashboard()
   if (state.view === 'graph') return refreshGraph()
@@ -308,10 +344,16 @@ async function refresh() {
   // 那样搜到的永远只是"最近 200 条里的"，而用户以为搜的是全部。
   const params = new URLSearchParams({ type: state.activeType, size: '200' })
   if (state.search !== '') params.set('text', state.search)
+  // 筛选同样交给服务端。前端过滤会让"筛出 3 条"实际含义变成
+  // "最近 200 条里有 3 条"，而这两个数字看起来一模一样
+  if (state.filters.status.length > 0) params.set('status', state.filters.status.join(','))
+  if (state.filters.owner !== '') params.set('owner', state.filters.owner)
   const result = await api(`/v1/resources?${params}`)
   state.items = result.items
   state.truncated = result.nextCursor !== null
-  renderBoard()
+  if (state.layout === 'list') renderList()
+  else if (state.layout === 'table') renderTable()
+  else renderBoard()
 }
 
 /**
@@ -425,7 +467,273 @@ async function openBreakdown(value, group) {
   }
 }
 
+// ── 看法切换 / 筛选 / 导出 ──────────────────────────────
+
+/**
+ * 工具条。只在看对象的时候出现——指标、关系图、巡检没有"筛选状态"这回事。
+ *
+ * 每次 refresh 重画。状态全在 `state` 里，重画不会丢东西，
+ * 而增量更新一个有六七个控件的条子，迟早会漏掉一处不同步。
+ */
+function renderToolbar() {
+  const bar = el.toolbar
+  if (state.view !== 'board' || state.activeType === '') {
+    bar.hidden = true
+    bar.replaceChildren()
+    return
+  }
+  bar.hidden = false
+
+  const lifecycle = lifecycleFor(state.activeType)
+
+  const layouts = document.createElement('div')
+  layouts.className = 'layout-switch'
+  layouts.setAttribute('role', 'tablist')
+  layouts.setAttribute('aria-label', '看法')
+  for (const [key, label] of [
+    ['board', '看板'],
+    ['list', '列表'],
+    ['table', '表格'],
+  ]) {
+    const btn = document.createElement('button')
+    btn.className = 'layout-btn'
+    btn.dataset['layout'] = key
+    btn.textContent = label
+    btn.setAttribute('role', 'tab')
+    btn.setAttribute('aria-selected', String(state.layout === key))
+    btn.onclick = async () => {
+      state.layout = /** @type {any} */ (key)
+      syncUrl()
+      await refresh()
+    }
+    layouts.append(btn)
+  }
+  bar.append(layouts)
+
+  // 状态筛选：选项来自状态机，不是前端写死的一串字符串
+  if (lifecycle !== undefined) {
+    const group = document.createElement('div')
+    group.className = 'filter-group'
+    group.dataset['filter'] = 'status'
+    for (const s of lifecycle.states) {
+      const chip = document.createElement('button')
+      chip.className = 'filter-chip'
+      chip.dataset['status'] = s.name
+      chip.textContent = s.name
+      const on = state.filters.status.includes(s.name)
+      chip.setAttribute('aria-pressed', String(on))
+      chip.onclick = async () => {
+        state.filters.status = on
+          ? state.filters.status.filter((x) => x !== s.name)
+          : [...state.filters.status, s.name]
+        syncUrl()
+        await refresh()
+      }
+      group.append(chip)
+    }
+    bar.append(group)
+  }
+
+  const owner = document.createElement('input')
+  owner.className = 'filter-owner'
+  owner.id = 'filterOwner'
+  owner.type = 'search'
+  owner.placeholder = '负责人（user://…）'
+  owner.setAttribute('aria-label', '按负责人筛选')
+  owner.value = state.filters.owner
+  owner.onchange = async () => {
+    state.filters.owner = owner.value.trim()
+    syncUrl()
+    await refresh()
+  }
+  bar.append(owner)
+
+  const spacer = document.createElement('span')
+  spacer.className = 'toolbar-spacer'
+  bar.append(spacer)
+
+  if (state.filters.status.length > 0 || state.filters.owner !== '') {
+    const clear = document.createElement('button')
+    clear.className = 'btn ghost'
+    clear.id = 'clearFilters'
+    clear.textContent = '清除筛选'
+    clear.onclick = async () => {
+      state.filters = { status: [], owner: '' }
+      syncUrl()
+      await refresh()
+    }
+    bar.append(clear)
+  }
+
+  for (const format of ['csv', 'json']) {
+    const btn = document.createElement('button')
+    btn.className = 'btn ghost'
+    btn.dataset['export'] = format
+    btn.textContent = `导出 ${format.toUpperCase()}`
+    btn.onclick = () => void exportCurrent(format)
+    bar.append(btn)
+  }
+}
+
+/**
+ * 导出当前筛出来的这批。
+ *
+ * 带的是**和列表同一套条件**，所以"导出来的和看到的不一样"这件事
+ * 在结构上就不会发生（服务端也走同一次 `service.query`）。
+ */
+async function exportCurrent(format) {
+  const filter = {}
+  if (state.filters.status.length > 0) filter.status = state.filters.status
+  if (state.filters.owner !== '') filter.owner = state.filters.owner
+  if (state.search !== '') filter.text = state.search
+
+  try {
+    const res = await fetch('/v1/resources:export', {
+      method: 'POST',
+      headers: { ...headers(), 'content-type': 'application/json' },
+      body: JSON.stringify({ type: state.activeType, format, filter }),
+    })
+    if (!res.ok) {
+      const body = await res.text()
+      throw new Error(JSON.parse(body || '{}').message ?? `HTTP ${res.status}`)
+    }
+    // 截断了就说出来。一个少了一半数据的文件看起来和完整的一模一样
+    if (res.headers.get('x-export-truncated') === 'true') {
+      toast('数据量超过上限', '导出的是前一部分，不是全部', 'warn')
+    }
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${state.activeType}.${format}`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    toast('导出失败', error.message, 'error')
+  }
+}
+
+// ── 列表 / 表格 ─────────────────────────────────────
+
+/** 一行一个对象。看板扫不动的时候用它——尤其是几十条以上 */
+function renderList() {
+  renderToolbar()
+  if (state.items.length === 0) {
+    el.board.replaceChildren(emptyForFilters())
+    return
+  }
+
+  const list = document.createElement('div')
+  list.className = 'item-list'
+  for (const item of state.items) {
+    const row = document.createElement('button')
+    row.className = 'item-row'
+    row.dataset['id'] = item.id
+    row.onclick = () => void openDrawer(item.id)
+
+    const status = document.createElement('span')
+    status.className = 'item-status'
+    status.textContent = item.status
+    const title = document.createElement('span')
+    title.className = 'item-title'
+    title.textContent = displayTitle(item)
+    const meta = document.createElement('span')
+    meta.className = 'item-meta'
+    meta.textContent = item.owner ?? '未指派'
+
+    row.append(status, title, meta)
+    list.append(row)
+  }
+  el.board.replaceChildren(list)
+  renderTruncationNotice()
+}
+
+/**
+ * 表格：一行一个对象，一列一个属性。
+ *
+ * 列**由本体决定**，和新建表单是同一个来源（ADR-0001：UI 是本体的渲染视图）。
+ * 前端自己挑几个字段显示的话，本体里加了属性而表格看不见——
+ * 而没有人会想到去改前端。
+ */
+function renderTable() {
+  renderToolbar()
+  if (state.items.length === 0) {
+    el.board.replaceChildren(emptyForFilters())
+    return
+  }
+
+  const def = state.entityTypes.find((t) => t.name === state.activeType)
+  const columns = (def?.attributes ?? []).map((a) => a.name)
+
+  const table = document.createElement('table')
+  table.className = 'item-table'
+
+  const head = document.createElement('tr')
+  for (const label of ['状态', ...columns, '负责人']) {
+    const th = document.createElement('th')
+    th.textContent = label
+    head.append(th)
+  }
+  const thead = document.createElement('thead')
+  thead.append(head)
+  table.append(thead)
+
+  const tbody = document.createElement('tbody')
+  for (const item of state.items) {
+    const tr = document.createElement('tr')
+    tr.dataset['id'] = item.id
+    tr.onclick = () => void openDrawer(item.id)
+
+    const status = document.createElement('td')
+    status.textContent = item.status
+    tr.append(status)
+
+    for (const column of columns) {
+      const td = document.createElement('td')
+      td.textContent = cellText(item.attributes[column])
+      tr.append(td)
+    }
+
+    const owner = document.createElement('td')
+    owner.textContent = item.owner ?? ''
+    tr.append(owner)
+
+    tbody.append(tr)
+  }
+  table.append(tbody)
+  el.board.replaceChildren(table)
+  renderTruncationNotice()
+}
+
+function cellText(value) {
+  if (value === undefined || value === null) return ''
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+/**
+ * 空结果要说清楚**是什么**没搜到。
+ *
+ * 一个空列表和"筛过头了"长得一模一样，而后者是用户自己造成的、
+ * 一句话就能解开的困惑。
+ */
+function emptyForFilters() {
+  const filtered = state.filters.status.length > 0 || state.filters.owner !== ''
+  if (state.search !== '' || filtered) {
+    const what = [
+      state.search === '' ? '' : `匹配「${state.search}」`,
+      state.filters.status.length === 0 ? '' : `状态在 ${state.filters.status.join('、')}`,
+      state.filters.owner === '' ? '' : `负责人是 ${state.filters.owner}`,
+    ]
+      .filter((s) => s !== '')
+      .join('、')
+    return hint(`没有${what}的 ${state.activeType}`, '放宽筛选条件试试')
+  }
+  return hint(`还没有 ${state.activeType}`, '用右上角的「新建」加一个')
+}
+
 function renderBoard() {
+  renderToolbar()
   const lifecycle = lifecycleFor(state.activeType)
   if (lifecycle === undefined) {
     el.board.replaceChildren(hint('没有可展示的类型', '本体里还没有绑定生命周期的对象'))
@@ -645,6 +953,8 @@ async function openDrawer(id) {
       api(`/v1/resources/${id}/history?size=20`),
       api(`/v1/resources/${id}/relations?direction=both`),
     ])
+    // 评论要等 item 回来才能取：走哪条关系由**它的类型**在本体里决定
+    state.comments = await loadComments(item)
 
     el.drawerType.textContent = `${item.type} · ${item.status}`
     el.drawerTitle.textContent = displayTitle(item)
@@ -652,6 +962,7 @@ async function openDrawer(id) {
     el.drawerBody.replaceChildren(
       sectionTransitions(id, transitions.items),
       sectionAttributes(item),
+      sectionComments(item),
       sectionRelations(item, relations.items),
       sectionHistory(history.items),
     )
@@ -663,6 +974,183 @@ async function openDrawer(id) {
 function closeDrawer() {
   el.drawer.hidden = true
   state.selectedId = null
+  state.comments = []
+}
+
+// ── 评论 ────────────────────────────────────────────
+
+/**
+ * 取一个对象下的评论。
+ *
+ * 两步：先问关系拿到 id 清单，再**一次**把它们取回来。
+ * 逐个 GET 会让一次抽屉展开发出几十条请求——`ids` 这个筛选存在的
+ * 全部理由就是避免它。
+ *
+ * 评论没挂上关系时不算错：目标对象可能刚被人删掉。返回空，
+ * 让抽屉照常打开，而不是整个抽屉报"加载失败"。
+ */
+/** 讨论用的对象类型。这是个 UI 概念（"哪一节叫讨论"），不是关系语义 */
+const COMMENT_TYPE = 'Comment'
+
+/**
+ * 从**本体**里找出"把一条评论挂到这个类型上"的那条关系。
+ *
+ * 不写死关系名（`tests/ui/explorer.test.ts` 有一条用例盯着这件事，
+ * 而它是对的）：UI 不该认识任何具体的关系类型，否则本体里改个名字，
+ * 前端就悄悄断了——而断掉的表现是"评论都不见了"，不是报错。
+ *
+ * 顺带白拿一个性质：本体里那条关系的值域是一张白名单，
+ * 所以**找不到关系的类型自动就没有讨论区**。
+ * "哪些东西可以被讨论"这件事只在本体里写了一处。
+ */
+function commentRelation(typeName) {
+  return state.relationTypes.find(
+    (r) =>
+      r.domain.length === 1 && r.domain[0] === COMMENT_TYPE && (r.range ?? []).includes(typeName),
+  )
+}
+
+async function loadComments(item) {
+  const relation = commentRelation(item.type)
+  if (relation === undefined) return []
+  try {
+    const edges = await api(
+      `/v1/resources/${item.id}/relations?direction=in&type=${encodeURIComponent(relation.name)}`,
+    )
+    const ids = edges.items.map((r) => r.fromId)
+    if (ids.length === 0) return []
+    const result = await api(`/v1/resources?type=${COMMENT_TYPE}&ids=${ids.join(',')}&size=200`)
+    // 按时间正序：讨论是从上往下读的
+    return result.items.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  } catch {
+    return []
+  }
+}
+
+function sectionComments(item) {
+  const section = document.createElement('div')
+  // 本体里没有"评论挂到这个类型"的关系 = 这个类型不接受讨论。
+  // 返回一个空节点而不是一个空标题：一个写着「讨论（0）」却发不出去的
+  // 输入框，比没有这一节更让人困惑
+  if (commentRelation(item.type) === undefined) return document.createDocumentFragment()
+  section.className = 'section'
+  section.dataset['section'] = 'comments'
+  section.append(heading(`讨论（${state.comments.length}）`))
+
+  const list = document.createElement('div')
+  list.className = 'comment-list'
+  if (state.comments.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'comment-empty'
+    empty.textContent = '还没有人说话'
+    list.append(empty)
+  }
+  for (const c of state.comments) {
+    const row = document.createElement('article')
+    row.className = 'comment'
+    row.dataset['id'] = c.id
+
+    const meta = document.createElement('div')
+    meta.className = 'comment-meta'
+    meta.textContent = `${c.owner ?? '未知'} · ${formatTime(c.createdAt)}`
+
+    const body = document.createElement('div')
+    body.className = 'comment-body'
+    // 用 append 逐段拼，不拼 HTML 字符串：正文是用户输入，
+    // 拼进 innerHTML 就是一个 XSS
+    for (const part of splitMentions(c.attributes.body ?? '')) {
+      if (part.mention) {
+        const at = document.createElement('span')
+        at.className = 'mention'
+        at.textContent = part.text
+        body.append(at)
+      } else {
+        body.append(document.createTextNode(part.text))
+      }
+    }
+
+    row.append(meta, body)
+    list.append(row)
+  }
+  section.append(list)
+
+  // 能不能评论由**服务端**说了算：这里不预判权限。
+  // 前端藏按钮只是让人看不见，不是拦住——真正的闸在 PDP，
+  // 发失败了如实说出来即可（和迁移按钮同一个约定）
+  const form = document.createElement('form')
+  form.className = 'comment-form'
+  const input = document.createElement('textarea')
+  input.className = 'comment-input'
+  input.id = 'commentInput'
+  input.rows = 2
+  input.placeholder = '说点什么，@某人 会通知他'
+  input.setAttribute('aria-label', '写评论')
+  const send = document.createElement('button')
+  send.className = 'btn'
+  send.id = 'commentSend'
+  send.type = 'submit'
+  send.textContent = '发送'
+
+  form.onsubmit = async (event) => {
+    event.preventDefault()
+    const body = input.value.trim()
+    if (body === '') return
+    send.disabled = true
+    try {
+      await postComment(item, body)
+      input.value = ''
+      state.comments = await loadComments(item)
+      // 只重画这一节，不重开抽屉：重开会把用户滚动的位置弹回顶部
+      section.replaceWith(sectionComments(item))
+    } catch (error) {
+      toast('发送失败', error.message, 'error')
+    } finally {
+      send.disabled = false
+    }
+  }
+
+  form.append(input, send)
+  section.append(form)
+  return section
+}
+
+/**
+ * 发一条评论 = 建一个对象 + 挂一条关系。
+ *
+ * 没有 `/comments` 端点（ADR-0002）。两步意味着中间可能断在一半：
+ * 建出来了但没挂上。那种情况下评论会成为一条**孤儿**——
+ * 而本体巡检本来就在找孤儿对象，它会被报出来，不会无声无息。
+ */
+async function postComment(item, body) {
+  const comment = await api('/v1/resources', {
+    method: 'POST',
+    body: JSON.stringify({
+      type: COMMENT_TYPE,
+      workspace: item.workspace,
+      ...(item.project === null ? {} : { project: item.project }),
+      attributes: { body },
+    }),
+  })
+  const relation = commentRelation(item.type)
+  if (relation === undefined) throw new Error(`本体里没有把评论挂到 ${item.type} 上的关系`)
+  await api(`/v1/resources/${comment.id}/relations`, {
+    method: 'POST',
+    body: JSON.stringify({ type: relation.name, toId: item.id }),
+  })
+}
+
+/** 把正文切成「普通文字」与「@提及」两种片段，供高亮渲染 */
+function splitMentions(text) {
+  const pattern = /(?<![\w.@])@(?:(?:user|agent):\/\/[\w@.:-]{1,128}|[a-zA-Z0-9][\w.-]{0,63})/g
+  const parts = []
+  let last = 0
+  for (const match of String(text).matchAll(pattern)) {
+    if (match.index > last) parts.push({ text: String(text).slice(last, match.index), mention: false })
+    parts.push({ text: match[0], mention: true })
+    last = match.index + match[0].length
+  }
+  if (last < String(text).length) parts.push({ text: String(text).slice(last), mention: false })
+  return parts
 }
 
 function sectionTransitions(id, transitions) {

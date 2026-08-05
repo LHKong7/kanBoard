@@ -24,6 +24,28 @@ export function defaultPolicies(tenant: string): Policy[] {
       scope: { kind: 'tenant', tenant },
       description: '租户内成员默认可读；细粒度收紧靠资源级 Deny 策略',
     },
+    /**
+     * 谁都可以参与讨论——**在能力允许的前提下**。
+     *
+     * 写成 `subject: '*'` 而不是给四个角色各来一条，理由和 `pol-member-read`
+     * 一样：这一道回答的是"在这个租户里，讨论这件事被允许吗"，
+     * 而"**这个人**能不能讨论"由能力那一道回答。
+     * 两道都要过，所以这条并没有把门打开：
+     *
+     *   Guest 的能力集是 `*.Read`      → 看得到讨论，插不上话
+     *   AIAgent 的能力集是空的         → 不在自己的声明里写就发不了言
+     *
+     * 反过来给四个角色各写一条的话，第五个角色加进来时会**默认不能评论**，
+     * 而那不会有任何报错，只会表现为"这个角色的人好像不爱说话"。
+     */
+    {
+      id: 'pol-member-comment',
+      effect: 'Allow',
+      subject: '*',
+      action: 'Comment.*',
+      scope: { kind: 'tenant', tenant },
+      description: '租户内成员可以评论；能不能真的发言由各自的能力集决定',
+    },
     {
       id: 'pol-pm-requirement',
       effect: 'Allow',

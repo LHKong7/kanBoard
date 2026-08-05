@@ -72,7 +72,15 @@ export type AutomationAction =
   /** 发一条站内通知。IM / 邮件属于 Connector 层 */
   | {
       kind: 'notify'
-      /** 收件人；`owner` 表示"触发对象的 owner" */
+      /**
+       * 收件人。两个**具名**取值，其余按字面主体处理：
+       *
+       * - `owner`：触发对象的 owner
+       * - `mentions`：触发对象正文里 @ 到的每一个主体（**一条规则发多封**）
+       *
+       * 具名而不是写成 `${subject.mentions}` 之类的插值，理由见本文件顶部：
+       * 一旦允许表达式，就得连带长出空值语义和一个没人写得出的错误信息。
+       */
       recipient: string
       title: string
       severity?: 'info' | 'warning' | 'critical'
@@ -121,6 +129,19 @@ export type AutomationRule = {
  * 多到看不懂时，用户就不再信任系统的任何自动行为了。
  */
 export const DEFAULT_AUTOMATION_RULES: readonly AutomationRule[] = [
+  {
+    id: 'notify-mentioned-on-comment',
+    owningContext: 'Execution',
+    description: '有人在评论里被 @ 到时，给他发一条站内通知',
+    when: { event: 'ResourceCreated', resourceType: 'Comment' },
+    then: [
+      {
+        kind: 'notify',
+        recipient: 'mentions',
+        title: '有人在评论里提到了你',
+      },
+    ],
+  },
   {
     id: 'story-starts-when-first-task-starts',
     owningContext: 'Requirement',

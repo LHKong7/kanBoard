@@ -13,12 +13,40 @@ import type {
 import { isAgent } from './types.ts'
 
 /** Role → Capability 的命名集合。Role 本身不是权限，只是便于管理的集合。 */
+/**
+ * 每个**干活的**角色都能评论。
+ *
+ * 给的是 `Comment.*` 而不是 `Comment.Create`：建一条评论要顺带建一条
+ * `commentsOn` 关系，而建关系判的是 `${from.type}.Update`（见
+ * `ResourceService.relate`）。只给 Create 的话，评论建得出来、挂不上去。
+ *
+ * 代价要说清楚：`Comment.*` 里也含 Update / Delete，而这套能力模型
+ * **没有"只能改自己的"这一档**——于是同角色的人互相改得动评论。
+ * 真正的修法是按实例判归属，那是权限模型的活，不该在这里用一个
+ * 更窄的能力名假装解决（窄到 Create 的话，连自己发的都改不了）。
+ */
 const ROLE_CAPABILITIES: Record<Role, readonly string[]> = {
-  PM: ['Requirement.*', 'Story.*', 'Sprint.*', 'Project.Read', 'Dashboard.Read', 'Knowledge.Read'],
-  RD: ['Task.*', 'Code.*', 'PR.Create', 'Requirement.Read', 'Story.Read', 'Knowledge.*'],
-  QA: ['TestCase.*', 'Issue.*', 'Acceptance.Verify', 'Task.Read', 'Requirement.Read'],
-  Leader: ['*.Read', 'Approve.*', 'Budget.Read', 'Dashboard.Read', 'Requirement.Approve'],
+  PM: [
+    'Requirement.*',
+    'Story.*',
+    'Sprint.*',
+    'Project.Read',
+    'Dashboard.Read',
+    'Knowledge.Read',
+    'Comment.*',
+  ],
+  RD: ['Task.*', 'Code.*', 'PR.Create', 'Requirement.Read', 'Story.Read', 'Knowledge.*', 'Comment.*'],
+  QA: ['TestCase.*', 'Issue.*', 'Acceptance.Verify', 'Task.Read', 'Requirement.Read', 'Comment.*'],
+  Leader: [
+    '*.Read',
+    'Approve.*',
+    'Budget.Read',
+    'Dashboard.Read',
+    'Requirement.Approve',
+    'Comment.*',
+  ],
   Admin: ['*'],
+  // Guest 仍然只读：看得到讨论，插不上话。要放开是一个产品决定，不是默认值
   Guest: ['*.Read'],
   // AI Agent 角色是**空集合**，不是"给 Agent 全部权限"的快捷方式（PRD 07 §3）
   AIAgent: [],

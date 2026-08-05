@@ -25,6 +25,7 @@ import {
   createResourceSchema,
   pathSchema,
   querySchema,
+  exportSchema,
   queryParamsSchema,
   metricIdSchema,
   lifecycleSchema,
@@ -49,6 +50,7 @@ import {
 import { DashboardService } from '../domain/dashboard/service.ts'
 import { PgLifecycleStore } from '../infrastructure/lifecycle-store.pg.ts'
 import type { ReloadingWorkflowRegistry } from '../infrastructure/lifecycle-store.pg.ts'
+import { EXPORT_LIMIT, exportResources } from './export.ts'
 import { toWire } from './serialize.ts'
 import { registerStatic } from './static.ts'
 import { PgRelationRuleStore } from '../infrastructure/relation-rule-store.pg.ts'
@@ -723,6 +725,54 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   // 而不是静默落到某个碰巧注册在前的处理器上。
   app.post('/v1/resources:action', async (request, reply) => {
     const action = customMethod(request)
+
+    /**
+     * 导出（CSV / JSON）。
+     *
+     * 挂在同一个自定义方法上而不是新开一条路径：它和 `query` 是**同一次查询**，
+     * 只是换了个表示。分成两条路径的话，"导出来的和看到的不一样"
+     * 迟早会发生一次，而且很难查。
+     */
+    if (action === 'export') {
+      const body = exportSchema.parse(request.body ?? {})
+      const resources = await inTenant(request, async (service, caller) => {
+        // 翻页翻到上限为止。一次要满 5000 条会让单条 SQL 很重，
+        // 而游标分页本来就在，用它就是了
+        const collected: Awaited<ReturnType<typeof service.query>>['items'] = []
+        let cursor: string | undefined
+        do {
+          const page = await service.query(
+            caller,
+            {
+              type: body.type,
+              workspace: body.filter?.workspace,
+              project: body.filter?.project,
+              owner: body.filter?.owner,
+              status: body.filter?.status,
+              labels: body.filter?.labels,
+              attributes: body.filter?.attributes,
+              text: body.filter?.text,
+              includeDeleted: false,
+            },
+            { size: 200, cursor },
+          )
+          collected.push(...page.items)
+          cursor = page.nextCursor ?? undefined
+        } while (cursor !== undefined && collected.length < EXPORT_LIMIT)
+        return collected
+      })
+
+      const truncated = resources.length > EXPORT_LIMIT
+      const result = exportResources(resources.slice(0, EXPORT_LIMIT), body.format, truncated)
+      return reply
+        .header('content-type', result.contentType)
+        .header('content-disposition', `attachment; filename="${result.filename}"`)
+        // 截断也要能被**程序**看见，不只是人看见：一个静默截断的导出
+        // 会被下游当作全量拿去对账
+        .header('x-export-truncated', String(result.truncated))
+        .send(result.body)
+    }
+
     if (action !== 'query') {
       return reply.status(404).send({ error: 'not_found', message: `unknown custom method: ${action}` })
     }
@@ -766,6 +816,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
           status: q.status,
           labels: q.labels,
           text: q.text,
+          ids: q.ids,
           includeDeleted: q.includeDeleted === 'true',
         },
         { size: q.size ?? 50, cursor: q.cursor },

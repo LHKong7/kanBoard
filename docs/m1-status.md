@@ -28,6 +28,10 @@ M0 交付的是地基，没有任何面向用户的功能。M1 开始产出可�
 | 逆关系在查询与遍历中真正等价 | FR-ONT-003 | `ResourceService.relationsOf` / `traverse` |
 | **看板 UI**：列由状态机驱动，表单由本体生成 | ADR-0011 的必需项 | `public/` |
 | 详情抽屉：可用迁移（含未就绪原因）、属性、关系、变更历史 | FR-RES-008 | `public/app.js` |
+| **评论 + @提及**：`Comment` 实体 + `commentsOn` 关系；提及经自动化规则发通知 | FR-WF-005 | `src/ontology/defaults.ts`、`src/domain/collaboration/mentions.ts` |
+| **列表 / 表格视图**：表格的列由本体生成 | ADR-0001 | `public/app.js` |
+| **筛选器**：状态选项来自状态机，条件进 URL 可分享 | FR-RES-016 | `public/app.js` |
+| **导出 CSV / JSON**：与列表同一次 `service.query` | — | `src/api/export.ts` |
 | 身份切换，用于观察权限过滤 | — | 同上 |
 | **就地编辑属性**：表单由本体生成，乐观锁冲突显式处理 | FR-RES-003/005 | 同上 |
 | **管理关系**：建立（类型由本体定义域筛选）、删除、确认/否决 | FR-ONT-006 | `unrelate` / `confirmRelation` |

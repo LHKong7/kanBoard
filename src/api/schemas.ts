@@ -102,6 +102,12 @@ const csvOrRepeated = z
   .transform((v) => (Array.isArray(v) ? v : v.split(',')).map((s) => s.trim()).filter((s) => s !== ''))
   .pipe(z.array(z.string().max(64)).min(1).max(20))
 
+/** 同上，但上限放到 200：id 清单是机器拼的，20 个一批会退化成 N+1 本身 */
+const csvOrRepeatedIds = z
+  .union([z.string(), z.array(z.string())])
+  .transform((v) => (Array.isArray(v) ? v : v.split(',')).map((s) => s.trim()).filter((s) => s !== ''))
+  .pipe(z.array(resourceIdSchema).min(1).max(200))
+
 export const queryParamsSchema = z
   .object({
     type: z.string().max(64).optional(),
@@ -111,6 +117,17 @@ export const queryParamsSchema = z
     status: csvOrRepeated.optional(),
     labels: csvOrRepeated.optional(),
     text: z.string().min(1).max(256).optional(),
+    /**
+     * 按 id 批量取（仓储层早就支持，只是没暴露出来）。
+     *
+     * 存在的理由和 `ResourceFilter.ids` 上写的一样：避免 N+1。
+     * 拉一个对象的评论是"先问关系拿到一串 id，再一次取回全部"，
+     * 逐个 GET 会让一次抽屉展开发出几十条请求。
+     *
+     * 上限 200 与 `size` 对齐——传进来 500 个 id 却只回 200 条，
+     * 是那种"看起来成功了"的错误答案。
+     */
+    ids: csvOrRepeatedIds.optional(),
     // 查询串里的一切都是字符串。写成枚举而不是 z.coerce.boolean()：
     // 后者会把 "false" 也当成真，那正是"看起来成功的错误答案"
     includeDeleted: z.enum(['true', 'false']).optional(),
@@ -118,6 +135,29 @@ export const queryParamsSchema = z
     cursor: z.string().max(64).optional(),
   })
   .strict()
+
+/**
+ * 导出的入参：和 `querySchema` 同一套筛选，外加一个格式。
+ *
+ * 没有 `page`——导出就是"把筛出来的都拿走"，翻页由服务端自己完成到上限为止。
+ * 也没有 `includeDeleted`：导出一份混着已删对象的表格，收到的人不会知道。
+ */
+export const exportSchema = z.object({
+  type: z.string().max(64).optional(),
+  filter: z
+    .object({
+      workspace: z.string().max(64).optional(),
+      project: resourceIdSchema.optional(),
+      owner: z.string().max(256).optional(),
+      status: z.array(z.string().max(64)).max(20).optional(),
+      labels: z.array(z.string().max(64)).max(20).optional(),
+      attributes: z.record(z.unknown()).optional(),
+      text: z.string().min(1).max(256).optional(),
+    })
+    .strict()
+    .optional(),
+  format: z.enum(['csv', 'json']).default('csv'),
+}).strict()
 
 export const relateSchema = z.object({
   type: z.string().min(1).max(64),

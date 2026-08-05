@@ -63,5 +63,5 @@ Idea → Objective → Requirement → Architecture → Implementation
 | 阶段 | M1 · Domain & Workflow 实现中 |
 | 技术栈 | TypeScript / Node 22 · Fastify · Zod · PostgreSQL 16（[ADR-0007](docs/adr/0007-typescript-server-stack.md)） |
 | 模型底座 | [pi](https://github.com/earendil-works/pi) 接多供应商推理；Agent 语义留在本仓（[ADR-0013](docs/adr/0013-pi-as-model-substrate.md)） |
-| 测试 | 941 项 vitest + 21 项真实浏览器 UI 测试 |
+| 测试 | 984 项 vitest + 75 项真实浏览器 UI 测试 |
 | 进度 | 见 [M1 状态](docs/m1-status.md) |
