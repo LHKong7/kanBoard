@@ -24,9 +24,12 @@ Idea → Objective → Requirement → Architecture → Implementation
 | 文档 | 内容 |
 | --- | --- |
 | [docs/README.md](docs/README.md) | 文档索引与阅读顺序 |
-| [docs/development.md](docs/development.md) | **开发指南**：环境、命令、分层约定 |
+| [docs/prd-coverage.md](docs/prd-coverage.md) | **PRD 覆盖情况**：每模块 Must 条数与已交付数，以及 PRD 之外加了什么 |
+| [docs/agent-status.md](docs/agent-status.md) | **Agent 层**逐条交付状态 |
+| [docs/research/](docs/research/) | **对标调研**：Plane 开源版 / 付费档功能盘点，以及与 ProjectOS 的差距 |
+| [docs/development.md](docs/development.md) | **开发指南**：环境、命令、分层约定、两个前端 |
 | [docs/m0-status.md](docs/m0-status.md) | **M0 进度**：地基层，已交付与欠账 |
-| [docs/m1-status.md](docs/m1-status.md) | **M1 进度**：工作流引擎、自动化、poller、看板 UI |
+| [docs/m1-status.md](docs/m1-status.md) | **M1 进度**：工作流引擎、自动化、五种看法、协作、企业级对象 |
 | [docs/perf-baseline.md](docs/perf-baseline.md) | **性能基线**：100 万节点实测数据与结论 |
 | [docs/prd/00-overview.md](docs/prd/00-overview.md) | 产品愿景、定位、核心理念、目标用户 |
 | [docs/prd/01-principles.md](docs/prd/01-principles.md) | 四大设计原则 |
@@ -44,7 +47,7 @@ Idea → Objective → Requirement → Architecture → Implementation
 | [docs/prd/13-roadmap.md](docs/prd/13-roadmap.md) | 分期交付路线图与验收标准 |
 | [docs/prd/14-glossary.md](docs/prd/14-glossary.md) | 术语表 |
 | [docs/prd/15-open-questions.md](docs/prd/15-open-questions.md) | 待决问题 |
-| [docs/adr/](docs/adr/) | 架构决策记录（ADR） |
+| [docs/adr/](docs/adr/) | 架构决策记录（ADR），当前 13 条 |
 
 ---
 
@@ -54,6 +57,21 @@ Idea → Objective → Requirement → Architecture → Implementation
 > 让项目、知识、数据和智能体在同一个领域模型中持续演化。
 
 ---
+
+## 现在能用的
+
+| 面 | 内容 |
+| --- | --- |
+| 看法 | 看板 / 列表 / 表格 / 日历 / **甘特（带依赖线）**，筛选条件进 URL 可分享 |
+| 协作 | 评论 + @提及（提及经自动化规则发通知） |
+| 数据 | 导出 CSV / JSON，Jira 三阶段迁移，GitHub / Jira / MCP / Browser 连接器 |
+| 企业级 | 团队空间、跨项目举措、模板、工时（含审批）、保存的视图、基线 |
+| 智能 | Agent 运行时（身份 / 出处 / 预算 / 影响面 / 协作模式 / 可回放轨迹），底座 pi |
+| 洞察 | 30 个指标，含 Agent 成本、产出采纳率、Human vs Agent 占比 |
+
+**还没有的**（如实列）：真实认证（当前身份由请求头承载，**不能给真人用**）、
+附件、实时协同编辑、富文本编辑器、国际化、邮件通知、对外公开分享。
+逐项见 [research/plane-vs-projectos.md](docs/research/plane-vs-projectos.md)。
 
 ## 状态
 

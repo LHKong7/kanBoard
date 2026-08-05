@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 更新时间 | 2026-08-03 |
+| 更新时间 | 2026-08-05 |
 | 状态 | 进行中 |
 
 M0 交付的是地基，没有任何面向用户的功能。M1 开始产出可用的东西。
@@ -17,7 +17,7 @@ M0 交付的是地基，没有任何面向用户的功能。M1 开始产出可�
 | 守卫求值，失败返回具体缺什么 | FR-WF-002/003 | `src/workflow/guards.ts` |
 | 迁移所需 Capability 由迁移定义决定 | FR-WF-002/004 | `resolveTransition` |
 | 进入状态的 entry action（时间戳、清字段） | FR-WF-002 | `applyActions` |
-| 7 套默认生命周期 | FR-WF-001 | `src/workflow/defaults.ts` |
+| 20 套默认生命周期 | FR-WF-001 | `src/workflow/defaults.ts` |
 | `POST /v1/resources/:id/transitions` | FR-WF-002 | `src/api/server.ts` |
 | `GET /v1/resources/:id/transitions`，按权限过滤 | FR-RES-008 | `ResourceService.transitionsOf` |
 | 状态只能经迁移端点修改 | FR-WF-002 | `ResourceService.update` 拒绝直改 |
@@ -42,12 +42,17 @@ M0 交付的是地基，没有任何面向用户的功能。M1 开始产出可�
 | **就地编辑属性**：表单由本体生成，乐观锁冲突显式处理 | FR-RES-003/005 | 同上 |
 | **管理关系**：建立（类型由本体定义域筛选）、删除、确认/否决 | FR-ONT-006 | `unrelate` / `confirmRelation` |
 
-**测试**：135 项 vitest + 21 项真实浏览器 UI 测试。
+**测试**：984 项 vitest + 95 项真实浏览器 UI 测试。
 
-### 两条内置自动化规则
+> 数字是**跑出来的**，不是记的。这份文档此前写着 135 + 21，
+> 而那是好几轮改动之前的事——一个没人核过的数字比没有数字更糟，
+> 因为它看起来经过了核对。
+
+### 三条内置自动化规则
 
 | 规则 | 行为 |
 | --- | --- |
+| `notify-mentioned-on-comment` | 评论里 @ 到谁 → 给他发一条站内通知 |
 | `story-starts-when-first-task-starts` | 第一个子任务进入 Doing → Story 推进到 InProgress |
 | `story-done-when-all-tasks-done` | **全部**子任务到终态 → Story 推进到 Done |
 

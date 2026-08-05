@@ -153,7 +153,7 @@
 | Custom SLAs（business） | SLA 定义 + 巡检 + 违约记录 | 相当 |
 | API-enabled Audit Logs（business） | 追加写审计（`REVOKE UPDATE,DELETE` + 触发器） | ProjectOS |
 | Roles → RBAC / GAC（business/ent） | 五层 PDP + Capability + 临时授权 + 委派 | ProjectOS |
-| Work item Types（pro） | 本体里 18 类实体，且可扩展 | ProjectOS |
+| Work item Types（pro） | 本体里 25 类实体，且租户可扩展 | ProjectOS |
 | **Custom Properties（pro/business）** | **租户扩展**：租户自己加类型和属性 | ProjectOS |
 | **Dependencies in Gantt（pro）** | 已实现，且 Plane **开源版根本不画线** | ProjectOS |
 | Cycle Reports / Progress Charts（pro） | 30 个指标含 Burn Down / Velocity / Cycle Time | ProjectOS |
@@ -163,19 +163,26 @@
 ProjectOS 里是免费且更严谨的地基。** 这不是巧合——那些能力都长在
 权限模型和工作流引擎上，而那正是 ProjectOS 一开始就做的部分。
 
-### B. ProjectOS 没有，值得补（本轮实现）
+### B. ProjectOS 没有，值得补
 
-挑的判据是"在这套架构里代价小、对企业场景价值大"：
+挑的判据是"在这套架构里代价小、对企业场景价值大"。
+**已交付**的六项（本体 + React 界面，`tests/ui/enterprise.test.ts` 锁着）：
 
-| 企业功能 | Plane 档位 | 在 ProjectOS 里要做什么 |
+| 企业功能 | Plane 档位 | 在 ProjectOS 里是什么 |
 | --- | --- | --- |
 | **Teamspace 团队空间** | business | 一个实体 + 两条关系 |
-| **Initiative 举措**（跨项目） | pro | 一个实体 + 关系 |
-| **Template 模板**（项目/工作项） | pro / business | 一个实体 + 一次"套用" |
-| **Worklog 工时** | one / pro | 一个实体 + 关系 + 汇总 |
+| **Initiative 举措**（跨项目） | pro | 一个实体 + 生命周期 + 两条关系 |
+| **Template 模板**（项目/工作项） | pro / business | 一个实体 + 前端"套用" |
+| **Worklog 工时** | one / pro | 一个实体 + 生命周期（含审批）+ 关系 |
 | **SavedView 可保存 / 可分享视图** | pro | 一个实体（筛选条件本来就能序列化） |
-| **Baseline 基线与偏差** | business | 一个实体 + 与计划日期比对 |
-| **Bulk Ops 批量操作** | one / pro | 一个自定义方法 |
+| **Baseline 基线与偏差** | business | 一个实体 + 关系 |
+
+**还没做**的：
+
+| 企业功能 | Plane 档位 | 差什么 |
+| --- | --- | --- |
+| **Bulk Ops 批量操作** | one / pro | 一个自定义方法（`POST /v1/resources:bulk`），还没写 |
+| **把 SavedView 套回看板** | pro | 实体和界面都在，但选一个视图一键套用到列表这一步还没接 |
 
 **关键判断：这些在 ProjectOS 里主要是"声明"，不是"代码"。**
 统一 Resource 模型（ADR-0002）意味着新增一类对象不需要新端点、

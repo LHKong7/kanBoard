@@ -7,10 +7,17 @@
 ```
 docs/
 ├── README.md                 本文件：文档索引
-├── development.md            开发指南（环境、命令、分层约定）
+├── development.md            开发指南（环境、命令、分层约定、两个前端）
 ├── m0-status.md              M0 进度、出口标准核对、已知欠账
-├── m1-status.md              M1 进度：工作流引擎与自动化
+├── m1-status.md              M1 进度：工作流引擎、自动化、五种看法、企业级对象
+├── agent-status.md           Agent 层逐条交付状态（对照 PRD 05）
+├── prd-coverage.md           PRD 覆盖情况：每模块 Must 条数与已交付数
+├── dogfooding-log.md         自用日志：真实踩到的坑与修法
 ├── perf-baseline.md          性能基线：100 万节点实测与结论
+├── research/                 对标调研（对着源码写，不抄官网）
+│   ├── plane-features.md              Plane 开源版功能盘点
+│   ├── plane-enterprise-features.md   Plane 付费档 14 组 87 条对照表
+│   └── plane-vs-projectos.md          与 ProjectOS 的差距，含逐轮进展
 ├── prd/                      产品需求文档（PRD v1.0）
 │   ├── 00-overview.md        愿景 / 定位 / 理念 / 用户
 │   ├── 01-principles.md      设计原则
@@ -41,12 +48,17 @@ docs/
 │   ├── 0008-modular-monolith.md
 │   ├── 0009-custom-ontology-metamodel.md
 │   ├── 0010-graph-on-postgres.md
-│   └── 0011-dogfooding-first.md
+│   ├── 0011-dogfooding-first.md
+│   ├── 0012-reopen-is-an-explicit-edge.md
+│   └── 0013-pi-as-model-substrate.md
 └── templates/                领域对象模板
     ├── requirement.md
     ├── story.md
     └── agent-spec.md
 ```
+
+源码侧与文档对应的两处：`src/` 是后端与领域模型，
+`web/` 是 React 前端（企业版），`public/` 是原生 JS 的看板。
 
 ## 建议阅读顺序
 
@@ -59,6 +71,15 @@ docs/
 
 **安全 / 合规视角**
 `07-identity-permission` → `06-connector` → `12-non-functional`
+→ [ADR-0006](adr/0006-model-data-egress.md)（模型数据出境）
+
+**"我们和竞品差在哪"视角**
+`research/plane-features` → `research/plane-enterprise-features`
+→ `research/plane-vs-projectos`
+
+**当前进度视角**
+`prd-coverage`（每模块 Must 覆盖）→ `m1-status`（这一期交付了什么）
+→ `agent-status`（Agent 层逐条）→ `dogfooding-log`（自用踩到的坑）
 
 ## 需求编号约定
 

@@ -9,11 +9,16 @@
 
 ## 已交付
 
+> ※ 这份文档是 **M0 完成那一刻的快照**，数字保持原样不回填。
+> 本体包后来长到了 25 类实体 / 38 类关系（M1 的评论、计划日期、
+> 企业级对象），当前值见 [m1-status](m1-status.md)。
+> 把历史快照改成今天的数字，等于让"当时交付了什么"这个问题再也答不出来。
+
 | 交付项 | 关联需求 | 实现位置 |
 | --- | --- | --- |
 | Ontology Registry：类型注册、校验、版本化、逆关系一致性 | FR-ONT-001/002/003/007 | `src/ontology/` |
 | 本体 → Zod 校验器生成管道 | FR-ONT-002, FR-ARCH-010 | `src/ontology/validation.ts` |
-| 默认本体包（7 类实体 + 14 类关系） | R1 缓解措施 | `src/ontology/defaults.ts` |
+| 默认本体包（7 类实体 + 14 类关系）※ | R1 缓解措施 | `src/ontology/defaults.ts` |
 | 统一 Resource 模型与 CRUD/Query API | FR-RES-001/002 | `src/domain/resource/`, `src/api/` |
 | 乐观锁 | FR-RES-003 | `PgResourceRepository.update` |
 | 软删除 + 历史保留 | FR-RES-004 | `ResourceService.softDelete` |

@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | 锚点 | commit `31853ab`（2026-08-05） | 本仓 `docs/prd-coverage.md` / `m1-status.md` |
 | 阶段 | 成熟商业产品的开源版 | M1 进行中 |
-| 形态 | 6 应用 + 15 包 | 单体，`src/` 84 个 ts 文件 + `public/` 2753 行 |
+| 形态 | 6 应用 + 15 包 | 单体：`src/` 后端 + `public/` 原生看板 + `web/` React 企业版 |
 
 **只比开源版对开源版**：Plane 的付费功能（仪表盘、Wiki、Teamspaces、工时、
 审批流、模板）不计入，否则差距会被算大一倍。
@@ -145,7 +145,7 @@ ProjectOS 有 `Knowledge` 实体（title / body / confidence / validUntil），
 Plane 的对象模型是 Django 模型类——加一个字段要改代码、写迁移、发版。
 它的"自定义"只到 `IssueType` 和标签。
 
-ProjectOS 的本体是**元模型**：18 类实体、28 类关系都是数据
+ProjectOS 的本体是**元模型**：25 类实体、38 类关系都是数据
 （`src/ontology/defaults.ts`，注册表实测），且有
 
 - 租户扩展（`ontology_extensions` 表，租户自己加类型和属性）
@@ -237,7 +237,7 @@ ProjectOS 的迁移是**三阶段**的（`src/domain/migration/sync.ts`）：
 
 ## 三、逐项对照
 
-✅ 有 · ⚠️ 部分 · ❌ 无
+✅ 有 · ⚠️ 部分 · ❌ 无 · 💰 Plane 要付费才有
 
 | | Plane | ProjectOS |
 | --- | :---: | :---: |
@@ -250,7 +250,7 @@ ProjectOS 的迁移是**三阶段**的（`src/domain/migration/sync.ts`）：
 | 日历 | ✅ | ✅ |
 | 甘特 | ⚠️ 不画依赖线 | ✅ 画依赖线 |
 | 筛选器 | ✅ | ✅ 状态 + 负责人，条件进 URL |
-| 可保存视图 | ✅ | ❌ |
+| 可保存视图 | ✅ | ⚠️ 有 `SavedView` 实体与界面，还不能一键套回看板 |
 | 文档编辑 | ✅ | ⚠️ 有对象无编辑器 |
 | 对外公开分享 | ✅ | ❌ |
 | 邮件通知 | ✅ | ❌ |
@@ -258,6 +258,12 @@ ProjectOS 的迁移是**三阶段**的（`src/domain/migration/sync.ts`）：
 | 导出 | ✅ | ✅ CSV / JSON |
 | Webhook / API Token | ✅ | ❌ |
 | 周期 / Sprint | ✅ 含燃尽图 | ⚠️ 有实体和指标，无专属界面 |
+| 工时 / 工时审批 | 💰 one / business | ✅ `Worklog` + 审批流 + 不能批自己那条 |
+| 团队空间 Teamspace | 💰 business | ✅ |
+| 举措 Initiative（跨项目） | 💰 pro | ✅ |
+| 模板 Template | 💰 pro / business | ✅ |
+| 基线 Baseline | 💰 business | ✅ |
+| 批量操作 Bulk Ops | 💰 one / pro | ❌ |
 | 估点 | ✅ 两种制式 | ⚠️ `storyPoint` 属性 |
 | 外部集成 | ✅ GitHub / Slack | ✅ GitHub / Jira / MCP / Browser |
 | 数据迁移 | ⚠️ 一次性导入 | ✅ 三阶段 |
@@ -365,7 +371,38 @@ ProjectOS 的迁移是**三阶段**的（`src/domain/migration/sync.ts`）：
 3. **没排期的对象列出来，不隐藏。** 藏起来的话日历看着很空，
    而使用者会以为这个月真的没什么事。
 
+### 第三轮：企业级对象 + React
+
+对照的是 [plane-enterprise-features.md](plane-enterprise-features.md)——
+Plane **付费档**那 87 条。
+
+| 补上的 | Plane 要什么档 | 落在哪 |
+| --- | --- | --- |
+| Teamspace 团队空间 | business | 本体 + React 界面 |
+| Initiative 举措（跨项目） | pro | 同上，带生命周期 |
+| Template 模板 | pro / business | 同上，套用在前端做 |
+| Worklog 工时 + 审批 | one / business | 同上，审批走单独 capability |
+| SavedView 保存的视图 | pro | 同上（还不能套回看板） |
+| Baseline 基线 | business | 同上 |
+| **React 成为前端技术栈** | — | `web/`，企业版挂 `/app` |
+
+两处判断：
+
+1. **这些在这套架构里主要是"声明"不是"代码"。** 统一 Resource 模型
+   让新增一类对象自带 CRUD、查询、权限、审计、历史与图关系。
+   六类企业对象加起来是一段本体声明 + 两套生命周期 + 八条关系。
+2. **审批走单独的 `Worklog.Approve` capability。** 有了它"不能批自己
+   报的工时"才写得出来——挂在通用的 `Worklog.Transition` 上，那条 Deny
+   会连"提交"一起挡掉，而提交本来就该由本人做。为此给 `PolicyCondition`
+   加了 `notOwner`（`ownerOnly` 说的是"只有本人能做"，正好相反）。
+
+顺带一个反直觉的发现：**Plane 拿去卖 pro/business 的能力里，有 12 条
+ProjectOS 早就有且更严谨**（审批、触发器与动作、决策与循环、自定义 SLA、
+可调用的审计日志、RBAC/GAC、工作项类型、自定义属性、甘特依赖线、
+周期报表、不限条数的自动化）。它们不是被实现出来的，是权限模型和
+工作流引擎顺带产出的。
+
 **仍然没补**：认证（第一节那条仍然全部成立，仍然是唯一挡着"能不能给
-真人用"的）、附件、实时协同编辑、富文本编辑器、可保存视图、国际化、
+真人用"的）、附件、实时协同编辑、富文本编辑器、批量操作、国际化、
 邮件通知、对外公开分享、Webhook / API Token、命令面板、收藏与最近访问、
 草稿、便签、移动端适配、周期专属界面。
