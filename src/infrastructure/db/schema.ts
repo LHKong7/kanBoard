@@ -161,6 +161,19 @@ export type OntologyExtensionsTable = {
   updated_at: Date
 }
 
+export type ProcessRunsTable = {
+  tenant: string
+  id: string
+  process_id: string
+  refs: JSONColumnType<Record<string, string>, string, string>
+  state: JSONColumnType<Record<string, unknown>, string, string>
+  status: string
+  awaiting_step: string | null
+  awaiting_deadline: Date | null
+  started_at: Date
+  updated_at: Date
+}
+
 export type SlaBreachesTable = {
   tenant: string
   resource_id: string
@@ -193,6 +206,7 @@ export type Database = {
   lifecycles: LifecyclesTable
   relation_rules: RelationRulesTable
   ontology_extensions: OntologyExtensionsTable
+  process_runs: ProcessRunsTable
   agent_run_steps: AgentRunStepsTable
   connector_calls: ConnectorCallsTable
   relations: RelationsTable

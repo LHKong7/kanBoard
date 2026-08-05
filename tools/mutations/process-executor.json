@@ -1,0 +1,44 @@
+{
+  "file": "src/domain/orchestration/executor.ts",
+  "test": "tests/process-executor.test.ts tests/integration/process-run.test.ts",
+  "env": {
+    "TEST_ADMIN_DATABASE_URL": "postgresql://postgres@127.0.0.1:5432/postgres"
+  },
+  "mutations": [
+    {
+      "name": "只推一步就返回（流程停在中间而不报错）",
+      "from": "    steps += instruction.steps.length",
+      "to": "    steps += maxSteps"
+    },
+    {
+      "name": "失败的动作也进补偿清单（撤销一个没发生过的操作）",
+      "from": "    if (result.status !== 'ok') continue",
+      "to": "    if (false) continue"
+    },
+    {
+      "name": "补偿失败也说成功",
+      "from": "    status: failures.length === 0 ? 'compensated' : 'compensation-failed',",
+      "to": "    status: 'compensated',"
+    },
+    {
+      "name": "剥不掉轮次标签，循环体里的补偿一条都对不上",
+      "from": "    const compensate = compensations.get(bareId(step.stepId))",
+      "to": "    const compensate = compensations.get(step.stepId)"
+    },
+    {
+      "name": "人拒绝当成通过",
+      "from": "          status: approved ? 'ok' : 'failed',",
+      "to": "          status: 'ok',"
+    },
+    {
+      "name": "等人时不落库（重启之后这个实例就消失了）",
+      "from": "      await deps.store.save(current)\n      return current\n    }\n\n    if (instruction.kind === 'compensate') {",
+      "to": "      return current\n    }\n\n    if (instruction.kind === 'compensate') {"
+    },
+    {
+      "name": "每一步做完不落库",
+      "from": "    current = await performBatch(instruction, current, deps, compensations)",
+      "to": "    current = await performBatch(instruction, current, deps, compensations)\n    if (false)"
+    }
+  ]
+}

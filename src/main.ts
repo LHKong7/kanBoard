@@ -6,6 +6,8 @@ import { OutboxPoller } from './infrastructure/poller.ts'
 import { SlaSweeper } from './infrastructure/sla-sweeper.pg.ts'
 import { slaNotifier } from './infrastructure/sla-notifier.ts'
 import { summarise, sweepOntologyHealth } from './infrastructure/ontology-health.pg.ts'
+import { sweepOverdueRuns } from './infrastructure/process-sweeper.ts'
+import { RELEASE_PROCESS } from './workflow/release-process.ts'
 import { AgentRunner } from './infrastructure/agent-runner.ts'
 import { ScriptedModelClient } from './infrastructure/model/scripted.ts'
 import { defaultPolicies } from './identity/default-policies.ts'
@@ -64,7 +66,15 @@ const lifecycles = new ReloadingWorkflowRegistry({
   ttlMs: Number(process.env['PROJECTOS_LIFECYCLE_TTL_MS'] ?? 5_000),
 })
 
-const app = buildServer({ pool, registry, workflows, lifecycles, policies })
+/**
+ * 可编排的流程（FR-WF-010）。
+ *
+ * 显式一张清单，不是自动扫目录：一个流程会推进状态、调外部系统，
+ * 哪些流程可以被启动应该是有人决定过的事。
+ */
+const PROCESSES = [RELEASE_PROCESS]
+
+const app = buildServer({ pool, registry, workflows, lifecycles, policies, processes: PROCESSES })
 
 /**
  * Poller 进程角色（ADR-0008）。
@@ -113,6 +123,16 @@ const healthIntervalMs = Number(process.env['PROJECTOS_HEALTH_SWEEP_MS'] ?? 24 *
 let healthTimer: NodeJS.Timeout | null = null
 
 /**
+ * 等人等过头了的流程实例（FR-WF-010 的"超时"那一档）。
+ *
+ * 默认一分钟一次。它决定的是**超时被兑现的延迟上界**——
+ * 一个 24 小时的人工节点晚一分钟超时没有任何影响，
+ * 而不跑这个巡检的后果是那个实例永远挂着，攥着一个已冻结的 Release。
+ */
+const processSweepMs = Number(process.env['PROJECTOS_PROCESS_SWEEP_MS'] ?? 60_000)
+let processTimer: NodeJS.Timeout | null = null
+
+/**
  * Agent Runner（ADR-0008 的第三种进程角色）。
  *
  * 模型客户端目前只有确定性实现：真实供应商的适配器要凭据，
@@ -145,6 +165,7 @@ const shutdown = async (signal: string): Promise<void> => {
   runner?.stop()
   if (sweepTimer !== null) clearInterval(sweepTimer)
   if (healthTimer !== null) clearInterval(healthTimer)
+  if (processTimer !== null) clearInterval(processTimer)
   await app.close()
   await pool.end()
   process.exit(0)
@@ -196,4 +217,20 @@ if (role !== 'api' && healthIntervalMs > 0) {
   healthTimer.unref()
 } else if (role !== 'api') {
   console.log('ontology health sweep disabled (PROJECTOS_HEALTH_SWEEP_MS=0)')
+}
+
+if (role !== 'api' && processSweepMs > 0) {
+  console.log(`process timeout sweep started (every ${Math.round(processSweepMs / 1000)}s)`)
+  processTimer = setInterval(() => {
+    void sweepOverdueRuns({ pool, registry, workflows, policies, processes: PROCESSES }, tenant)
+      .then((driven) => {
+        // 只在真的推动了什么的时候说话。每分钟打一行"没有超时的实例"
+        // 会把日志淹掉，而淹掉的日志和没有日志是一回事
+        for (const run of driven) console.log(`[process] ${run.id} timed out → ${run.status}`)
+      })
+      .catch((error: unknown) => console.error('[process] sweep failed:', error))
+  }, processSweepMs)
+  processTimer.unref()
+} else if (role !== 'api') {
+  console.log('process timeout sweep disabled (PROJECTOS_PROCESS_SWEEP_MS=0)')
 }

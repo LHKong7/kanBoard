@@ -249,6 +249,30 @@ export const extensionSchema = z
   })
   .strict()
 
+/**
+ * 启动一个流程实例（FR-WF-010）。
+ *
+ * `refs` 把流程定义里的符号名绑到真实对象上——定义里写的是 `release`，
+ * 实例才知道是哪一个。绑不上的名字在跑到那一步时会失败，
+ * 而不是在启动时——所以这里要求至少给一个，别让一个什么都没绑的实例
+ * 一路跑到中间才发现。
+ */
+export const startProcessSchema = z
+  .object({
+    processId: z.string().min(1).max(64),
+    refs: z.record(resourceIdSchema).refine((r) => Object.keys(r).length > 0, {
+      message: 'a process instance must bind at least one resource',
+    }),
+  })
+  .strict()
+
+export const decisionSchema = z
+  .object({
+    approved: z.boolean(),
+    reason: z.string().max(2000).optional(),
+  })
+  .strict()
+
 export const confirmRelationSchema = z.object({
   confirmed: z.boolean(),
 }).strict()

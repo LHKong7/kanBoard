@@ -34,7 +34,9 @@ import {
   askSchema,
   confirmRelationSchema,
   healthParamsSchema,
+  decisionSchema,
   extensionSchema,
+  startProcessSchema,
   relationRuleIdSchema,
   relationRuleSchema,
   relateSchema,
@@ -53,6 +55,12 @@ import { PgRelationRuleStore } from '../infrastructure/relation-rule-store.pg.ts
 import { validateRule } from '../ontology/relation-rules.ts'
 import { PgOntologyExtensionStore } from '../infrastructure/ontology-extension-store.pg.ts'
 import { registryFor, validateExtension } from '../ontology/tenant-extension.ts'
+import { PgProcessRunStore } from '../infrastructure/process-run-store.pg.ts'
+import { processRunner } from '../infrastructure/process-runner.ts'
+import { drive, resolveHuman } from '../domain/orchestration/executor.ts'
+import type { ProcessRun } from '../domain/orchestration/executor.ts'
+import type { Process } from '../workflow/orchestration.ts'
+import { newRunId } from '../platform/id.ts'
 
 export type ServerDeps = {
   pool: pg.Pool
@@ -71,6 +79,15 @@ export type ServerDeps = {
   externalSources?: readonly ExternalSource[]
   /** 外部事件归属的租户。外部系统不知道租户是什么 */
   tenant?: string
+  /**
+   * 可编排的流程（FR-WF-010）。
+   *
+   * 不配就没有流程端点可用——**这必须是显式的**：一个注册了零个流程
+   * 的编排端点，对调用方来说和"这个功能坏了"分不开。
+   */
+  processes?: readonly Process[]
+  /** 流程里 `call` 动作走的连接器网关。不给就只能跑纯状态迁移的流程 */
+  connectors?: import('../domain/agent/runtime.ts').ConnectorInvoker
 }
 
 /**
@@ -259,6 +276,58 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     )
   }
 
+  /**
+   * 把一个实例推到走不动为止。
+   *
+   * 动作走的是**同一个 `ResourceService`**——同一套守卫、权限、审计。
+   * 另开一条"流程引擎直接改状态"的近路会省几十行，代价是流程绕过了
+   * 状态机守卫，而守卫正是"Release 只能装 Done 的 Task"这类规则的所在地。
+   */
+  async function driveRun(
+    request: FastifyRequest,
+    process: Process,
+    run: ProcessRun,
+  ): Promise<ProcessRun> {
+    return inTenant(request, async (service, caller) => {
+      // 流程会推进状态、调外部系统。它要的权限不比一次人工操作低
+      await service.assertAllowed(caller, 'Resource.Update', { tenant: caller.subject.tenant })
+      return withTenant(db, caller.subject.tenant, (trx: Db) =>
+        drive(process, run, {
+          runner: processRunner({
+            service: serviceIn(trx, caller.subject.tenant, {
+              registry: deps.registry,
+              workflows: deps.workflows,
+              policies: deps.policies,
+              audit: new BufferedAuditSink(),
+              clock,
+            }),
+            caller,
+            connectors: deps.connectors,
+            runId: run.id,
+          }),
+          store: new PgProcessRunStore(trx, caller.subject.tenant),
+          now: () => clock.now(),
+        }),
+      )
+    })
+  }
+
+  /** 实例的线格式。`state` 里的时间要序列化成串，别让调用方拿到一个 {} */
+  function toRunWire(run: ProcessRun): Record<string, unknown> {
+    return {
+      id: run.id,
+      processId: run.processId,
+      status: run.status,
+      refs: run.refs,
+      awaiting:
+        run.awaiting === null
+          ? null
+          : { ...run.awaiting, deadline: run.awaiting.deadline.toISOString() },
+      completed: run.state.completed,
+      startedAt: run.state.startedAt.toISOString(),
+    }
+  }
+
   // ── 本体：类型目录是公开可读的，UI 靠它渲染 ────────────────
   //
   // 但它**按租户不同**（FR-ONT-009）：扩展字段只出现在自己租户的目录里。
@@ -426,6 +495,87 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       return reply.status(404).send({ error: 'not_found', message: `no relation rule "${id}"` })
     }
     return reply.status(204).send()
+  })
+
+  /**
+   * 流程编排（FR-WF-010 / FR-WF-011）。
+   *
+   * 三条端点，对应流程实例的一生：启动、看、人点头。
+   *
+   * 每一条都会**把实例往前推到走不动为止**（`drive`），而不是只推一步。
+   * 只推一步的话，谁来推下一步就成了调用方的责任——而那件事没人会记得做，
+   * 表现是流程停在中间，没有报错。
+   */
+  app.post('/v1/processes', async (request, reply) => {
+    const body = startProcessSchema.parse(request.body)
+    const process = deps.processes?.find((p) => p.id === body.processId)
+    if (process === undefined) {
+      return reply
+        .status(404)
+        .send({ error: 'not_found', message: `unknown process "${body.processId}"` })
+    }
+
+    const caller = requireCaller(request)
+    const started = clock.now()
+    const run: ProcessRun = {
+      id: newRunId(),
+      tenant: caller.subject.tenant,
+      processId: process.id,
+      refs: body.refs,
+      status: 'running',
+      awaiting: null,
+      state: { processId: process.id, completed: [], performed: [], startedAt: started },
+    }
+    const final = await driveRun(request, process, run)
+    return reply.status(201).send(toRunWire(final))
+  })
+
+  app.get('/v1/processes/:id', async (request, reply) => {
+    const id = (request.params as { id: string }).id
+    const caller = requireCaller(request)
+    await assertOn(request, 'Resource.Read')
+    const run = await withTenant(db, caller.subject.tenant, (trx: Db) =>
+      new PgProcessRunStore(trx, caller.subject.tenant).load(id),
+    )
+    if (run === null) {
+      return reply.status(404).send({ error: 'not_found', message: `unknown process run "${id}"` })
+    }
+    return toRunWire(run)
+  })
+
+  /**
+   * 人点头 / 拒绝（FR-WF-010 的人工节点）。
+   *
+   * **拒绝不是"什么都不做"**：它变成一个失败的步骤结果，于是补偿会跑起来。
+   * 默默把实例留在等待上的话，那个已经冻结的 Release 会一直冻结着。
+   */
+  app.post('/v1/processes/:id/decisions', async (request, reply) => {
+    const id = (request.params as { id: string }).id
+    const body = decisionSchema.parse(request.body)
+    const caller = requireCaller(request)
+
+    const run = await withTenant(db, caller.subject.tenant, (trx: Db) =>
+      new PgProcessRunStore(trx, caller.subject.tenant).load(id),
+    )
+    if (run === null) {
+      return reply.status(404).send({ error: 'not_found', message: `unknown process run "${id}"` })
+    }
+    if (run.status !== 'awaiting-human') {
+      // 409 而不是 200：对着一个没在等人的实例点头，说明调用方看到的
+      // 是一份过期的状态。回 200 会让他以为自己的决定生效了
+      return reply
+        .status(409)
+        .send({ error: 'conflict', message: `run ${id} is ${run.status}, not awaiting a decision` })
+    }
+    const process = deps.processes?.find((p) => p.id === run.processId)
+    if (process === undefined) {
+      return reply
+        .status(404)
+        .send({ error: 'not_found', message: `unknown process "${run.processId}"` })
+    }
+
+    const resumed = resolveHuman(run, body.approved, caller.subject.principal)
+    return toRunWire(await driveRun(request, process, resumed))
   })
 
   // 生命周期定义。UI 靠它渲染看板的列，而不是把状态硬编码在前端。

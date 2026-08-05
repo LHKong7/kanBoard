@@ -61,6 +61,7 @@ const EXPECTED = [
   'GET /v1/ontology/health',
   'GET /v1/ontology/relation-rules',
   'GET /v1/ontology/relation-types',
+  'GET /v1/processes/:id',
   'GET /v1/resources',
   'GET /v1/resources/:id',
   'GET /v1/resources/:id/history',
@@ -70,6 +71,8 @@ const EXPECTED = [
   'GET /v1/workflows',
   'POST /v1/graph:action',
   'POST /v1/relations/:id/confirmation',
+  'POST /v1/processes',
+  'POST /v1/processes/:id/decisions',
   'POST /v1/resources',
   // 接受一条 Agent 提议，把它变成真正的对象（FR-AI-001）。
   // 子资源形式与 `/v1/relations/:id/confirmation` 一致：
