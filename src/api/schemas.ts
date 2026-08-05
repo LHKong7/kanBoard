@@ -153,6 +153,29 @@ export const healthParamsSchema = z.object({
   maxRelations: z.coerce.number().int().min(1).max(200_000).default(50_000),
 })
 
+/**
+ * 带出处的问答（FR-ONT-011 / FR-RES-009）。
+ *
+ * 走 GET 而不是 POST：一次问答的结果要能**发给同事**。
+ * 这和看板视图为什么有 URL 是同一个理由（docs/dogfooding-log.md #5）。
+ */
+export const askSchema = z
+  .object({
+    q: z.string().min(1).max(500),
+    /** 焦点对象。给了它，图上的距离参与重排（但不单独召回） */
+    near: resourceIdSchema.optional(),
+    /**
+     * 只在这一类里找。
+     *
+     * 不只是过滤：中文二元组短于三字符、走不了 trigram 索引，
+     * 不带它的话每个词都要扫一遍全租户。**知道自己在找什么的
+     * 调用方应该说出来。**
+     */
+    type: z.string().max(64).optional(),
+    limit: z.coerce.number().int().min(1).max(20).default(5),
+  })
+  .strict()
+
 export const pathSchema = z.object({
   from: resourceIdSchema,
   to: resourceIdSchema,

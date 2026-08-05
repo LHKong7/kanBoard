@@ -241,6 +241,32 @@ describe('本体巡检（FR-ONT-010）', () => {
   })
 })
 
+describe('带出处的问答（FR-ONT-011 / FR-RES-009）', () => {
+  it('答案里的出处点得开', async () => {
+    // **验收标准就是这一条**：结果含来源实体 ID，可点击跳转。
+    // 只返回一个 id 字符串是不够的——那个 id 随时可能跳不过去
+    const knowledge = await create('Knowledge', {
+      title: '灰度回滚手册',
+      body: '灰度指标异常时立即回滚到上一个版本，再排查原因',
+    })
+
+    await page.goto(`${baseUrl}/?view=ask&ask=${encodeURIComponent('灰度异常怎么回滚')}`)
+    await page.waitForSelector('.ask-passage', { timeout: 15_000 })
+
+    await page.locator(`.ask-open[data-id="${knowledge}"]`).click()
+    await page.waitForSelector('#drawerTitle', { timeout: 10_000 })
+    assert.equal(await page.locator('#drawerTitle').innerText(), '灰度回滚手册')
+  })
+
+  it('答不出来就说答不出来，不给一段没有出处的话', async () => {
+    await page.goto(`${baseUrl}/?view=ask&ask=${encodeURIComponent('quarterly withholding schedule')}`)
+    await page.waitForSelector('.ask-results', { timeout: 15_000 })
+    const text = await page.locator('.ask-results').innerText()
+    assert.match(text, /答不出来/)
+    assert.equal(await page.locator('.ask-passage').count(), 0)
+  })
+})
+
 describe('可视化流程编辑器（FR-WF-014）', () => {
   it('把状态机画出来，状态与迁移都来自服务端', async () => {
     await page.goto(`${baseUrl}/?view=process`)

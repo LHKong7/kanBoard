@@ -64,6 +64,7 @@ const EXPECTED = [
   'GET /v1/resources/:id/history',
   'GET /v1/resources/:id/relations',
   'GET /v1/resources/:id/transitions',
+  'GET /v1/search:answer',
   'GET /v1/workflows',
   'POST /v1/graph:action',
   'POST /v1/relations/:id/confirmation',

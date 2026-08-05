@@ -639,3 +639,39 @@ body {
   cursor: pointer;
 }
 .health-target:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── 带出处的问答（FR-ONT-011 / FR-RES-009） ────────── */
+.ask-controls { display: flex; gap: 8px; padding: 12px 18px 0; }
+.ask-controls input {
+  flex: 1;
+  max-width: 640px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+}
+.ask-controls input:focus { outline: none; border-color: var(--accent); }
+.ask-results { padding: 12px 18px 24px; }
+.ask-note { font-size: 12px; color: var(--text-dim); margin: 0 0 10px; }
+.ask-list { display: flex; flex-direction: column; gap: 8px; }
+.ask-passage {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+}
+.ask-text { margin: 0 0 8px; word-break: break-word; }
+.ask-source { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ask-open {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 12px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.ask-open:hover { border-color: var(--accent); color: var(--accent); }
+.ask-via { font-size: 11px; color: var(--text-faint); }

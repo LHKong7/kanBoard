@@ -63,10 +63,35 @@ function loadSpecs(names: readonly string[]): { name: string; spec: Spec }[] {
  * 累积修改会让第三个变异跑在一份已经被改花了的代码上，
  * 而那时"红了"说明不了任何事。
  */
+function runTests(spec: Spec): boolean {
+  try {
+    execSync(`pnpm vitest run ${spec.test} --reporter=dot`, {
+      stdio: 'pipe',
+      env: { ...process.env, ...spec.env },
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 function runSpec(name: string, spec: Spec): { caught: number; survived: string[] } {
   const original = readFileSync(spec.file, 'utf8')
   const survived: string[] = []
   let caught = 0
+
+  /**
+   * 先跑一遍**没种缺陷的**代码。
+   *
+   * 这一步是被一次假的满分逼出来的：用例本身在基线上就是红的，
+   * 于是每一个变异都"被逮到了"，报告是 7/7 —— 而它一个缺陷都没检验。
+   * **一个总是红的用例和一个总是绿的用例，在这个工具眼里没有区别**，
+   * 而后者至少还会被人注意到。
+   */
+  if (!runTests(spec)) {
+    console.log('  BASELINE!! 用例在没种缺陷时就是红的，这份 spec 的结论无效')
+    return { caught: 0, survived: ['BASELINE-RED  先把用例修绿，再谈变异'] }
+  }
 
   // 进程被打断时必须把源文件放回去。留一份被种了缺陷的代码在工作区，
   // 比这个工具本身有用得多的东西都会被它毁掉
@@ -92,15 +117,7 @@ function runSpec(name: string, spec: Spec): { caught: number; survived: string[]
       }
 
       writeFileSync(spec.file, original.replace(mutation.from, mutation.to))
-      let red = false
-      try {
-        execSync(`pnpm vitest run ${spec.test} --reporter=dot`, {
-          stdio: 'pipe',
-          env: { ...process.env, ...spec.env },
-        })
-      } catch {
-        red = true
-      }
+      const red = !runTests(spec)
       writeFileSync(spec.file, original)
 
       if (red) caught++

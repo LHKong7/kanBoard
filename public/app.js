@@ -34,7 +34,7 @@ const state = {
   /** 当前检索词。空串表示不过滤。 */
   /** @type {string} */ search: '',
   /** 当前视图：某个类型的看板、Dashboard、本体浏览器、流程编辑器 */
-  /** @type {'board'|'dashboard'|'graph'|'process'|'health'} */ view: 'board',
+  /** @type {'board'|'dashboard'|'graph'|'process'|'health'|'ask'} */ view: 'board',
   /** 本体浏览器（FR-ONT-012）：从哪个对象出发、展开几跳 */
   /** @type {{start: string, depth: number, nodes: any[], edges: any[]}} */
   graph: { start: '', depth: 2, nodes: [], edges: [] },
@@ -42,6 +42,8 @@ const state = {
   /** @type {any|null} */ editingLifecycle: null,
   /** 本体巡检（FR-ONT-010）：只看这一类问题。空串 = 全部 */
   /** @type {string} */ healthKind: '',
+  /** 问答（FR-ONT-011 / FR-RES-009）：当前问题 */
+  /** @type {string} */ question: '',
   /** @type {any[]} */ metrics: [],
   /**
    * 这一页是否被截断了。
@@ -182,9 +184,10 @@ let boardableTypes = []
  */
 function applyUrl(params, boardable) {
   const view = params.get('view')
-  const views = ['dashboard', 'graph', 'process', 'health']
+  const views = ['dashboard', 'graph', 'process', 'health', 'ask']
   state.view = views.includes(view ?? '') ? /** @type {any} */ (view) : 'board'
   state.healthKind = params.get('kind') ?? ''
+  state.question = params.get('ask') ?? ''
   state.graph.start = params.get('start') ?? ''
   state.graph.depth = Number(params.get('depth') ?? '2') || 2
   const wanted = params.get('type')
@@ -208,6 +211,8 @@ function syncUrl(replace = false) {
     }
     // 筛到某一类问题也要能分享出去：「这是我说的那批孤儿对象」
     if (state.view === 'health' && state.healthKind !== '') params.set('kind', state.healthKind)
+    // 一次问答的结果要能发给同事，所以问题本身进 URL
+    if (state.view === 'ask' && state.question !== '') params.set('ask', state.question)
   } else if (state.activeType !== '') params.set('type', state.activeType)
   if (state.search !== '' && state.view === 'board') params.set('q', state.search)
   const qs = params.toString()
@@ -279,6 +284,7 @@ function renderTabs(types) {
     viewTab('graph', '关系图'),
     viewTab('process', '流程'),
     viewTab('health', '巡检'),
+    viewTab('ask', '问答'),
   )
 }
 
@@ -293,6 +299,7 @@ async function refresh() {
   if (state.view === 'graph') return refreshGraph()
   if (state.view === 'process') return refreshProcess()
   if (state.view === 'health') return refreshHealth()
+  if (state.view === 'ask') return refreshAsk()
   if (state.activeType === '') return
   // 走 GET 而不是 POST :query。
   //
@@ -1607,6 +1614,100 @@ function drawGraph(nodes, edges, truncated) {
   legend.textContent = `${nodes.length} 个对象 · ${edges.length} 条关系 · 点节点可换起点`
   wrap.append(legend)
   return wrap
+}
+
+// ── 带出处的问答（FR-ONT-011 / FR-RES-009） ───────────
+//
+// 两条需求的验收标准都落在**出处**上：
+//   FR-ONT-011  抽样问答中 ≥ 90% 返回可点击的来源实体
+//   FR-RES-009  结果含来源实体 ID，可点击跳转
+//
+// 所以这个界面的重点不是答案好不好看，是**每一段都指得回它的来源，
+// 而且点得开**。一段读起来像答案、却点不进任何对象的文字，
+// 会被复制进周报，然后没有人能追溯它是从哪儿来的。
+
+async function refreshAsk() {
+  const form = document.createElement('form')
+  form.className = 'ask-controls'
+  form.onsubmit = async (e) => {
+    e.preventDefault()
+    state.question = /** @type {HTMLInputElement} */ (form.querySelector('#askInput')).value.trim()
+    syncUrl()
+    await refresh()
+  }
+  form.innerHTML = `
+    <input id="askInput" value="${escapeAttr(state.question)}" autocomplete="off"
+      placeholder="问一句话，比如「灰度失败怎么回滚」">
+    <button class="btn primary" type="submit">问</button>`
+
+  const panel = document.createElement('div')
+  panel.className = 'ask-results'
+  panel.id = 'askResults'
+  el.board.replaceChildren(form, panel)
+
+  if (state.question === '') {
+    panel.replaceChildren(hint('问一个问题', '答案会带着来源，每一条都点得开'))
+    return
+  }
+
+  panel.replaceChildren(hint('检索中…', '', true))
+  let result
+  try {
+    result = await api(`/v1/search:answer?q=${encodeURIComponent(state.question)}`)
+  } catch (error) {
+    panel.replaceChildren(hint('检索失败', String(error.message)))
+    return
+  }
+
+  if (result.grounded !== true) {
+    // **答不出来是一个正确的答案。** 这里刻意不给任何"也许你想问"的
+    // 补白——那种补白正是把人引向一段没有出处的文字的地方
+    panel.replaceChildren(
+      hint('答不出来', `在 ${result.candidates} 个候选对象里没有找到能支持这个问题的内容`),
+    )
+    return
+  }
+
+  const list = document.createElement('div')
+  list.className = 'ask-list'
+  for (const passage of result.passages) {
+    const item = document.createElement('div')
+    item.className = 'ask-passage'
+    item.dataset.source = passage.sourceId
+
+    const body = document.createElement('p')
+    body.className = 'ask-text'
+    body.textContent = passage.text
+    item.append(body)
+
+    const foot = document.createElement('div')
+    foot.className = 'ask-source'
+
+    // 出处按钮：**这就是验收标准里那个"可点击跳转"**
+    const open = document.createElement('button')
+    open.className = 'ask-open'
+    open.dataset.id = passage.sourceId
+    open.textContent = `${passage.sourceType} · ${passage.sourceTitle}`
+    open.onclick = () => void openDrawer(passage.sourceId)
+    foot.append(open)
+
+    // 哪一路召回的。调参时要知道是哪一路在起作用；
+    // 对读的人来说，它也说明了"为什么这条会出现在这里"
+    const via = document.createElement('span')
+    via.className = 'ask-via'
+    via.textContent = passage.via.join(' + ')
+    foot.append(via)
+
+    item.append(foot)
+    list.append(item)
+  }
+
+  const note = document.createElement('p')
+  note.className = 'ask-note'
+  note.id = 'askNote'
+  note.textContent = `${result.passages.length} 段，来自 ${result.sourceIds.length} 个对象（候选 ${result.candidates} 个）`
+
+  panel.replaceChildren(note, list)
 }
 
 // ── 本体一致性巡检（FR-ONT-010） ─────────────────────

@@ -28,6 +28,9 @@ import {
   resourceUpdated,
 } from '../events.ts'
 import { MAX_PAGE_SIZE } from './ports.ts'
+import { keyTerms } from '../ai/capabilities.ts'
+import { answer } from '../retrieval/hybrid.ts'
+import type { Answer, Doc } from '../retrieval/hybrid.ts'
 import { sweep } from '../ontology-health/sweep.ts'
 import type { HealthReport, RelationSnapshot, ResourceSnapshot } from '../ontology-health/sweep.ts'
 import type {
@@ -1219,6 +1222,66 @@ export class ResourceService {
     }
   }
 
+  /**
+   * 带出处的问答（FR-ONT-011 / FR-RES-009）。
+   *
+   * 两条需求的验收标准都落在**出处**上（"≥90% 返回可点击的来源实体"、
+   * "结果含来源实体 ID，可点击跳转"），所以这一层的职责是把
+   * 库里的对象变成 `Doc`，再把 `answer()` 的结论原样交出去。
+   * **答得好不好不由这里决定，指不指得回来源由这里决定。**
+   *
+   * 候选集怎么来，是这条路径上唯一需要判断的事：
+   * 全租户喂给检索是没有上界的，而只按整句话去检索几乎什么都匹配不到
+   * （"这个项目的灰度策略是什么"作为一个子串不会出现在任何对象里）。
+   * 所以先把问句切成词，**每个词各查一次**再取并集——
+   * 词面召回交给数据库，向量与重排在内存里做。
+   *
+   * `near` 给定时，图上的距离参与重排（但不单独召回，见 `answer`）。
+   */
+  async answerQuestion(
+    caller: Caller,
+    input: { question: string; limit: number; near?: string | undefined; type?: string | undefined },
+  ): Promise<Answer & { candidates: number }> {
+    await this.#authorize(caller, 'Resource.Read', { tenant: caller.subject.tenant })
+
+    const terms = keyTerms(input.question).slice(0, SEARCH_TERMS_MAX)
+    const byId = new Map<string, Resource>()
+    for (const term of terms) {
+      // 池子够大就不再查了。剩下的词只会把更边缘的东西加进来，
+      // 而重排那一步本来就要把它们排到后面去
+      if (byId.size >= SEARCH_POOL_MAX) break
+      const page = await this.#deps.resources.query(
+        { text: term, ...(input.type === undefined ? {} : { type: input.type }) },
+        { size: SEARCH_PER_TERM },
+      )
+      for (const item of page.items) byId.set(item.id, item)
+    }
+
+    // 图上的距离：只有指定了焦点对象才算得出来。没指定就是全 null，
+    // 于是三路里的图那一路整个不参与——**而不是被当成"都很远"**
+    const hops = new Map<string, number>()
+    if (input.near !== undefined) {
+      hops.set(input.near, 0)
+      const walked = await this.#traverse(caller, {
+        start: input.near,
+        maxDepth: SEARCH_NEAR_DEPTH,
+        direction: 'both',
+        limit: GRAPH_NODE_MAX,
+      })
+      for (const hit of walked.hits) hops.set(hit.id, hit.depth)
+    }
+
+    const docs: Doc[] = [...byId.values()].map((r) => ({
+      id: r.id,
+      type: r.type,
+      title: titleOf(r),
+      text: textOf(r),
+      hops: hops.get(r.id) ?? null,
+    }))
+
+    return { ...answer(input.question, docs, input.limit), candidates: docs.length }
+  }
+
   async shortestPath(caller: Caller, from: string, to: string, maxDepth: number): Promise<PathHit | null> {
     await this.get(caller, from)
     await this.get(caller, to)
@@ -1462,6 +1525,58 @@ export const MAX_TRAVERSE_LIMIT = 5000
  * 写成引用而不是再抄一个 200，是为了那边改了这边跟着改。
  */
 export const GRAPH_NODE_MAX = MAX_PAGE_SIZE
+
+/**
+ * 问答的候选集怎么收。
+ *
+ * 三个数字都是上界，不是调优参数：没有它们，一次提问就是一次
+ * 没有边界的全库扫描，而提问是这套东西里最容易被反复触发的动作。
+ */
+/**
+ * 一次提问最多发几条检索。
+ *
+ * 原来是 6，而且取的是**问句最前面**那几个词——那是错的，
+ * 而且错得很安静：「我们这套系统的数据库连接池默认开多少个连接」
+ * 的前六个二元组是 我们/们这/这套/套系/系统/统的，全是引子，
+ * 「数据库」「连接池」一个都轮不到。表现是**永远答不出来**，
+ * 而它看起来和"库里确实没有"一模一样。
+ *
+ * 24 覆盖得到一句正常长度的问话里的实词。代价要说清楚：
+ * 这是 24 次查询，而中文二元组短于三字符、走不了 trigram 索引，
+ * 不带 `type` 收窄的话每一次都是一遍全租户扫描。所以端点上
+ * 留了 `type`——**知道自己在找什么的调用方应该说出来**。
+ */
+const SEARCH_TERMS_MAX = 24
+/** 每个词最多召回多少个候选 */
+const SEARCH_PER_TERM = 50
+/** 候选池够大就停手，不必把每个词都查完 */
+const SEARCH_POOL_MAX = 300
+/** 焦点对象周围几跳算"近" */
+const SEARCH_NEAR_DEPTH = 2
+
+/** 对象在检索结果里显示成什么。和界面上那套 `?? ` 是同一份规则 */
+function titleOf(r: Resource): string {
+  for (const key of ['title', 'name', 'question']) {
+    const value = r.attributes[key]
+    if (typeof value === 'string' && value !== '') return value
+  }
+  return r.id
+}
+
+/**
+ * 检索时把一个对象看成什么文本。
+ *
+ * 只取**字符串属性的值**，不含键名——否则每个对象都含有 "title"
+ * 这个词，问句里带上它就全库命中。和仓储里 `search_text` 的口径一致。
+ */
+function textOf(r: Resource): string {
+  const parts: string[] = []
+  for (const value of Object.values(r.attributes)) {
+    if (typeof value === 'string') parts.push(value)
+  }
+  parts.push(...r.labels)
+  return parts.join(' ')
+}
 
 /** 判环时向前看多少层。10 是遍历本身允许的上限 */
 const MAX_CYCLE_DEPTH = 10

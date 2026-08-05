@@ -31,6 +31,7 @@ import {
   metricScopeSchema,
   metricBreakdownSchema,
   automationRateSchema,
+  askSchema,
   confirmRelationSchema,
   healthParamsSchema,
   relateSchema,
@@ -215,6 +216,29 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       // 扫不完必须说。一份"0 个问题"的报告要是只扫了前一万个对象，
       // 它比没有报告更坏——它会让人不再去看
       complete: result.complete,
+    }
+  })
+
+  /**
+   * 带出处的问答（FR-ONT-011 / FR-RES-009）。
+   *
+   * 响应里 `sourceIds` 是**可点击跳转**的那一份——两条需求的验收标准
+   * 落的都是这里。`passages` 里每一段也各自带着自己的来源，
+   * 因为一个答案里的两句话可能来自不同的对象，只给一个总的来源列表
+   * 等于让人自己去猜哪句话对应哪一条。
+   */
+  app.get('/v1/search:answer', async (request) => {
+    const q = askSchema.parse(request.query ?? {})
+    const result = await inTenant(request, (service, caller) =>
+      service.answerQuestion(caller, { question: q.q, limit: q.limit, near: q.near, type: q.type }),
+    )
+    return {
+      passages: result.passages,
+      sourceIds: result.sourceIds,
+      // 答不出来是一个**正确的答案**，不是失败。它必须和"答出来了"
+      // 一样明确地表示出来，否则调用方只能靠 passages 为空去猜
+      grounded: result.grounded,
+      candidates: result.candidates,
     }
   })
 
