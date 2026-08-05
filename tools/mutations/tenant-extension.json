@@ -1,0 +1,66 @@
+{
+  "file": "src/ontology/tenant-extension.ts",
+  "test": "tests/tenant-extension.test.ts",
+  "mutations": [
+    {
+      "name": "不检查命名空间前缀",
+      "from": "if (!attr.name.startsWith(ns)) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "命名空间只用 x_ 不带租户名",
+      "from": "return `${EXTENSION_PREFIX}${tenant}_`",
+      "to": "return EXTENSION_PREFIX"
+    },
+    {
+      "name": "允许扩展加必填字段",
+      "from": "if (attr.required === true) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "允许扩展加 derived 字段",
+      "from": "if (attr.derived === true) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "不查同一份扩展里的重名",
+      "from": "if (seen.has(attr.name)) problems.push({ path: attr.name, message: 'duplicated in this extension' })",
+      "to": "void seen"
+    },
+    {
+      "name": "理由不进消息",
+      "from": "const why = problems.map((p) => `${p.path}: ${p.message}`).join('; ')",
+      "to": "const why = ''"
+    },
+    {
+      "name": "就地改共享注册表",
+      "from": "const extended = new OntologyRegistry()",
+      "to": "const extended = base"
+    },
+    {
+      "name": "不按租户过滤扩展",
+      "from": "const mine = extensions.filter((e) => e.tenant === tenant)",
+      "to": "const mine = extensions"
+    },
+    {
+      "name": "不搬关系类型",
+      "from": "for (const relation of base.relationTypes()) extended.registerRelation(relation)",
+      "to": "void base"
+    },
+    {
+      "name": "丢掉平台自带的属性",
+      "from": "extra === undefined ? def : { ...def, attributes: [...def.attributes, ...extra] },",
+      "to": "extra === undefined ? def : { ...def, attributes: extra },"
+    },
+    {
+      "name": "多份扩展只留最后一份",
+      "from": "byType.set(ext.entityType, [...(byType.get(ext.entityType) ?? []), ...ext.attributes])",
+      "to": "byType.set(ext.entityType, [...ext.attributes])"
+    },
+    {
+      "name": "落库前不校验",
+      "from": "validateExtension(ext, target)",
+      "to": "void target"
+    }
+  ]
+}

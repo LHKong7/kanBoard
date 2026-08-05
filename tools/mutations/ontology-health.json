@@ -1,0 +1,71 @@
+{
+  "file": "src/domain/ontology-health/sweep.ts",
+  "test": "tests/ontology-health.test.ts",
+  "mutations": [
+    {
+      "name": "孤儿不查",
+      "from": "    if (r.project === null) {",
+      "to": "    if (false) {"
+    },
+    {
+      "name": "Project 自己也报孤儿",
+      "from": "    if (r.type === 'Project' || !scoped.has(r.type)) continue",
+      "to": "    if (false) continue"
+    },
+    {
+      "name": "孤儿判定写死类型名单",
+      "from": "return new Set(containedIn?.domain ?? [])",
+      "to": "return new Set(['Task', 'Story'])"
+    },
+    {
+      "name": "已删除的对象也报孤儿",
+      "from": "    if (r.deletedAt === null) live.set(r.id, r)",
+      "to": "    live.set(r.id, r)"
+    },
+    {
+      "name": "断链不查",
+      "from": "      if (!live.has(end)) {",
+      "to": "      if (false) {"
+    },
+    {
+      "name": "断链只查一端",
+      "from": "for (const end of [rel.fromId, rel.toId]) {",
+      "to": "for (const end of [rel.fromId]) {"
+    },
+    {
+      "name": "被否决的关系也报断链",
+      "from": "    if (rel.confirmed === false) continue",
+      "to": "    if (false) continue"
+    },
+    {
+      "name": "环不查",
+      "from": "    if (type.acyclic !== true) continue",
+      "to": "    continue"
+    },
+    {
+      "name": "非 acyclic 的关系也报环",
+      "from": "    if (type.acyclic !== true) continue",
+      "to": "    if (false) continue"
+    },
+    {
+      "name": "只从入度为零的点出发",
+      "from": "for (const node of next.keys()) walk(node)",
+      "to": "for (const node of next.keys()) { if (![...next.values()].flat().includes(node)) walk(node) }"
+    },
+    {
+      "name": "经过已删对象的边也算环",
+      "from": "r.type === type.name && r.confirmed !== false && live.has(r.fromId) && live.has(r.toId),",
+      "to": "r.type === type.name && r.confirmed !== false,"
+    },
+    {
+      "name": "报告不带分母",
+      "from": "scanned: { resources: resources.length, relations: relations.length },",
+      "to": "scanned: { resources: 0, relations: 0 },"
+    },
+    {
+      "name": "问题 id 不去重",
+      "from": "affectedIds: [...new Set(findings.map(idOf))].sort(),",
+      "to": "affectedIds: findings.map(idOf),"
+    }
+  ]
+}
