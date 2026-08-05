@@ -1,0 +1,101 @@
+{
+  "file": "src/domain/retrieval/hybrid.ts",
+  "test": "tests/hybrid-retrieval.test.ts",
+  "mutations": [
+    {
+      "name": "图可以单独召回",
+      "from": "if (textual <= 0) continue",
+      "to": "if (false) continue"
+    },
+    {
+      "name": "不设分数下限",
+      "from": "if (score < MIN_SCORE) continue",
+      "to": "if (false) continue"
+    },
+    {
+      "name": "词面不参与打分",
+      "from": "const textual = lexical * WEIGHTS.lexical + vector * WEIGHTS.vector",
+      "to": "const textual = vector * WEIGHTS.vector"
+    },
+    {
+      "name": "向量不参与打分",
+      "from": "const textual = lexical * WEIGHTS.lexical + vector * WEIGHTS.vector",
+      "to": "const textual = lexical * WEIGHTS.lexical"
+    },
+    {
+      "name": "图不参与重排",
+      "from": "const score = textual + graph * WEIGHTS.graph",
+      "to": "const score = textual"
+    },
+    {
+      "name": "不连通当成很远",
+      "from": "const graph = doc.hops === null ? 0 : 1 / (1 + doc.hops)",
+      "to": "const graph = 1 / (1 + (doc.hops ?? 1000))"
+    },
+    {
+      "name": "答案不带出处 id",
+      "from": "sourceIds: [...new Set(passages.map((p) => p.sourceId))],",
+      "to": "sourceIds: [],"
+    },
+    {
+      "name": "整篇塞进答案",
+      "from": "text: doc.text.slice(0, 300),",
+      "to": "text: doc.text,"
+    },
+    {
+      "name": "没有结果也算 grounded",
+      "from": "grounded: passages.length > 0,",
+      "to": "grounded: true,"
+    },
+    {
+      "name": "不记录召回路径",
+      "from": "    if (lexical > 0) via.push('lexical')",
+      "to": "    void lexical"
+    },
+    {
+      "name": "同分时顺序不确定",
+      "from": "scored.sort((a, b) => b.score - a.score || a.sourceId.localeCompare(b.sourceId))",
+      "to": "scored.sort((a, b) => b.score - a.score)"
+    },
+    {
+      "name": "余弦不做归一化",
+      "from": "return denom === 0 ? 0 : dot / denom",
+      "to": "return dot"
+    },
+    {
+      "name": "空样本集算满分",
+      "from": "if (expected.length === 0) return { rate: 0, ok: false, ungrounded: [] }",
+      "to": "if (expected.length === 0) return { rate: 1, ok: true, ungrounded: [] }"
+    },
+    {
+      "name": "不可答的问题也进分母",
+      "from": "const expected = samples.filter((s) => s.answerable)",
+      "to": "const expected = samples"
+    },
+    {
+      "name": "不列出没出处的问题",
+      "from": "if (!result.grounded || result.sourceIds.length === 0) ungrounded.push(sample.question)",
+      "to": "void result"
+    },
+    {
+      "name": "扩展项和原词一样重",
+      "from": "v.set(related, weight * strength * EXPANSION_DAMPING)",
+      "to": "v.set(related, weight)"
+    },
+    {
+      "name": "共现一次就算相关",
+      "from": "filter(([, n]) => n >= MIN_COOCCURRENCE)",
+      "to": "filter(() => true)"
+    },
+    {
+      "name": "扩展表不定序",
+      "from": "      .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))",
+      "to": "      .sort((x, y) => y[1] - x[1])"
+    },
+    {
+      "name": "扩展项覆盖原词",
+      "from": "if (v.has(related)) continue",
+      "to": "void 0"
+    }
+  ]
+}
