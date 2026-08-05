@@ -1,0 +1,39 @@
+{
+  "file": "src/api/server.ts",
+  "test": "tests/integration/tenant-extension-api.test.ts",
+  "env": {
+    "TEST_ADMIN_DATABASE_URL": "postgresql://postgres@127.0.0.1:5432/postgres"
+  },
+  "mutations": [
+    {
+      "name": "写入路径用基底本体（字段看得见但写不进去）",
+      "from": "        const service = serviceIn(trx, subject.tenant, {\n          registry: activeRegistry,",
+      "to": "        const service = serviceIn(trx, subject.tenant, {\n          registry: deps.registry,"
+    },
+    {
+      "name": "类型目录不分租户（别人的扩展字段也看得到）",
+      "from": "    const registry =\n      caller === undefined ? deps.registry : await tenantRegistry(caller.subject.tenant)",
+      "to": "    const registry = deps.registry"
+    },
+    {
+      "name": "扩展不做校验（没命名空间的字段也能加）",
+      "from": "    validateExtension(ext, deps.registry.entityType(entityType))",
+      "to": "    deps.registry.entityType(entityType)"
+    },
+    {
+      "name": "校验时拿已扩展的注册表当基底（第二次 PUT 会拒掉自己上次加的字段）",
+      "from": "    validateExtension(ext, deps.registry.entityType(entityType))",
+      "to": "    validateExtension(ext, (await tenantRegistry(caller.subject.tenant)).entityType(entityType))"
+    },
+    {
+      "name": "改扩展不要写权限",
+      "from": "    await assertOn(request, 'Resource.Update')\n    await withTenant(db, caller.subject.tenant, (trx: Db) =>\n      new PgOntologyExtensionStore(trx, caller.subject.tenant).put(",
+      "to": "    await withTenant(db, caller.subject.tenant, (trx: Db) =>\n      new PgOntologyExtensionStore(trx, caller.subject.tenant).put("
+    },
+    {
+      "name": "删一个不存在的扩展也说成功",
+      "from": "    if (!removed) {\n      return reply.status(404).send({ error: 'not_found', message: `no extension for ${entityType}` })\n    }",
+      "to": "    void removed"
+    }
+  ]
+}

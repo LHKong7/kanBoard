@@ -2,6 +2,7 @@ import { ResourceService } from '../domain/resource/service.ts'
 import { PgResourceRepository } from './resource-repository.pg.ts'
 import { PgRelationRepository } from './relation-repository.pg.ts'
 import { PgOutbox } from './outbox.pg.ts'
+import { PgRelationRuleStore } from './relation-rule-store.pg.ts'
 import type { Db } from './db/client.ts'
 import type { Clock } from '../platform/clock.ts'
 import type { OntologyRegistry } from '../ontology/registry.ts'
@@ -31,6 +32,13 @@ export type ServiceParts = {
    * 这对纯读或纯巡检的路径是对的，但必须是**显式**的选择。
    */
   approvals?: PendingApprovalSink
+  /**
+   * 跑不跑自动关系建立规则（FR-ONT-008）。
+   *
+   * 默认**不跑**。这不是保守，是范围：规则会在写入路径上建边，
+   * 而巡检、迁移、SLA 这些路径不该顺手改图。要跑的路径显式打开它。
+   */
+  relationRules?: boolean
 }
 
 export function serviceIn(trx: Db, tenant: string, parts: ServiceParts): ResourceService {
@@ -42,6 +50,7 @@ export function serviceIn(trx: Db, tenant: string, parts: ServiceParts): Resourc
     events: new PgOutbox(trx),
     audit: parts.audit,
     ...(parts.approvals === undefined ? {} : { approvals: parts.approvals }),
+    ...(parts.relationRules === true ? { relationRules: new PgRelationRuleStore(trx, tenant) } : {}),
     policies: parts.policies,
     clock: parts.clock,
   })

@@ -135,7 +135,23 @@ export const BOUNDED_CONTEXTS: readonly BoundedContext[] = [
 ]
 
 /** 关系实例。`confidence` 与 `createdBy` 支撑 FR-ONT-006：Agent 推断的关系可被人工否决。 */
-export type RelationOrigin = 'human' | 'system' | `agent:${string}`
+/**
+ * 一条边是谁建的。
+ *
+ * `rule:<ruleId>` 和 `agent:<name>` 归成一类：**两者建的都是建议，不是事实**
+ * （FR-ONT-008 / FR-ONT-006）。图上的边是会被守卫读的——Release 只装 Done 的
+ * Task、Story 要有验收标准——所以一条没人看过的边可以让一批对象的状态机
+ * 行为整个变掉。它们因此都默认"待确认"，都必须带置信度。
+ *
+ * 分成两个前缀而不是共用一个，是因为出了问题要追得到源头：
+ * 一条边是哪条规则建的，和是哪个 Agent 推的，处理方式完全不同。
+ */
+export type RelationOrigin = 'human' | 'system' | `agent:${string}` | `rule:${string}`
+
+/** 建议性的来源：默认待确认、必须带置信度 */
+export function isProposal(origin: RelationOrigin): boolean {
+  return origin.startsWith('agent:') || origin.startsWith('rule:')
+}
 
 export type RelationInstance = {
   id: string

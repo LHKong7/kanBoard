@@ -143,6 +143,24 @@ export type LifecyclesTable = {
   updated_at: Date
 }
 
+export type RelationRulesTable = {
+  tenant: string
+  id: string
+  subject_type: string
+  definition: JSONColumnType<Record<string, unknown>, string, string>
+  enabled: Generated<boolean>
+  updated_by: string
+  updated_at: Date
+}
+
+export type OntologyExtensionsTable = {
+  tenant: string
+  entity_type: string
+  attributes: JSONColumnType<Record<string, unknown>[], string, string>
+  updated_by: string
+  updated_at: Date
+}
+
 export type SlaBreachesTable = {
   tenant: string
   resource_id: string
@@ -173,6 +191,8 @@ export type Database = {
   agent_memories: AgentMemoriesTable
   sla_breaches: SlaBreachesTable
   lifecycles: LifecyclesTable
+  relation_rules: RelationRulesTable
+  ontology_extensions: OntologyExtensionsTable
   agent_run_steps: AgentRunStepsTable
   connector_calls: ConnectorCallsTable
   relations: RelationsTable

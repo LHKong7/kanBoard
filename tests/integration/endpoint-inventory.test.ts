@@ -57,7 +57,9 @@ const EXPECTED = [
   'GET /v1/metrics/:id/items',
   'GET /v1/metrics:automation-rate',
   'GET /v1/ontology/entity-types',
+  'GET /v1/ontology/extensions',
   'GET /v1/ontology/health',
+  'GET /v1/ontology/relation-rules',
   'GET /v1/ontology/relation-types',
   'GET /v1/resources',
   'GET /v1/resources/:id',
@@ -83,7 +85,11 @@ const EXPECTED = [
   // 它做的是把外部系统的一条消息翻译成一个领域事件，
   // 之后走的是和内部事件完全同一条路。
   'POST /events/:source',
+  'PUT /v1/ontology/extensions/:entityType',
+  'PUT /v1/ontology/relation-rules/:id',
   'PUT /v1/workflows/:id',
+  'DELETE /v1/ontology/extensions/:entityType',
+  'DELETE /v1/ontology/relation-rules/:id',
   'DELETE /v1/relations/:id',
   'DELETE /v1/resources/:id',
   'PATCH /v1/resources/:id',

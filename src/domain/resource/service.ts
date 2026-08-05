@@ -22,6 +22,7 @@ import { newRelationId, newResourceId } from '../../platform/id.ts'
 import {
   relationCreated,
   relationRemoved,
+  relationRuleSkipped,
   resourceCreated,
   resourceDeleted,
   resourceStatusChanged,
@@ -33,6 +34,7 @@ import { answer } from '../retrieval/hybrid.ts'
 import type { Answer, Doc } from '../retrieval/hybrid.ts'
 import { sweep } from '../ontology-health/sweep.ts'
 import type { HealthReport, RelationSnapshot, ResourceSnapshot } from '../ontology-health/sweep.ts'
+import { edgesFor } from '../../ontology/relation-rules.ts'
 import type {
   AuditSink,
   EventSink,
@@ -43,12 +45,14 @@ import type {
   PathHit,
   PendingApprovalSink,
   RelationRepository,
+  RelationRuleSource,
   ResourceFilter,
   ResourceRepository,
   TraverseResult,
 } from './ports.ts'
 import { diffResource, VISIBILITIES } from './resource.ts'
 import type { CreateResourceInput, Resource, UpdateResourceInput, Visibility } from './resource.ts'
+import { isProposal } from '../../ontology/types.ts'
 import type { RelationInstance, RelationOrigin } from '../../ontology/types.ts'
 
 /**
@@ -101,6 +105,14 @@ export type ServiceDeps = {
   approvalTtlMs?: number
   /** 挂起单的缓冲。由调用方在独立事务里落盘——业务事务会回滚 */
   approvals?: PendingApprovalSink
+  /**
+   * 自动关系建立规则（FR-ONT-008）。
+   *
+   * 不给就是这条路径上不跑规则——这对巡检、迁移这类只读或批量路径是对的，
+   * 但必须是**显式**的选择。给了就每次写入现读一遍，
+   * 「变更即时生效」的全部内容就是这个"现读"。
+   */
+  relationRules?: RelationRuleSource
 }
 
 export class ResourceService {
@@ -246,6 +258,19 @@ export class ResourceService {
     })
   }
 
+  /**
+   * 只做一次授权判定，不带任何副作用。
+   *
+   * 存在的理由是：有些东西不是 Resource，但**改它等于改一批 Resource
+   * 的行为**——自动关系建立规则就是（FR-ONT-008：它决定图上会自动出现
+   * 什么边，而图上的边会被守卫读）。这类操作应当借用同一道闸，
+   * 而不是各自造一套判定——两套判定迟早会分叉，
+   * 而分叉的那一天没有人会发现。
+   */
+  async assertAllowed(caller: Caller, action: Capability, resource: ResourceRef): Promise<void> {
+    await this.#authorize(caller, action, resource)
+  }
+
   // ───────────────────────── 写 ─────────────────────────
 
   async create(caller: Caller, input: CreateResourceInput): Promise<Resource> {
@@ -330,6 +355,7 @@ export class ResourceService {
       await this.#linkToProject(caller, container, resource, now)
     }
 
+    await this.#applyRelationRules(caller, resource, now)
     return resource
   }
 
@@ -512,7 +538,81 @@ export class ResourceService {
       )
     }
 
+    // 改完再跑一次规则：定位靠的是属性文本，而属性正是刚被改掉的东西。
+    // 只在创建时跑的话，"把工单号补进描述里"这个最常见的动作不会有任何反应
+    await this.#applyRelationRules(caller, next, now)
     return next
+  }
+
+  /**
+   * 跑一遍自动关系建立规则（FR-ONT-008）。
+   *
+   * 三个决定：
+   *
+   * **规则现读。** 「变更即时生效」的全部内容就是这个"现读"——
+   * 加一层缓存换来的是"我改了规则但没生效"，而那是查起来极难的一类问题。
+   *
+   * **建出来的边是建议，不是事实**（`rule:<id>` 来源 → 待确认 + 置信度）。
+   * 图上的边会被守卫读：Release 只装 Done 的 Task、Story 要有验收标准。
+   * 直接当成已确认的话，一条随手写的规则就能让一批对象的状态机行为整个变掉。
+   *
+   * **一条边建不成，不能把别人的写入带走。** 用户只是改了个标题，
+   * 不该因为某条规则指向一个不存在的 id 而失败。但**安静地跳过等于
+   * 这条规则根本不存在**——所以每一次跳过都发一个事件。
+   */
+  async #applyRelationRules(caller: Caller, subject: Resource, now: Date): Promise<void> {
+    const source = this.#deps.relationRules
+    if (source === undefined) return
+
+    const rules = await source.enabledFor(subject.type)
+    if (rules.length === 0) return
+
+    // 候选只有 attributeEquals 那种定位需要。逐条规则各查一次，
+    // 而不是把全租户拉回来在内存里比——后者在一个大租户上就是一次全表扫描
+    const candidates: { id: string; type: string; attributes: Record<string, unknown> }[] = []
+    for (const rule of rules) {
+      if (rule.locator.kind !== 'attributeEquals') continue
+      const value = subject.attributes[rule.locator.attribute]
+      if (typeof value !== 'string' || value === '') continue
+      const found = await this.#deps.resources.query(
+        {
+          type: rule.locator.targetType,
+          attributes: { [rule.locator.targetAttribute]: value },
+        },
+        { size: RULE_CANDIDATES_MAX },
+      )
+      candidates.push(...found.items)
+    }
+
+    for (const edge of edgesFor(subject, rules, candidates)) {
+      try {
+        await this.relate(caller, {
+          type: edge.relationType,
+          fromId: edge.fromId,
+          toId: edge.toId,
+          confidence: edge.confidence,
+          origin: `rule:${edge.ruleId}`,
+        })
+      } catch (error) {
+        // 只咽下**领域层说不行**的那些：目标不存在（文本里随便提到一个 id）、
+        // 成环、类型不匹配。其它异常（数据库炸了）继续往上抛——
+        // 把它们也咽掉的话，一次真正的故障会表现为"规则今天没建边"
+        if (!(error instanceof NotFoundError || error instanceof ValidationError)) throw error
+        await this.#emit(
+          caller,
+          relationRuleSkipped({
+            tenant: subject.tenant,
+            ruleId: edge.ruleId,
+            relationType: edge.relationType,
+            fromId: edge.fromId,
+            toId: edge.toId,
+            reason: error.message,
+            occurredAt: now,
+            traceId: caller.traceId ?? null,
+          }),
+        )
+      }
+    }
   }
 
   // ───────────────────────── 生命周期 ─────────────────────────
@@ -875,10 +975,12 @@ export class ResourceService {
         ? (`agent:${caller.subject.principal.slice('agent://'.length)}` as RelationOrigin)
         : 'human')
 
-    // Agent 推断的关系必须带置信度（FR-ONT-006），否则无法区分"确定"和"猜的"
-    if (origin.startsWith('agent:') && args.confidence === undefined) {
-      throw new ValidationError('agent-inferred relations must declare a confidence value', {
+    // 推断出来的关系必须带置信度（FR-ONT-006 / FR-ONT-008），
+    // 否则无法区分"确定"和"猜的"
+    if (isProposal(origin) && args.confidence === undefined) {
+      throw new ValidationError('inferred relations must declare a confidence value', {
         field: 'confidence',
+        origin,
       })
     }
 
@@ -892,8 +994,8 @@ export class ResourceService {
       createdBy: origin,
       createdAt: now,
       confidence: args.confidence ?? null,
-      // Agent 建立的关系默认为"待确认"，人工/系统建立的直接生效
-      confirmed: origin.startsWith('agent:') ? null : true,
+      // 推断的关系默认"待确认"，人工/系统建立的直接生效
+      confirmed: isProposal(origin) ? null : true,
     }
 
     // 返回的是**库里那一条**。这条边已经存在时，把刚构造的对象原样返回
@@ -985,8 +1087,8 @@ export class ResourceService {
     if (relation === null || relation.tenant !== caller.subject.tenant) {
       throw new NotFoundError(relationId)
     }
-    if (!relation.createdBy.startsWith('agent:')) {
-      throw new ValidationError('only agent-inferred relations need confirmation', {
+    if (!isProposal(relation.createdBy)) {
+      throw new ValidationError('only inferred relations need confirmation', {
         createdBy: relation.createdBy,
       })
     }
@@ -1525,6 +1627,15 @@ export const MAX_TRAVERSE_LIMIT = 5000
  * 写成引用而不是再抄一个 200，是为了那边改了这边跟着改。
  */
 export const GRAPH_NODE_MAX = MAX_PAGE_SIZE
+
+/**
+ * 一条 attributeEquals 规则最多看多少个候选。
+ *
+ * 有上界是因为规则跑在**别人的写入路径**上：一条匹配得太宽的规则
+ * 不该让一次改标题变成一次全表扫描。取不完的部分不会被建边，
+ * 而那是对的——匹配到 200 个对象的规则本身就写错了。
+ */
+const RULE_CANDIDATES_MAX = MAX_PAGE_SIZE
 
 /**
  * 问答的候选集怎么收。

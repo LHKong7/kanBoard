@@ -22,6 +22,8 @@ export type DomainEventType =
   | 'ResourceStatusChanged'
   | 'RelationCreated'
   | 'RelationRemoved'
+  /** 一条规则想建的边没建成（FR-ONT-008）。安静跳过等于这条规则不存在 */
+  | 'RelationRuleSkipped'
   /**
    * 外部系统送进来的事件（FR-WF-006：GitHub / CI / Kafka）。
    *
@@ -143,6 +145,41 @@ export function relationRemoved(args: {
       fromId: args.fromId,
       toId: args.toId,
       removedBy: args.removedBy,
+    },
+    occurredAt: args.occurredAt,
+    traceId: args.traceId ?? null,
+  }
+}
+
+/**
+ * 一条规则想建的边**没建成**（FR-ONT-008）。
+ *
+ * 为什么这要是一个事件，而不是一句 catch 里的注释：规则跑在别人的写入
+ * 路径上，它失败了不该把那次写入带走（用户只是改了个标题）。
+ * 但**安静地跳过等于这条规则根本不存在**——而配规则的人会以为它在生效。
+ * 走 outbox 之后，"这条规则一直没建成过任何边"变成一个查得出来的事实。
+ */
+export function relationRuleSkipped(args: {
+  tenant: string
+  ruleId: string
+  relationType: string
+  fromId: string
+  toId: string
+  reason: string
+  occurredAt: Date
+  traceId?: string | null
+}): DomainEvent {
+  return {
+    type: 'RelationRuleSkipped',
+    tenant: args.tenant,
+    resourceId: args.fromId,
+    resourceType: 'Relation',
+    payload: {
+      ruleId: args.ruleId,
+      relationType: args.relationType,
+      fromId: args.fromId,
+      toId: args.toId,
+      reason: args.reason,
     },
     occurredAt: args.occurredAt,
     traceId: args.traceId ?? null,

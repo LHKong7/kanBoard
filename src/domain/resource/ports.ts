@@ -195,6 +195,17 @@ export interface PendingApprovalSink {
   record(approval: import('./resource.ts').Resource): void
 }
 
+/**
+ * 自动关系建立规则的来源（FR-ONT-008）。
+ *
+ * 定义成端口而不是让服务层直接认识存储：规则**每次写入之前现读**，
+ * 而"现读"是这条需求里「变更即时生效」的全部内容。缓存要不要加、
+ * 加在哪一层，是适配器的事。
+ */
+export interface RelationRuleSource {
+  enabledFor(subjectType: string): Promise<import('../../ontology/relation-rules.ts').RelationRule[]>
+}
+
 export interface EventSink {
   emit(event: DomainEvent): Promise<void>
 }

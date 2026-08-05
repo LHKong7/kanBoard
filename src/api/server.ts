@@ -1,7 +1,7 @@
 import { serviceIn } from '../infrastructure/service-factory.ts'
 import Fastify from 'fastify'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { ZodError } from 'zod'
+import { z, ZodError } from 'zod'
 import type { ZodIssue } from 'zod'
 import type pg from 'pg'
 import { createDb, withTenant } from '../infrastructure/db/client.ts'
@@ -34,6 +34,9 @@ import {
   askSchema,
   confirmRelationSchema,
   healthParamsSchema,
+  extensionSchema,
+  relationRuleIdSchema,
+  relationRuleSchema,
   relateSchema,
   relationDirectionSchema,
   resourceIdSchema,
@@ -46,6 +49,10 @@ import { PgLifecycleStore } from '../infrastructure/lifecycle-store.pg.ts'
 import type { ReloadingWorkflowRegistry } from '../infrastructure/lifecycle-store.pg.ts'
 import { toWire } from './serialize.ts'
 import { registerStatic } from './static.ts'
+import { PgRelationRuleStore } from '../infrastructure/relation-rule-store.pg.ts'
+import { validateRule } from '../ontology/relation-rules.ts'
+import { PgOntologyExtensionStore } from '../infrastructure/ontology-extension-store.pg.ts'
+import { registryFor, validateExtension } from '../ontology/tenant-extension.ts'
 
 export type ServerDeps = {
   pool: pg.Pool
@@ -151,16 +158,21 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const activeWorkflows = deps.lifecycles === undefined
       ? deps.workflows
       : await deps.lifecycles.current()
+    // 租户扩展也是每次现读（FR-ONT-009）。一个租户最多几行，
+    // 而缓存换来的是"我加了字段但写不进去"——一个说不清的不一致
+    const activeRegistry = await tenantRegistry(subject.tenant)
 
     try {
       return await withTenant(db, subject.tenant, async (trx: Db) => {
         const service = serviceIn(trx, subject.tenant, {
-          registry: deps.registry,
+          registry: activeRegistry,
           workflows: activeWorkflows,
           policies: deps.policies,
           audit,
           approvals,
           clock,
+          // HTTP 是人和 Agent 写东西的路径，规则就该在这里生效
+          relationRules: true,
         })
         return fn(service, caller)
       })
@@ -188,10 +200,140 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     }
   }
 
+  /**
+   * 某个租户看到的本体（FR-ONT-009）。
+   *
+   * `registryFor` 返回的是一份**新**注册表，绝不改动共享的那份基底——
+   * 改基底的话，一个租户加的字段会立刻出现在所有租户的表单上，
+   * 而那正是这条需求要防的事。没有扩展时它原样返回基底，不白造对象。
+   */
+  async function tenantRegistry(tenant: string): Promise<OntologyRegistry> {
+    const extensions = await withTenant(db, tenant, (trx: Db) =>
+      new PgOntologyExtensionStore(trx, tenant).list(),
+    )
+    return registryFor(deps.registry, tenant, extensions)
+  }
+
+  /** 当前请求的调用者。钩子覆盖了所有 /v1 路由，取不到是编程错误 */
+  function requireCaller(request: FastifyRequest): Caller {
+    const caller = callers.get(request)
+    if (caller === undefined) {
+      throw new DomainError('unauthenticated', 'identity was not resolved for this request', 401)
+    }
+    return caller
+  }
+
+  /**
+   * 在租户事务里操作规则存储。
+   *
+   * 授权走 `ResourceService`：规则决定图上会自动出现什么边，
+   * 而图上的边会被守卫读——**改规则的权限不该比改对象低**。
+   * 所以这里借 `Resource.Update` 这道闸，而不是新造一套。
+   */
+  async function inTenantStore<T>(
+    request: FastifyRequest,
+    fn: (store: PgRelationRuleStore) => Promise<T>,
+  ): Promise<T> {
+    const caller = requireCaller(request)
+    const write = request.method !== 'GET'
+    return inTenant(request, async (service, c) => {
+      await service.assertAllowed(c, write ? 'Resource.Update' : 'Resource.Read', {
+        tenant: caller.subject.tenant,
+      })
+      return withTenant(db, caller.subject.tenant, (trx: Db) =>
+        fn(new PgRelationRuleStore(trx, caller.subject.tenant)),
+      )
+    })
+  }
+
+  /**
+   * 只做授权，不带别的。
+   *
+   * 本体扩展和关系规则一样：改它等于改一批对象的行为
+   * （扩展决定哪些属性写得进去），所以借用同一道闸，
+   * 而不是各自造一套判定——两套判定迟早分叉。
+   */
+  async function assertOn(request: FastifyRequest, action: 'Resource.Read' | 'Resource.Update'): Promise<void> {
+    await inTenant(request, (service, caller) =>
+      service.assertAllowed(caller, action, { tenant: caller.subject.tenant }),
+    )
+  }
+
   // ── 本体：类型目录是公开可读的，UI 靠它渲染 ────────────────
-  app.get('/v1/ontology/entity-types', async () => ({
-    items: deps.registry.entityTypes(),
-  }))
+  //
+  // 但它**按租户不同**（FR-ONT-009）：扩展字段只出现在自己租户的目录里。
+  // 前端据它渲染表单，所以这条端点就是"扩展字段仅本租户可见"的兑现处
+  app.get('/v1/ontology/entity-types', async (request) => {
+    const caller = callers.get(request)
+    const registry =
+      caller === undefined ? deps.registry : await tenantRegistry(caller.subject.tenant)
+    return { items: registry.entityTypes() }
+  })
+
+  /**
+   * 租户级本体扩展（FR-ONT-009）。
+   *
+   * 加的字段必须带 `x_<tenant>_` 前缀、必须可选、不能是 derived。
+   * 这三条都在写入前判（`validateExtension`）：
+   * 一份写错的扩展如果先生效再报错，这个租户的写入会在它自己
+   * 察觉之前就开始失败——而报出来的错和扩展毫无关系。
+   */
+  app.get('/v1/ontology/extensions', async (request) => {
+    const caller = requireCaller(request)
+    await assertOn(request, 'Resource.Read')
+    const items = await withTenant(db, caller.subject.tenant, (trx: Db) =>
+      new PgOntologyExtensionStore(trx, caller.subject.tenant).list(),
+    )
+    return { items }
+  })
+
+  app.put('/v1/ontology/extensions/:entityType', async (request, reply) => {
+    const caller = requireCaller(request)
+    const entityType = z.string().min(1).max(64).parse((request.params as { entityType: string }).entityType)
+    const body = extensionSchema.parse(request.body)
+    // exactOptionalPropertyTypes 下 Zod 的 `.optional()` 产出 `T | undefined`，
+    // 而本体的可选属性是"这个键可以不在"。逐条重建而不是 as 断言：
+    // 断言会把将来某个真正不兼容的字段一起掩盖过去
+    const ext = {
+      tenant: caller.subject.tenant,
+      entityType,
+      attributes: body.attributes.map((a) => ({
+        name: a.name,
+        kind: a.kind,
+        ...(a.required === undefined ? {} : { required: a.required }),
+        ...(a.derived === undefined ? {} : { derived: a.derived }),
+        ...(a.values === undefined ? {} : { values: a.values }),
+        ...(a.target === undefined ? {} : { target: a.target }),
+        ...(a.maxLength === undefined ? {} : { maxLength: a.maxLength }),
+      })),
+    }
+    // 基底类型必须存在，而且校验用的是**基底**而不是已扩展的那份：
+    // 拿扩展过的注册表去判，第二次 PUT 会把自己上一次加的字段当成"已存在"
+    validateExtension(ext, deps.registry.entityType(entityType))
+
+    await assertOn(request, 'Resource.Update')
+    await withTenant(db, caller.subject.tenant, (trx: Db) =>
+      new PgOntologyExtensionStore(trx, caller.subject.tenant).put(
+        ext,
+        caller.subject.principal,
+        clock.now(),
+      ),
+    )
+    return reply.status(200).send(ext)
+  })
+
+  app.delete('/v1/ontology/extensions/:entityType', async (request, reply) => {
+    const caller = requireCaller(request)
+    const entityType = z.string().min(1).max(64).parse((request.params as { entityType: string }).entityType)
+    await assertOn(request, 'Resource.Update')
+    const removed = await withTenant(db, caller.subject.tenant, (trx: Db) =>
+      new PgOntologyExtensionStore(trx, caller.subject.tenant).remove(entityType),
+    )
+    if (!removed) {
+      return reply.status(404).send({ error: 'not_found', message: `no extension for ${entityType}` })
+    }
+    return reply.status(204).send()
+  })
 
   app.get('/v1/ontology/relation-types', async () => ({
     items: deps.registry.relationTypes(),
@@ -240,6 +382,50 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       grounded: result.grounded,
       candidates: result.candidates,
     }
+  })
+
+  /**
+   * 自动关系建立规则（FR-ONT-008）。
+   *
+   * 验收标准是「规则可增删改，变更即时生效」。"即时"在这里是字面意义的：
+   * 规则没有缓存，每次写入之前现读一遍——所以 PUT 返回之后的下一次
+   * 对象写入就按新规则走，不需要重启，也不存在"某个进程还在用旧规则"。
+   *
+   * 校验在**写入时**做。触发时才校验的话，一条写错的规则会安静地躺着，
+   * 直到某天某个对象恰好命中它，然后在一条和规则毫无关系的调用栈里报错。
+   */
+  app.get('/v1/ontology/relation-rules', async (request) => {
+    const items = await inTenantStore(request, (store) => store.list())
+    return {
+      items: items.map((r) => ({
+        ...r.rule,
+        updatedBy: r.updatedBy,
+        updatedAt: r.updatedAt.toISOString(),
+      })),
+    }
+  })
+
+  app.put('/v1/ontology/relation-rules/:id', async (request, reply) => {
+    const id = relationRuleIdSchema.parse((request.params as { id: string }).id)
+    const body = relationRuleSchema.parse(request.body)
+    const rule = { id, ...body }
+    // 本体校验先于写入，而且用的是**同一个** validateRule
+    validateRule(rule, deps.registry)
+
+    const caller = requireCaller(request)
+    await inTenantStore(request, (store) => store.put(rule, caller.subject.principal, clock.now()))
+    return reply.status(200).send(rule)
+  })
+
+  app.delete('/v1/ontology/relation-rules/:id', async (request, reply) => {
+    const id = relationRuleIdSchema.parse((request.params as { id: string }).id)
+    const removed = await inTenantStore(request, (store) => store.remove(id))
+    // 删一个不存在的规则要说 404。回 204 的话，"我删掉了那条规则"
+    // 和"我删的是个拼错的名字"没有任何区别
+    if (!removed) {
+      return reply.status(404).send({ error: 'not_found', message: `no relation rule "${id}"` })
+    }
+    return reply.status(204).send()
   })
 
   // 生命周期定义。UI 靠它渲染看板的列，而不是把状态硬编码在前端。

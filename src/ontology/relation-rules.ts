@@ -41,8 +41,8 @@ export type RelationRule = {
   locator: TargetLocator
   /** 置信度。规则建的边一律是建议，这个值决定它有多像一条建议 */
   confidence: number
-  enabled?: boolean
-  description?: string
+  enabled?: boolean | undefined
+  description?: string | undefined
 }
 
 /**

@@ -182,6 +182,73 @@ export const pathSchema = z.object({
   maxDepth: z.number().int().min(1).max(10).default(6),
 }).strict()
 
+/**
+ * 一条自动关系建立规则（FR-ONT-008）。
+ *
+ * 这里只校验**形状**。合法性（关系类型存在、定义域/值域对得上、
+ * 属性名在本体里、置信度严格在 0 与 1 之间）由 `validateRule` 判——
+ * 那份规则只有一处实现，在这里重写一遍必然漂移。
+ */
+export const relationRuleSchema = z
+  .object({
+    relationType: z.string().min(1).max(64),
+    subjectType: z.string().min(1).max(64),
+    locator: z.union([
+      z.object({ kind: z.literal('idInAttribute'), attribute: z.string().min(1).max(64) }).strict(),
+      z
+        .object({
+          kind: z.literal('attributeEquals'),
+          attribute: z.string().min(1).max(64),
+          targetType: z.string().min(1).max(64),
+          targetAttribute: z.string().min(1).max(64),
+        })
+        .strict(),
+    ]),
+    confidence: z.number(),
+    enabled: z.boolean().optional(),
+    description: z.string().max(500).optional(),
+  })
+  .strict()
+
+export const relationRuleIdSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z][a-z0-9-]*$/, 'rule id must be lowercase kebab-case')
+
+/**
+ * 租户级本体扩展（FR-ONT-009）。
+ *
+ * 这里只校验**形状**。三条真正的规则（必须带 `x_<tenant>_` 前缀、
+ * 必须可选、不能是 derived）由 `validateExtension` 判——
+ * 它们要读到基底类型才判得了，而且只该有一处实现。
+ */
+export const extensionSchema = z
+  .object({
+    attributes: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(64),
+            // 和 AttributeKind 逐字对齐。写成 z.string() 更省事，
+            // 但那样一个拼错的 kind 要到第一次写对象时才报错
+            kind: z.enum([
+              'string', 'text', 'richtext', 'int', 'float',
+              'percent', 'bool', 'datetime', 'enum', 'ref', 'json',
+            ]),
+            required: z.boolean().optional(),
+            derived: z.boolean().optional(),
+            values: z.array(z.string().max(64)).max(50).optional(),
+            target: z.string().max(64).optional(),
+            maxLength: z.number().int().positive().optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(50),
+  })
+  .strict()
+
 export const confirmRelationSchema = z.object({
   confirmed: z.boolean(),
 }).strict()
