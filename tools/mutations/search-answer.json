@@ -1,0 +1,39 @@
+{
+  "file": "src/domain/resource/service.ts",
+  "test": "tests/integration/search-answer.test.ts",
+  "env": {
+    "TEST_ADMIN_DATABASE_URL": "postgresql://postgres@127.0.0.1:5432/postgres"
+  },
+  "mutations": [
+    {
+      "name": "只取问句最前面的几个词（实词全轮不到）",
+      "from": "    const terms = keyTerms(input.question).slice(0, SEARCH_TERMS_MAX)",
+      "to": "    const terms = keyTerms(input.question).slice(0, 6)"
+    },
+    {
+      "name": "按整句话检索，而不是按词",
+      "from": "    const terms = keyTerms(input.question).slice(0, SEARCH_TERMS_MAX)",
+      "to": "    const terms = [input.question]"
+    },
+    {
+      "name": "type 不往下传（等于没有这个参数）",
+      "from": "        { text: term, ...(input.type === undefined ? {} : { type: input.type }) },",
+      "to": "        { text: term },"
+    },
+    {
+      "name": "没给焦点时把所有对象都当成很近",
+      "from": "      hops: hops.get(r.id) ?? null,",
+      "to": "      hops: hops.get(r.id) ?? 0,"
+    },
+    {
+      "name": "焦点对象自己不算 0 跳",
+      "from": "      hops.set(input.near, 0)",
+      "to": "      void input.near"
+    },
+    {
+      "name": "问答不过授权",
+      "from": "    await this.#authorize(caller, 'Resource.Read', { tenant: caller.subject.tenant })\n\n    const terms = keyTerms",
+      "to": "    const terms = keyTerms"
+    }
+  ]
+}

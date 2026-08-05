@@ -1,0 +1,39 @@
+{
+  "file": "src/domain/resource/service.ts",
+  "test": "tests/integration/ontology-health-api.test.ts",
+  "env": {
+    "TEST_ADMIN_DATABASE_URL": "postgresql://postgres@127.0.0.1:5432/postgres"
+  },
+  "mutations": [
+    {
+      "name": "快照里不含已删除的对象（断链就变成了指向不存在的 id）",
+      "from": "        { includeDeleted: true },",
+      "to": "        { includeDeleted: false },"
+    },
+    {
+      "name": "永远声称扫完了",
+      "from": "      complete: resourcesComplete && relationsComplete,",
+      "to": "      complete: true,"
+    },
+    {
+      "name": "只要有一边扫完就算扫完",
+      "from": "      complete: resourcesComplete && relationsComplete,",
+      "to": "      complete: resourcesComplete || relationsComplete,"
+    },
+    {
+      "name": "资源游标不前进（永远拿第一页）",
+      "from": "      cursor = page.nextCursor",
+      "to": "      cursor = undefined"
+    },
+    {
+      "name": "关系游标不前进（永远拿第一页）",
+      "from": "      after = batch[batch.length - 1]?.id ?? null",
+      "to": "      after = null"
+    },
+    {
+      "name": "巡检不过授权",
+      "from": "    await this.#authorize(caller, 'Resource.Read', { tenant: caller.subject.tenant })\n\n    const resources: ResourceSnapshot[] = []",
+      "to": "    const resources: ResourceSnapshot[] = []"
+    }
+  ]
+}

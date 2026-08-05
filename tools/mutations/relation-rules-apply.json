@@ -1,0 +1,34 @@
+{
+  "file": "src/domain/resource/service.ts",
+  "test": "tests/integration/relation-rules-api.test.ts",
+  "env": {
+    "TEST_ADMIN_DATABASE_URL": "postgresql://postgres@127.0.0.1:5432/postgres"
+  },
+  "mutations": [
+    {
+      "name": "创建时不跑规则",
+      "from": "    await this.#applyRelationRules(caller, resource, now)\n    return resource",
+      "to": "    return resource"
+    },
+    {
+      "name": "更新时不跑规则（补工单号没反应）",
+      "from": "    await this.#applyRelationRules(caller, next, now)\n    return next",
+      "to": "    return next"
+    },
+    {
+      "name": "规则建的边直接当成已确认的事实",
+      "from": "          origin: `rule:${edge.ruleId}`,",
+      "to": "          origin: 'human',"
+    },
+    {
+      "name": "建不成的边安静跳过，不发事件",
+      "from": "        await this.#emit(\n          caller,\n          relationRuleSkipped({",
+      "to": "        await Promise.resolve(\n          caller &&\n          ({"
+    },
+    {
+      "name": "把所有异常都咽下去（数据库炸了也表现为今天没建边）",
+      "from": "        if (!(error instanceof NotFoundError || error instanceof ValidationError)) throw error",
+      "to": "        void error"
+    }
+  ]
+}

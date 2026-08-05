@@ -1,0 +1,91 @@
+{
+  "file": "src/domain/migration/sync.ts",
+  "test": "tests/migration-sync.test.ts",
+  "mutations": [
+    {
+      "name": "mirror 阶段也能回写旧系统",
+      "from": "mirror: { toLocal: true, toRemote: false },",
+      "to": "mirror: { toLocal: true, toRemote: true },"
+    },
+    {
+      "name": "cutover 之后继续双写",
+      "from": "cutover: { toLocal: true, toRemote: false },",
+      "to": "cutover: { toLocal: true, toRemote: true },"
+    },
+    {
+      "name": "parallel 变成单向",
+      "from": "parallel: { toLocal: true, toRemote: true },",
+      "to": "parallel: { toLocal: true, toRemote: false },"
+    },
+    {
+      "name": "冲突按远端胜出悄悄合并",
+      "from": "    return {\n      kind: 'conflict',",
+      "to": "    return {\n      kind: 'update-local',\n      // @ts-expect-error mutation\n      _dropped: true,"
+    },
+    {
+      "name": "冲突不说哪几个字段对不上",
+      "from": "fields: diverged,",
+      "to": "fields: [],"
+    },
+    {
+      "name": "两边改成同一个样子也判冲突",
+      "from": "if (diverged.length === 0) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "加一个不写本地的阶段",
+      "from": "mirror: { toLocal: true, toRemote: false },",
+      "to": "mirror: { toLocal: false, toRemote: false },"
+    },
+    {
+      "name": "只读阶段的本地改动被丢掉",
+      "from": "  if (!allows(phase, 'toRemote')) {\n    return {\n      kind: 'held',",
+      "to": "  if (!allows(phase, 'toRemote')) {\n    return {\n      kind: 'noop',"
+    },
+    {
+      "name": "摘要不排序，字段顺序变了就算改过",
+      "from": "JSON.stringify(fields, Object.keys(fields).sort())",
+      "to": "JSON.stringify(fields)"
+    },
+    {
+      "name": "对账不查缺失",
+      "from": "missing.push(remote.externalId)",
+      "to": "void remote"
+    },
+    {
+      "name": "对账只比条数不比内容",
+      "from": "if (fields.length > 0) diverged.push({ externalId: remote.externalId, fields })",
+      "to": "matched++"
+    },
+    {
+      "name": "clean 忽略内容分叉",
+      "from": "clean: missing.length === 0 && diverged.length === 0,",
+      "to": "clean: missing.length === 0,"
+    },
+    {
+      "name": "clean 忽略记录缺失",
+      "from": "clean: missing.length === 0 && diverged.length === 0,",
+      "to": "clean: diverged.length === 0,"
+    },
+    {
+      "name": "本地新建的记录算成丢失",
+      "from": "    if (local.externalId === null) {\n      localOnly.push(local.localId)\n      continue\n    }",
+      "to": "    if (local.externalId === null) {\n      continue\n    }"
+    },
+    {
+      "name": "源那边已删的不报告",
+      "from": "const extra = [...localOnly, ...[...byExternal.keys()].filter((id) => !seen.has(id))]",
+      "to": "const extra = [...localOnly]"
+    },
+    {
+      "name": "没有 link 时不新建",
+      "from": "  if (local === null || link === null) {",
+      "to": "  if (false) {"
+    },
+    {
+      "name": "对账双向比字段，本地多出来的也算分叉",
+      "from": "for (const key of Object.keys(remote)) {",
+      "to": "for (const key of new Set([...Object.keys(local), ...Object.keys(remote)])) {"
+    }
+  ]
+}

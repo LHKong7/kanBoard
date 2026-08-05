@@ -1,0 +1,76 @@
+{
+  "file": "src/ontology/relation-rules.ts",
+  "test": "tests/relation-rules.test.ts",
+  "mutations": [
+    {
+      "name": "不查关系类型是否存在",
+      "from": "if (relation === undefined) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "不守本体定义域",
+      "from": "if (!relation.domain.includes(rule.subjectType)) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "不守本体值域",
+      "from": "if (rule.locator.kind === 'attributeEquals' && !relation.range.includes(rule.locator.targetType)) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "不查属性是否存在",
+      "from": "if (!subject.attributes.some((a) => a.name === attr)) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "允许 confidence 为 1",
+      "from": "if (!(rule.confidence > 0 && rule.confidence < 1)) {",
+      "to": "if (!(rule.confidence > 0 && rule.confidence <= 1)) {"
+    },
+    {
+      "name": "理由不进消息",
+      "from": "const why = problems.map((p) => `${p.path}: ${p.message}`).join('; ')",
+      "to": "const why = ''"
+    },
+    {
+      "name": "禁用的规则照样跑",
+      "from": "if (rule.enabled === false) continue",
+      "to": "if (false) continue"
+    },
+    {
+      "name": "不按 subjectType 过滤",
+      "from": "if (rule.subjectType !== subject.type) continue",
+      "to": "if (false) continue"
+    },
+    {
+      "name": "只取文本里的第一个 id",
+      "from": "for (const m of raw.matchAll(RESOURCE_ID)) if (m[1] !== undefined) targets.push(m[1])",
+      "to": "const m = RESOURCE_ID.exec(raw); if (m?.[1] !== undefined) targets.push(m[1])"
+    },
+    {
+      "name": "attributeEquals 不比类型",
+      "from": "if (c.type === targetType && c.attributes[targetAttribute] === raw) targets.push(c.id)",
+      "to": "if (c.attributes[targetAttribute] === raw) targets.push(c.id)"
+    },
+    {
+      "name": "允许自环",
+      "from": "if (toId === subject.id) continue",
+      "to": "if (false) continue"
+    },
+    {
+      "name": "重复的边不去重",
+      "from": "if (seen.has(key)) continue",
+      "to": "if (false) continue"
+    },
+    {
+      "name": "去重把关系类型也忽略掉",
+      "from": "const key = `${rule.relationType}:${toId}`",
+      "to": "const key = toId"
+    },
+    {
+      "name": "不带规则 id",
+      "from": "        ruleId: rule.id,\n        relationType: rule.relationType,",
+      "to": "        ruleId: '',\n        relationType: rule.relationType,"
+    }
+  ]
+}

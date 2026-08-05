@@ -1,0 +1,59 @@
+{
+  "file": "src/domain/ai/sprint-apply.ts",
+  "test": "tests/integration/sprint-apply.test.ts",
+  "env": {
+    "TEST_ADMIN_DATABASE_URL": "postgresql://postgres@127.0.0.1:5432/postgres"
+  },
+  "mutations": [
+    {
+      "name": "撤销时不删关系",
+      "from": "      await service.unrelate(caller, id)",
+      "to": "      void id"
+    },
+    {
+      "name": "撤销把已有的 Sprint 也删掉",
+      "from": "  if (applied.sprintCreated) {",
+      "to": "  if (true) {"
+    },
+    {
+      "name": "撤销不删自己建的 Sprint",
+      "from": "  if (applied.sprintCreated) {",
+      "to": "  if (false) {"
+    },
+    {
+      "name": "容量不记在 Sprint 上",
+      "from": "capacity: options.sprint.capacity ?? plan.capacity,",
+      "to": "capacity: 0,"
+    },
+    {
+      "name": "不打 agent-planned 标签",
+      "from": "      labels: ['agent-planned'],",
+      "to": "      labels: [],"
+    },
+    {
+      "name": "半途失败不回滚",
+      "from": "    await undoPlan(service, caller, { sprintId, relationIds, sprintCreated, planId: plan.id })\n    throw error",
+      "to": "    throw error"
+    },
+    {
+      "name": "重复撤销报错",
+      "from": "    try {\n      await service.unrelate(caller, id)\n      removed++\n    } catch {",
+      "to": "    {\n      await service.unrelate(caller, id)\n      removed++\n    }\n    if (false) {"
+    },
+    {
+      "name": "已删的 Sprint 再删一次会抛",
+      "from": "    if (sprint !== null && sprint.deletedAt === null) {",
+      "to": "    if (sprint !== null) {"
+    },
+    {
+      "name": "不返回建成的关系清单",
+      "from": "      relationIds.push(relation.id)",
+      "to": "      void relation"
+    },
+    {
+      "name": "排进已有 Sprint 时仍标记为新建",
+      "from": "  let sprintCreated = false",
+      "to": "  let sprintCreated = true"
+    }
+  ]
+}

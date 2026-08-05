@@ -1,0 +1,61 @@
+{
+  "file": "src/domain/ai/knowledge-recommender.ts",
+  "test": "tests/knowledge-recommender.test.ts",
+  "mutations": [
+    {
+      "name": "排序之后才过出处/时效的闸",
+      "from": "    if (!usableIds.has(candidate.knowledgeId)) continue",
+      "to": "    void usableIds"
+    },
+    {
+      "name": "不设分数下限",
+      "from": "if (score < MIN_SCORE) continue",
+      "to": "if (false) continue"
+    },
+    {
+      "name": "词面重合不参与打分",
+      "from": "overlap * WEIGHTS.overlap + proximity * WEIGHTS.proximity + freshness * WEIGHTS.freshness",
+      "to": "proximity * WEIGHTS.proximity + freshness * WEIGHTS.freshness"
+    },
+    {
+      "name": "图上距离不参与打分",
+      "from": "overlap * WEIGHTS.overlap + proximity * WEIGHTS.proximity + freshness * WEIGHTS.freshness",
+      "to": "overlap * WEIGHTS.overlap + freshness * WEIGHTS.freshness"
+    },
+    {
+      "name": "新鲜度不参与打分",
+      "from": "overlap * WEIGHTS.overlap + proximity * WEIGHTS.proximity + freshness * WEIGHTS.freshness",
+      "to": "overlap * WEIGHTS.overlap + proximity * WEIGHTS.proximity"
+    },
+    {
+      "name": "不连通当成很远而不是没关系",
+      "from": "const proximity = candidate.hops === null ? 0 : 1 / (1 + candidate.hops)",
+      "to": "const proximity = 1 / (1 + (candidate.hops ?? 1000))"
+    },
+    {
+      "name": "重合率除以被推那条的词数，长文档吃亏",
+      "from": "const overlap = subjectTerms.size === 0 ? 0 : hits / subjectTerms.size",
+      "to": "const overlap = terms.size === 0 ? 0 : hits / terms.size"
+    },
+    {
+      "name": "分数相同时顺序不确定",
+      "from": "items.sort((a, b) => b.score - a.score || a.knowledgeId.localeCompare(b.knowledgeId))",
+      "to": "items.sort((a, b) => b.score - a.score)"
+    },
+    {
+      "name": "不截断到 limit",
+      "from": "return { items: items.slice(0, limit), withheld: verdict }",
+      "to": "return { items, withheld: verdict }"
+    },
+    {
+      "name": "理由念全部三个信号而不是最强的",
+      "from": "  ranked.sort((a, b) => b.weight - a.weight)",
+      "to": "  ranked.sort((a, b) => a.weight - b.weight)"
+    },
+    {
+      "name": "旧知识不降权",
+      "from": "const freshness = Math.max(0, 1 - ageDays / STALE_AFTER_DAYS)",
+      "to": "const freshness = 1"
+    }
+  ]
+}

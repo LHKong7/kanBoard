@@ -1,0 +1,96 @@
+{
+  "file": "src/domain/ai/capabilities.ts",
+  "test": "tests/ai-capabilities.test.ts",
+  "mutations": [
+    {
+      "name": "覆盖率门槛降到 50%",
+      "from": "ACCEPTANCE_COVERAGE_MIN = 0.95",
+      "to": "ACCEPTANCE_COVERAGE_MIN = 0.5"
+    },
+    {
+      "name": "没有验收标准时算满分",
+      "from": "pass('no acceptance criteria to cover'), rate: 0",
+      "to": "pass('no acceptance criteria to cover'), rate: 1"
+    },
+    {
+      "name": "不列出未覆盖的是哪几条",
+      "from": "offenders: uncovered.map((a) => `${a.id}: ${a.then.slice(0, 60)}`),",
+      "to": "offenders: [],"
+    },
+    {
+      "name": "一律判为已覆盖",
+      "from": "return hits * 2 >= terms.length",
+      "to": "return true"
+    },
+    {
+      "name": "中文不做双字滑窗",
+      "from": "if (/[\\u4e00-\\u9fff\\u3040-\\u30ff\\uac00-\\ud7af]/.test(word)) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "不查 capacity",
+      "from": "if (points > plan.capacity) {",
+      "to": "if (points > plan.capacity * 10) {"
+    },
+    {
+      "name": "不查依赖顺序",
+      "from": "} else if (at > (position.get(id) ?? 0)) {",
+      "to": "} else if (at > (position.get(id) ?? 0) + 100) {"
+    },
+    {
+      "name": "不查依赖在不在这个 sprint 里",
+      "from": "if (at === undefined) {",
+      "to": "if (at === undefined && false) {"
+    },
+    {
+      "name": "放过编造出来的任务",
+      "from": "offenders.push(`${id}: not a known task`)",
+      "to": "void id"
+    },
+    {
+      "name": "一个候选方案就够",
+      "from": "MIN_SPRINT_CANDIDATES = 2",
+      "to": "MIN_SPRINT_CANDIDATES = 1"
+    },
+    {
+      "name": "不说是哪个候选不可行",
+      "from": ".flatMap((x) => x.v.offenders.map((o) => `${x.p.id}: ${o}`))",
+      "to": ".flatMap((x) => x.v.offenders)"
+    },
+    {
+      "name": "有出处的陈述也打待确认标记",
+      "from": "if (c.sourceIds.length > 0) return c.text",
+      "to": "if (false) return c.text"
+    },
+    {
+      "name": "无出处的删掉而不是标注",
+      "from": "return `${UNVERIFIED_MARK}${c.text}`\n  })",
+      "to": "return UNVERIFIED_MARK\n  })"
+    },
+    {
+      "name": "成文之后不复查",
+      "from": ".filter((c) => c.sourceIds.length === 0 && !rendered.includes(`${UNVERIFIED_MARK}${c.text}`))",
+      "to": ".filter(() => false)"
+    },
+    {
+      "name": "推荐不查出处",
+      "from": "if (item.sourceIds.length === 0) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "推荐不查时效",
+      "from": "if (item.validUntil !== null && item.validUntil.getTime() <= now.getTime()) {",
+      "to": "if (item.validUntil === null) {"
+    },
+    {
+      "name": "空字符串算有负责人",
+      "from": "item.assignee !== null && item.assignee !== ''",
+      "to": "item.assignee !== null"
+    },
+    {
+      "name": "不报告没有负责人的条目",
+      "from": "const offenders = items.filter((i) => !hasOwner(i)).map((i) => i.text.slice(0, 60))",
+      "to": "const offenders: string[] = []"
+    }
+  ]
+}

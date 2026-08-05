@@ -1,0 +1,76 @@
+{
+  "file": "src/ontology/compatibility.ts",
+  "test": "tests/ontology-compatibility.test.ts",
+  "mutations": [
+    {
+      "name": "minor 允许新增必填属性",
+      "from": "    if (next.required === true) {",
+      "to": "    if (false) {"
+    },
+    {
+      "name": "minor 允许删除属性",
+      "from": "      problems.push({ attribute: name, reason: 'removed; existing values would become unreadable' })",
+      "to": "      void name"
+    },
+    {
+      "name": "不查属性类型变化",
+      "from": "if (old.kind !== next.kind) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "允许把可选属性改成必填",
+      "from": "if (old.required !== true && next.required === true) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "允许收窄枚举",
+      "from": "if (dropped.length > 0) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "不说被丢掉的是哪几个枚举值",
+      "from": "reason: `enum narrowed, dropping ${JSON.stringify(dropped)}`",
+      "to": "reason: 'enum narrowed'"
+    },
+    {
+      "name": "允许缩小 maxLength",
+      "from": "if (oldMax !== undefined && newMax !== undefined && newMax < oldMax) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "patch 也能改模式",
+      "from": "  if (bump === 'patch' && problems.length === 0) {",
+      "to": "  if (false) {"
+    },
+    {
+      "name": "major 也走兼容检查",
+      "from": "  if (bump === 'major') return { bump, ok: true, problems: [] }",
+      "to": "  if (false) return { bump, ok: true, problems: [] }"
+    },
+    {
+      "name": "允许版本号回退",
+      "from": "  if (bMajor < aMajor) return 'invalid'",
+      "to": "  if (false) return 'invalid'"
+    },
+    {
+      "name": "同版本号也算升级",
+      "from": "  if (bPatch <= aPatch) return 'invalid'",
+      "to": "  if (bPatch < aPatch) return 'invalid'"
+    },
+    {
+      "name": "minor 回退当成 minor 升级",
+      "from": "  if (bMinor < aMinor) return 'invalid'",
+      "to": "  if (false) return 'invalid'"
+    },
+    {
+      "name": "非 semver 不判 invalid",
+      "from": "if (a.length !== 3 || b.length !== 3 || [...a, ...b].some(Number.isNaN)) return 'invalid'",
+      "to": "if (false) return 'invalid'"
+    },
+    {
+      "name": "遇到第一个问题就返回",
+      "from": "problems.push(...changeProblems(name, old, next))",
+      "to": "if (problems.length === 0) problems.push(...changeProblems(name, old, next))"
+    }
+  ]
+}

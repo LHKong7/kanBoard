@@ -1,0 +1,71 @@
+{
+  "file": "src/infrastructure/connectors/jira.ts",
+  "test": "tests/jira-translation.test.ts",
+  "mutations": [
+    {
+      "name": "未映射的字段默默扔掉",
+      "from": "        problems.push({\n          key: issue.key,\n          kind: 'unmapped-field',",
+      "to": "        void 0 && problems.push({\n          key: issue.key,\n          kind: 'unmapped-field',"
+    },
+    {
+      "name": "未映射的状态猜一个近似值",
+      "from": "        problems.push({\n          key: issue.key,\n          kind: 'unmapped-status',",
+      "to": "        fields['status'] = 'Todo'\n        void 0 && problems.push({\n          key: issue.key,\n          kind: 'unmapped-status',"
+    },
+    {
+      "name": "问题不带 issue key",
+      "from": "key: issue.key,\n          kind: 'unmapped-field',",
+      "to": "key: '',\n          kind: 'unmapped-field',"
+    },
+    {
+      "name": "没填过的字段也报问题",
+      "from": "if (ignore.has(name) || value === null || value === undefined) continue",
+      "to": "if (ignore.has(name)) continue"
+    },
+    {
+      "name": "ignore 名单不生效",
+      "from": "const ignore = new Set([...(options.ignore ?? []), ...JIRA_INTERNAL])",
+      "to": "const ignore = new Set([...JIRA_INTERNAL])"
+    },
+    {
+      "name": "不跑值翻译",
+      "from": "fields[mapping.to] = mapping.translate === undefined ? value : mapping.translate(value)",
+      "to": "fields[mapping.to] = value"
+    },
+    {
+      "name": "映射改成同名就搬",
+      "from": "const mapping = byFrom.get(name)",
+      "to": "const mapping = byFrom.get(name) ?? { from: name, to: name }"
+    },
+    {
+      "name": "读不出时间就给现在",
+      "from": "return new Date(0)",
+      "to": "return new Date(1)"
+    },
+    {
+      "name": "分页读到的条数不核对",
+      "from": "if (total !== null && all.length !== total) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "遇到第一个问题就中断",
+      "from": "        problems.push({\n          key: issue.key,\n          kind: 'unmapped-field',\n          detail: `field \"${name}\" has a value but no mapping and is not in the ignore list`,\n        })\n        continue",
+      "to": "        throw new DomainError('validation_failed', 'unmapped', 422)"
+    },
+    {
+      "name": "状态从对象里读不出来",
+      "from": "    const name = (value as Record<string, unknown>)['name']\n    if (typeof name === 'string') return name",
+      "to": "    return null"
+    },
+    {
+      "name": "分页不封顶",
+      "from": "for (let page = 0; page < maxPages; page++) {",
+      "to": "for (let page = 0; page < 3; page++) {"
+    },
+    {
+      "name": "分页不查重复，同一页回来两次也照收",
+      "from": "      if (seenKeys.has(issue.key)) {",
+      "to": "      if (false) {"
+    }
+  ]
+}

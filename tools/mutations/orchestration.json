@@ -1,0 +1,111 @@
+{
+  "file": "src/workflow/orchestration.ts",
+  "test": "tests/orchestration.test.ts",
+  "mutations": [
+    {
+      "name": "补偿按正序执行",
+      "from": "actions: [...state.performed].reverse().map((p) => ({ stepId: p.stepId, action: p.compensate })),\n    }\n  }",
+      "to": "actions: state.performed.map((p) => ({ stepId: p.stepId, action: p.compensate })),\n    }\n  }"
+    },
+    {
+      "name": "失败不触发补偿",
+      "from": "const failed = state.completed.find((c) => c.status === 'failed' || c.status === 'timeout')",
+      "to": "const failed = undefined"
+    },
+    {
+      "name": "超时不算失败",
+      "from": "c.status === 'failed' || c.status === 'timeout')",
+      "to": "c.status === 'failed')"
+    },
+    {
+      "name": "补偿理由不带原因",
+      "from": "reason: `step \"${failed.stepId}\" ${failed.status}${failed.error === undefined ? '' : `: ${failed.error}`}`,",
+      "to": "reason: 'failed',"
+    },
+    {
+      "name": "并行只跑第一条分支",
+      "from": "const actions = ready.flatMap((i) => (i.kind === 'do' ? i.steps : []))",
+      "to": "const actions = ready.flatMap((i) => (i.kind === 'do' ? i.steps : [])).slice(0, 1)"
+    },
+    {
+      "name": "循环轮次数错",
+      "from": "const all = bodyIds.every((b) => done.has(`${b}${suffix}${r}`))",
+      "to": "const all = bodyIds.some((b) => done.has(`${b}${suffix}${r}`))"
+    },
+    {
+      "name": "循环上界悄悄退出",
+      "from": "if (rounds >= step.maxIterations) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "循环不看退出条件",
+      "from": "if (last?.value !== undefined && step.untilAnyOf.includes(last.value)) continue",
+      "to": "if (false) continue"
+    },
+    {
+      "name": "分支取第一轮而不是最后一轮",
+      "from": ".sort((a, b) => roundSuffix(a.stepId) - roundSuffix(b.stepId))\n    .at(-1)",
+      "to": ".sort((a, b) => roundSuffix(a.stepId) - roundSuffix(b.stepId))\n    .at(0)"
+    },
+    {
+      "name": "分支查不到循环里的结果",
+      "from": "const decided = outcome.get(step.on) ?? lastRoundOf(step.on, state)",
+      "to": "const decided = outcome.get(step.on)"
+    },
+    {
+      "name": "没有 otherwise 时不中止",
+      "from": "const chosen = step.cases[decided.value ?? ''] ?? step.otherwise ?? []",
+      "to": "const chosen = step.cases[decided.value ?? ''] ?? []"
+    },
+    {
+      "name": "人工节点不设截止时间",
+      "from": "if (now.getTime() > deadline.getTime()) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "人工超时一律继续",
+      "from": "if (step.onTimeout === 'proceed') continue",
+      "to": "  continue"
+    },
+    {
+      "name": "循环体不打轮次后缀",
+      "from": "step.body.map((s) => withRound(s, step.id, round)),",
+      "to": "step.body,"
+    },
+    {
+      "name": "校验不查人工超时",
+      "from": "if (step.kind === 'human' && step.timeoutMs <= 0) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "校验不查未知步骤引用",
+      "from": "if (!ids.has(step.on)) problems.push(`branch \"${step.id}\" reads unknown step \"${step.on}\"`)",
+      "to": "void ids"
+    },
+    {
+      "name": "校验不查重名",
+      "from": "if (ids.has(step.id)) problems.push(`duplicate step id \"${step.id}\"`)",
+      "to": "void step"
+    },
+    {
+      "name": "校验不查并行分支数",
+      "from": "if (step.branches.length < 2) problems.push(`parallel \"${step.id}\" needs at least two branches`)",
+      "to": "void step"
+    },
+    {
+      "name": "校验不查循环上界",
+      "from": "if (step.maxIterations < 1) problems.push(`loop \"${step.id}\" must allow at least one iteration`)",
+      "to": "void step"
+    },
+    {
+      "name": "循环只认第一个出口值",
+      "from": "step.untilAnyOf.includes(last.value)",
+      "to": "last.value === step.untilAnyOf[0]"
+    },
+    {
+      "name": "校验不查循环出口为空",
+      "from": "if (step.untilAnyOf.length === 0) problems.push(`loop \"${step.id}\" has no exit value at all`)",
+      "to": "void step"
+    }
+  ]
+}

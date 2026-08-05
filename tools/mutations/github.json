@@ -1,0 +1,84 @@
+{
+  "file": "src/infrastructure/connectors/github.ts",
+  "test": "tests/integration/github-connector.test.ts",
+  "env": {
+    "TEST_ADMIN_DATABASE_URL": "postgresql://postgres@127.0.0.1:5432/postgres"
+  },
+  "mutations": [
+    {
+      "name": "请求方法写成 GET",
+      "from": "'POST',\n          `/repos/${repo}/pulls`",
+      "to": "'GET',\n          `/repos/${repo}/pulls`"
+    },
+    {
+      "name": "PR 路径写错",
+      "from": "`/repos/${repo}/pulls`",
+      "to": "`/repos/${repo}/pull`"
+    },
+    {
+      "name": "不带 API 版本头",
+      "from": "'x-github-api-version': API_VERSION,",
+      "to": ""
+    },
+    {
+      "name": "不带 accept 头",
+      "from": "accept: 'application/vnd.github+json',",
+      "to": "accept: '*/*',"
+    },
+    {
+      "name": "不注入凭据",
+      "from": "headers['authorization'] = `Bearer ${secret}`",
+      "to": "void secret"
+    },
+    {
+      "name": "readChecks 不按 sha 过滤",
+      "from": "`/repos/${repo}/actions/runs?head_sha=${encodeURIComponent(sha)}&per_page=100`",
+      "to": "`/repos/${repo}/actions/runs?per_page=100`"
+    },
+    {
+      "name": "repo 形状不校验",
+      "from": "if (!/^[\\w.-]+\\/[\\w.-]+$/.test(target)) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "缺少必填参数不报错",
+      "from": "if (value === undefined || value === '') {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "在途取消报成服务不可用",
+      "from": "      if (signal?.aborted === true) {\n        throw new DomainError('cancelled', 'github call was cancelled', 499)\n      }\n",
+      "to": ""
+    },
+    {
+      "name": "非 2xx 当成功",
+      "from": "if (!response.ok) {",
+      "to": "if (false) {"
+    },
+    {
+      "name": "未知的 CI 结论算成功",
+      "from": "!['success', 'neutral', 'skipped'].includes(run.conclusion)",
+      "to": "['failure'].includes(run.conclusion)"
+    },
+    {
+      "name": "skipped 算失败",
+      "from": "['success', 'neutral', 'skipped']",
+      "to": "['success']"
+    },
+    {
+      "name": "在跑压过失败",
+      "from": "failing.length > 0 ? 'failing' : pending ? 'pending' : 'passing'",
+      "to": "pending ? 'pending' : failing.length > 0 ? 'failing' : 'passing'"
+    },
+    {
+      "name": "把在跑并进失败",
+      "from": "if (run.status !== 'completed') {\n      pending = true\n      continue\n    }",
+      "to": "if (run.status !== 'completed') {\n      continue\n    }"
+    },
+    {
+      "name": "不说哪个 run 失败了",
+      "from": "failing.push({ name: run.name ?? `run ${run.id}`, url: run.html_url ?? '' })",
+      "to": "failing.push({ name: '', url: '' })"
+    }
+  ]
+}

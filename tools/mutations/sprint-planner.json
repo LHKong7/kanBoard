@@ -1,0 +1,71 @@
+{
+  "file": "src/domain/ai/sprint-planner.ts",
+  "test": "tests/sprint-planner.test.ts",
+  "mutations": [
+    {
+      "name": "超容量也排进去",
+      "from": "if (points + cost > capacity) return false",
+      "to": "if (false) return false"
+    },
+    {
+      "name": "只算自己的点数，不算依赖链",
+      "from": "const bundle = [...pending, task]",
+      "to": "const bundle = [task]"
+    },
+    {
+      "name": "依赖排在后面",
+      "from": "    chosen.push(task.id)\n    inPlan.add(task.id)",
+      "to": "    chosen.unshift(task.id)\n    inPlan.add(task.id)"
+    },
+    {
+      "name": "依赖排不进也照排本身",
+      "from": "      if (!admit(dep, chain)) return false",
+      "to": "      admit(dep, chain)"
+    },
+    {
+      "name": "不说排不进去的原因",
+      "from": "      excluded.push({\n        taskId: task.id,",
+      "to": "      void 0 && excluded.push({\n        taskId: task.id,"
+    },
+    {
+      "name": "重复方案不去重",
+      "from": "if (seen.has(key)) continue",
+      "to": "if (false) continue"
+    },
+    {
+      "name": "value-first 不按优先级",
+      "from": "        return (b.priority ?? 0) - (a.priority ?? 0) || a.id.localeCompare(b.id)",
+      "to": "        return a.id.localeCompare(b.id)"
+    },
+    {
+      "name": "quick-wins 不按点数",
+      "from": "        return a.points - b.points || a.id.localeCompare(b.id)",
+      "to": "        return a.id.localeCompare(b.id)"
+    },
+    {
+      "name": "unblock-first 不按阻塞深度",
+      "from": "        return (depth.get(b.id) ?? 0) - (depth.get(a.id) ?? 0) || a.id.localeCompare(b.id)",
+      "to": "        return a.id.localeCompare(b.id)"
+    },
+    {
+      "name": "只数直接依赖",
+      "from": "const total = children.reduce((sum, child) => sum + 1 + walk(child, chain), 0)",
+      "to": "const total = children.length"
+    },
+    {
+      "name": "环上死循环",
+      "from": "    if (chain.has(id)) return 0",
+      "to": "    if (false) return 0"
+    },
+    {
+      "name": "backlog 外的依赖当成不满足",
+      "from": "      if (dep === undefined) continue",
+      "to": "      if (dep === undefined) return false"
+    },
+    {
+      "name": "候选之间不做区分（全用同一策略）",
+      "from": "export const STRATEGIES: readonly PlanStrategy[] = ['value-first', 'unblock-first', 'quick-wins']",
+      "to": "export const STRATEGIES: readonly PlanStrategy[] = ['value-first']"
+    }
+  ]
+}

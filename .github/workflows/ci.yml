@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_ADMIN_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium for UI tests
+        run: pnpm exec playwright install --with-deps chromium
+
+      # 一步跑完 `pnpm check`，而不是把每条检查抄成一个 step。
+      #
+      # 抄成多个 step 读起来更清楚，代价是**两份清单会漂移**：
+      # `lint:network`（FR-CON-002 的源码扫描）加进 check 之后
+      # 一直没有补到这里来，于是那条护栏在 CI 里从来没跑过——
+      # 一条从不执行的检查和没有这条检查是一回事，
+      # 而它看起来是有的。现在 check 是唯一的清单。
+      #
+      # check = lint:lockfile（lockfile 与 package.json 一致）
+      #       + typecheck（含 tests/ 与 tools/）
+      #       + lint:layers（分层方向，FR-ARCH-001）
+      #       + lint:network（Agent 不得直连网络，FR-CON-002）
+      #       + lint:coverage（进度表的合计必须等于各行之和）
+      #       + test（集成测试以非超级用户连接，RLS 是真的在生效）
+      #       + test:ui（真实浏览器）
+      #
+      # lint:lockfile 排在最前面，因为它是 CI 的第一步在做的事。
+      # 它是补上去的：把 playwright 从 devDependencies 挪到 dependencies 之后
+      # 没有重新生成 lockfile，于是 CI 连续四个 commit 死在
+      # `pnpm install --frozen-lockfile`——**一个测试都没跑到**，
+      # 而本地 `pnpm check` 全绿，因为本地根本不执行 install。
+      # 本地检查漏掉了 CI 的第一步，就等于本地的绿色不代表任何事。
+      - name: Check
+        run: pnpm check
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'

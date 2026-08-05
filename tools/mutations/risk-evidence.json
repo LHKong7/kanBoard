@@ -1,0 +1,14 @@
+{
+  "file": "src/workflow/defaults.ts",
+  "test": "tests/integration/graph.test.ts",
+  "env": {
+    "TEST_ADMIN_DATABASE_URL": "postgresql://postgres@127.0.0.1:5432/postgres"
+  },
+  "mutations": [
+    {
+      "name": "风险不必指出证据实体（FR-AI-006）",
+      "from": "        { kind: 'hasRelation', type: 'evidencedBy', direction: 'out' },",
+      "to": ""
+    }
+  ]
+}

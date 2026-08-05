@@ -1,0 +1,24 @@
+{
+  "file": "src/infrastructure/relation-repository.pg.ts",
+  "test": "tests/integration/graph.test.ts",
+  "env": {
+    "TEST_ADMIN_DATABASE_URL": "postgresql://postgres@127.0.0.1:5432/postgres"
+  },
+  "mutations": [
+    {
+      "name": "不要求边的起点在图上（画出一端悬空的线）",
+      "from": "      .where('from_id', 'in', [...ids])\n      .where('to_id', 'in', [...ids])",
+      "to": "      .where('to_id', 'in', [...ids])"
+    },
+    {
+      "name": "不要求边的终点在图上",
+      "from": "      .where('from_id', 'in', [...ids])\n      .where('to_id', 'in', [...ids])\n      .orderBy('created_at', 'desc')",
+      "to": "      .where('from_id', 'in', [...ids])\n      .orderBy('created_at', 'desc')"
+    },
+    {
+      "name": "空节点集也去查一遍库",
+      "from": "    if (ids.length === 0) return []",
+      "to": "    if (false) return []"
+    }
+  ]
+}

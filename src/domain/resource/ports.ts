@@ -1,0 +1,246 @@
+import type { RelationInstance } from '../../ontology/types.ts'
+import type { Decision } from '../../identity/types.ts'
+import type { DomainEvent } from '../events.ts'
+import type { HistoryEntry, Resource } from './resource.ts'
+
+/**
+ * 端口（Ports）。领域层只认这些接口，不认 Kysely、pg 或 Fastify。
+ * dependency-cruiser 在 CI 中强制这一点（FR-ARCH-001）。
+ */
+
+export type ResourceFilter = {
+  type?: string | undefined
+  project?: string | undefined
+  workspace?: string | undefined
+  status?: readonly string[] | undefined
+  labels?: readonly string[] | undefined
+  owner?: string | undefined
+  /** attributes 的精确匹配，键为属性名 */
+  attributes?: Record<string, unknown> | undefined
+  /**
+   * 按 id 批量取。空数组表示"一个都不要"，与不传（不限制）不是一回事。
+   *
+   * 存在的理由是避免 N+1：守卫要看一批相关对象的状态，
+   * 逐个 findById 会让一次抽屉展开发出几十条查询。
+   */
+  ids?: readonly string[] | undefined
+  includeDeleted?: boolean | undefined
+  /**
+   * 全文检索词（FR-RES-016）。
+   *
+   * 匹配范围是标签与属性的**值**，不含键名——否则搜 "title" 会命中全表。
+   * 词形如资源 id 时走主键精确匹配，方便"粘贴一个 id 过来找对象"。
+   * 与其余条件是 AND：`{type:'Requirement', text:'状态机'}` 表示两者都要满足。
+   */
+  text?: string | undefined
+}
+
+/** 可分组的字段。限定成一小组：任意字段分组会变成一个没有边界的查询接口 */
+export type GroupableField = 'status' | 'type' | 'owner' | 'project'
+
+export type GroupCount = {
+  key: string
+  count: number
+}
+
+/**
+ * 一页最多返回多少条。
+ *
+ * 这是**契约的一部分**，不是某个仓储的内部选择：传更大的 `size`
+ * 不会报错，多出来的那些会被安静地夹掉。调用方要是自己算过一遍
+ * "我要取 300 个"，那 100 个的消失不会有任何信号。
+ *
+ * 写成常量而不是各处的字面量 200，是为了让依赖它的地方
+ * （比如关系图的节点上界）跟它一起变，而不是各自记着一个数字。
+ */
+export const MAX_PAGE_SIZE = 200
+
+export type Page = {
+  size: number
+  /** 游标即上一页最后一条的 id。ULID 有序，因此 id 就是稳定游标（FR-RES-012）。 */
+  cursor?: string | undefined
+}
+
+export type PageResult<T> = {
+  items: T[]
+  nextCursor: string | null
+}
+
+/**
+ * 遍历规格。
+ *
+ * 方向被折进两个类型列表，而不是单独的 direction 字段：
+ * 逆关系的解析需要本体知识（服务层有，仓储层没有），
+ * 折算完再传下来，基础设施层就只需要照着走图。
+ */
+export type TraverseSpec = {
+  start: string
+  /** 沿出边走时匹配的关系类型 */
+  followOut: readonly string[]
+  /** 沿入边走时匹配的关系类型 */
+  followIn: readonly string[]
+  maxDepth: number
+  /**
+   * 返回节点数上限。
+   *
+   * 没有上限的遍历不是"偶尔慢"，是**没有上界**：项目越大返回越多，
+   * 一个 Project 的全后代在基准里是 10,100 个节点 / 1.12MB。
+   * 上限之外的部分由 `truncated` 显式告知——静默截断比慢更糟，
+   * 调用方会以为自己拿到了全部。
+   */
+  limit: number
+}
+
+export type TraverseResult = {
+  hits: TraverseHit[]
+  /** 命中数超过 limit，返回的是前 limit 个（按深度、id 排序） */
+  truncated: boolean
+}
+
+export type TraverseHit = {
+  id: string
+  type: string
+  depth: number
+  /** 从 start 到该节点经过的关系类型序列 */
+  path: readonly string[]
+}
+
+export type PathHit = {
+  nodes: readonly string[]
+  relations: readonly string[]
+}
+
+export interface ResourceRepository {
+  insert(resource: Resource): Promise<void>
+  findById(id: string): Promise<Resource | null>
+  /** 带乐观锁的更新；版本不符返回 false，由服务层抛 ConflictError */
+  update(resource: Resource, expectedVersion: number): Promise<boolean>
+  query(filter: ResourceFilter, page: Page): Promise<PageResult<Resource>>
+  /**
+   * 分组计数（FR-DASH-005）。
+   *
+   * 指标必须**算出来**，不能靠人填。而"算"如果是把行拉回来在内存里数，
+   * 一个 100 万行的租户就会把进程打死——所以计数留在数据库里。
+   * 过滤条件与 `query` 完全共用，指标和它的下钻明细因此不可能对不上。
+   */
+  /**
+   * 对某个属性求和 / 求平均（FR-DASH-001/002/003）。
+   *
+   * 非数值的属性会被忽略而不是当成 0：把一段文本算作 0
+   * 会让平均值悄悄偏低，而没有任何迹象。返回的 `counted`
+   * 说明真正参与计算的有几条
+   */
+  aggregate(
+    filter: ResourceFilter,
+    fn: 'sum' | 'avg',
+    attribute: string,
+  ): Promise<{ value: number; counted: number }>
+  countGrouped(filter: ResourceFilter, groupBy: GroupableField): Promise<GroupCount[]>
+  appendHistory(entry: HistoryEntry): Promise<void>
+  history(resourceId: string, page: Page): Promise<PageResult<HistoryEntry>>
+}
+
+/**
+ * 插入关系的结果。
+ *
+ * `created: false` 表示这条边本来就在，返回的是**库里那一条**而不是刚构造的对象。
+ * 重复建边是幂等的（自动化规则会反复触发），但幂等不等于可以谎报：
+ * 早先这里回的是传进来的对象，接口于是返回 201 并附上一个数据库里
+ * 不存在的 id——拿它去删会 404（docs/dogfooding-log.md #8）。
+ */
+export type InsertRelationResult = {
+  relation: RelationInstance
+  created: boolean
+}
+
+export interface RelationRepository {
+  insert(relation: RelationInstance): Promise<InsertRelationResult>
+  remove(relationId: string): Promise<boolean>
+  findById(relationId: string): Promise<RelationInstance | null>
+  /** direction=out 查 from_id，in 查 to_id；both 合并 */
+  listFor(resourceId: string, direction: 'out' | 'in' | 'both', type?: string): Promise<RelationInstance[]>
+  traverse(spec: TraverseSpec): Promise<TraverseResult>
+  /**
+   * 一批对象**之间**的边（诱导子图）。
+   *
+   * `traverse` 回答的是"能走到谁"，回答不了"他们彼此之间怎么连"——
+   * 它的 `DISTINCT ON (id)` 每个节点只保留最短的那条路径，
+   * 于是同层节点之间的横向连边一条都不在结果里。画图要的是后者：
+   * 少画一条边不是"简化"，是**告诉看图的人那两个东西没关系**。
+   *
+   * 逐个 `listFor` 也能拼出来，但那是节点数量级的往返。
+   */
+  edgesAmong(ids: readonly string[]): Promise<RelationInstance[]>
+  /**
+   * 按 id 顺序扫全租户的边，用于巡检（FR-ONT-010）。
+   *
+   * 游标是上一批最后一条的 id，和资源那边同一个套路：
+   * 用 OFFSET 的话，扫描期间新建的边会让后面的批次**整体错位**，
+   * 于是漏掉的和重复的都有，而报告不会说这件事。
+   */
+  scanAll(after: string | null, limit: number): Promise<RelationInstance[]>
+  shortestPath(from: string, to: string, maxDepth: number): Promise<PathHit | null>
+  setConfirmed(relationId: string, confirmed: boolean): Promise<boolean>
+}
+
+/**
+ * 待人工确认的挂起单（FR-IAM-009）。
+ *
+ * 和审计是同一个道理：它必须在**业务事务回滚之后**依然存在。
+ * 被 Ask 挡下的请求会抛 428，事务随之回滚——挂起单写在同一个事务里的话，
+ * 会跟着一起消失，于是"系统说要审批，但审批列表里什么都没有"。
+ * 所以缓冲下来，由调用方在独立事务里落盘。
+ */
+export interface PendingApprovalSink {
+  record(approval: import('./resource.ts').Resource): void
+}
+
+/**
+ * 自动关系建立规则的来源（FR-ONT-008）。
+ *
+ * 定义成端口而不是让服务层直接认识存储：规则**每次写入之前现读**，
+ * 而"现读"是这条需求里「变更即时生效」的全部内容。缓存要不要加、
+ * 加在哪一层，是适配器的事。
+ */
+export interface RelationRuleSource {
+  enabledFor(subjectType: string): Promise<import('../../ontology/relation-rules.ts').RelationRule[]>
+}
+
+export interface EventSink {
+  emit(event: DomainEvent): Promise<void>
+}
+
+/**
+ * 审计里记录的判定。
+ *
+ * PDP 只输出 Allow / Deny，但审计要回答的问题比"权限够不够"更宽：
+ * **一次被拒绝的尝试**都得留痕（见 docs/development.md §7）。
+ * 被工作流守卫挡回去的自动化正属于此类——权限是够的（PDP 判了 Allow），
+ * 是状态机不让走。用独立的 `Rejected` 而不是复用 `Deny`：
+ * Deny 意味着权限不足，是要去查权限配置的信号，两者混在一起
+ * 会让"有多少次越权尝试"这个数字失真。
+ */
+export type AuditEffect = Decision['effect'] | 'Rejected'
+
+export type AuditOutcome = {
+  effect: AuditEffect
+  reason: string
+  matchedPolicy?: string | undefined
+}
+
+export type AuditRecord = {
+  tenant: string
+  subject: string
+  onBehalfOf: string | null
+  action: string
+  resourceId: string | null
+  resourceType: string | null
+  decision: AuditOutcome
+  runRef: string | null
+  occurredAt: Date
+  traceId: string | null
+}
+
+export interface AuditSink {
+  record(entry: AuditRecord): Promise<void>
+}
