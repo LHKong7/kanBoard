@@ -1,7 +1,7 @@
 # ProjectOS — AI Native Project Operating System
 
 > 代号：kanBoard → **ProjectOS**
-> 当前阶段：需求定义（PRD v1.0）
+> 当前阶段：M1 实现中 · [**先跑起来 →**](docs/running.md)
 
 ProjectOS 是面向 AI 时代的软件研发**项目操作系统**。
 
@@ -23,6 +23,7 @@ Idea → Objective → Requirement → Architecture → Implementation
 
 | 文档 | 内容 |
 | --- | --- |
+| [**docs/running.md**](docs/running.md) | **怎么把项目跑起来**：五步从零到能点，含排障与环境变量 |
 | [docs/README.md](docs/README.md) | 文档索引与阅读顺序 |
 | [docs/prd-coverage.md](docs/prd-coverage.md) | **PRD 覆盖情况**：每模块 Must 条数与已交付数，以及 PRD 之外加了什么 |
 | [docs/agent-status.md](docs/agent-status.md) | **Agent 层**逐条交付状态 |

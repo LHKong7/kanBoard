@@ -7,6 +7,7 @@
 ```
 docs/
 ├── README.md                 本文件：文档索引
+├── running.md                **怎么跑起来**：五步、排障、环境变量总表
 ├── development.md            开发指南（环境、命令、分层约定、两个前端）
 ├── m0-status.md              M0 进度、出口标准核对、已知欠账
 ├── m1-status.md              M1 进度：工作流引擎、自动化、五种看法、企业级对象
@@ -61,6 +62,9 @@ docs/
 `web/` 是 React 前端（企业版），`public/` 是原生 JS 的看板。
 
 ## 建议阅读顺序
+
+**第一次接触这个项目**
+`running`（先跑起来）→ `00-overview` → `research/plane-vs-projectos`（我们在哪）
 
 **产品 / 业务视角**
 `00-overview` → `01-principles` → `10-ai-capabilities` → `11-dashboard` → `13-roadmap`
