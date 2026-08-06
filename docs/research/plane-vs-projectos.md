@@ -251,20 +251,27 @@ ProjectOS 的迁移是**三阶段**的（`src/domain/migration/sync.ts`）：
 | 甘特 | ⚠️ 不画依赖线 | ✅ 画依赖线 |
 | 筛选器 | ✅ | ✅ 状态 + 负责人，条件进 URL |
 | 可保存视图 | ✅ | ⚠️ 有 `SavedView` 实体与界面，还不能一键套回看板 |
+| **状态组** | ✅ 六组 | ✅ 六组，**必填**且终态归组有校验 |
+| **模块 Module** | ✅ | ✅ 含状态机、进度守卫，与周期正交 |
+| **意见收集 Intake** | ✅ | ✅ 接受必须产出工作项、延后必须写明日期（两条守卫） |
+| **便签 Stickies** | ✅ | ✅ |
+| **标签目录** | ✅ 父子分组 | ✅ 目录 + 前缀命名法 |
+| **归档** | ✅ | ✅ 独立维度，且有自动归档 / 自动关闭 |
 | 文档编辑 | ✅ | ⚠️ 有对象无编辑器 |
 | 对外公开分享 | ✅ | ❌ |
 | 邮件通知 | ✅ | ❌ |
 | 国际化 | ✅ 19 语言 | ❌ |
 | 导出 | ✅ | ✅ CSV / JSON |
-| Webhook / API Token | ✅ | ❌ |
-| 周期 / Sprint | ✅ 含燃尽图 | ⚠️ 有实体和指标，无专属界面 |
+| Webhook / API Token | ✅ | ❌ **仍然没有** |
+| 周期 / Sprint | ✅ 含燃尽图 | ✅ **专属界面 + 燃尽图 + 关闭时冻结快照**；互斥由本体基数强制 |
 | 工时 / 工时审批 | 💰 one / business | ✅ `Worklog` + 审批流 + 不能批自己那条 |
 | 团队空间 Teamspace | 💰 business | ✅ |
 | 举措 Initiative（跨项目） | 💰 pro | ✅ |
 | 模板 Template | 💰 pro / business | ✅ |
 | 基线 Baseline | 💰 business | ✅ |
 | 批量操作 Bulk Ops | 💰 one / pro | ❌ |
-| 估点 | ✅ 两种制式 | ⚠️ `storyPoint` 属性 |
+| 图表原语 | ✅ Recharts 七种 | ✅ 七种，手写 SVG，配色经 CVD 验算 |
+| 估点 | ✅ 两种制式 | ✅ 两种制式共用一个数值字段，换制式不丢历史 |
 | 外部集成 | ✅ GitHub / Slack | ✅ GitHub / Jira / MCP / Browser |
 | 数据迁移 | ⚠️ 一次性导入 | ✅ 三阶段 |
 | **本体可配置** | ❌ | ✅ |
@@ -277,7 +284,7 @@ ProjectOS 的迁移是**三阶段**的（`src/domain/migration/sync.ts`）：
 | 关系图可视化 | ❌ | ✅ |
 | 带出处的问答 | ❌ | ✅ |
 | 一致性巡检 | ❌ | ✅ |
-| 项目指标 | ⚠️ Analytics | ✅ 30 个 |
+| 项目指标 | ⚠️ Analytics | ✅ 30 个定好口径的 + **16 × 9 自由组合** |
 | Agent 成本 / 采纳率指标 | ❌ | ✅ |
 
 ---
@@ -406,3 +413,52 @@ ProjectOS 早就有且更严谨**（审批、触发器与动作、决策与循�
 真人用"的）、附件、实时协同编辑、富文本编辑器、批量操作、国际化、
 邮件通知、对外公开分享、Webhook / API Token、命令面板、收藏与最近访问、
 草稿、便签、移动端适配、周期专属界面。
+
+
+---
+
+## 第四轮（2026-08-06）：项目管理骨架
+
+对照的是 [`docs/0806planeFeatures/`](../0806planeFeatures/) 那两份文档——
+一份是 Plane 的产品功能清单，一份是拿它做项目管理的实践指南。
+
+| 补上的 | 落在哪 | 用例 |
+| --- | --- | --- |
+| **状态组**（六组，必填） | `src/workflow/types.ts` + 22 台生命周期 | `tests/workflow.test.ts` |
+| **模块**（范围维度）+ 状态机 | 本体 + `module-default` | `tests/integration/cycles.test.ts` |
+| **周期互斥**（本体基数驱动） | `ResourceService#displaceSingleValued` | 同上 |
+| **意见收集 Intake** + 两条守卫 | 本体 + `intake-default` | `tests/integration/analytics.test.ts` 等 |
+| **标签目录 / 便签 / 优先级 / 评论内外部** | 本体 | — |
+| **自定义分析 16 × 9** | `src/domain/analytics/` + 一条 SQL | `tests/integration/analytics.test.ts`（17 条） |
+| **燃尽图 + 周期进度 + 关闭冻结** | `burndown.ts` + `snapshotCycleProgress` | `tests/burndown.test.ts`、`tests/integration/cycles.test.ts` |
+| **七种图表原语 + 四种进度指示器** | `web/src/charts/` | `tests/ui/analytics.test.ts` |
+| **归档 + 自动归档 / 自动关闭** | 迁移 013 + `archive-sweeper.pg.ts` | `tests/integration/archive.test.ts`（13 条） |
+
+三条值得记的判断：
+
+1. **状态组必填，不猜默认值。** 指南把"归错状态组"列为反模式，
+   而猜错不会报错——它只让燃尽图少烧掉一批工作项。
+2. **周期与模块的区别只写在本体里**（`cardinality`），服务层读它，
+   代码里没有一处 `'plannedIn'` 字面量。
+3. **归档是第三个维度**，不是状态也不是删除，因此指标照常统计归档的对象。
+
+### 这一轮暴露的一个老问题
+
+甘特图判断"画哪条依赖线"用的是**形状**判据（自反 + 有逆关系）。
+本体里一加 `duplicates`（形状完全相同，且排得更靠前），
+依赖线就静默地改成画"重复"关系了。浏览器用例抓到了它。
+
+修法是把语义写进本体（`RelationTypeDef.blocking`），并在注册时
+拒绝一个类型上出现两条 blocking 关系。**按形状猜语义，形状迟早会撞车。**
+
+### 仍然没补
+
+认证（第一节那条仍然全部成立，仍然是唯一挡着"能不能给真人用"的）、
+附件、实时协同编辑、富文本编辑器、批量操作、国际化、邮件通知、
+对外公开分享、**Webhook / API Token**、命令面板、收藏与最近访问、草稿、
+移动端适配。
+
+Webhook 与 API Token 这一轮**有意没做**：它们各自要一套新的存储、
+投递重试与凭证哈希，而且 Token 那一半绕不开认证——
+而认证正是第一节里那条"不是体力活"的结构性欠账。
+把 Token 建在请求头身份之上，等于给一道本来就没锁的门配一把新钥匙。

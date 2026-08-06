@@ -41,9 +41,45 @@ const ROLE_CAPABILITIES: Record<Role, readonly string[]> = {
     'SavedView.*',
     'Baseline.*',
     'Worklog.Approve',
+    // 项目管理骨架（docs/0806planeFeatures/project-management-guide.md）。
+    // 模块划分与分诊都是 PM 的日常动作，标签目录也归它维护
+    'Module.*',
+    'Intake.*',
+    'Label.*',
+    'Sticky.*',
   ],
-  RD: ['Task.*', 'Code.*', 'PR.Create', 'Requirement.Read', 'Story.Read', 'Knowledge.*', 'Comment.*', 'Worklog.*', 'SavedView.*'],
-  QA: ['TestCase.*', 'Issue.*', 'Acceptance.Verify', 'Task.Read', 'Requirement.Read', 'Comment.*', 'Worklog.*', 'SavedView.*'],
+  RD: [
+    'Task.*',
+    'Code.*',
+    'PR.Create',
+    'Requirement.Read',
+    'Story.Read',
+    'Knowledge.*',
+    'Comment.*',
+    'Worklog.*',
+    'SavedView.*',
+    // 开发看得到模块和标签，但不决定范围划分与分诊结论
+    'Module.Read',
+    'Label.Read',
+    'Intake.Read',
+    'Sticky.*',
+  ],
+  QA: [
+    'TestCase.*',
+    'Issue.*',
+    'Acceptance.Verify',
+    'Task.Read',
+    'Requirement.Read',
+    'Comment.*',
+    'Worklog.*',
+    'SavedView.*',
+    // QA **能分诊**：外部报上来的缺陷第一时间就该由测试判重、判真伪。
+    // 让它们排队等 PM 的话，指南里"每日清空分诊队列"那条纪律守不住
+    'Intake.*',
+    'Module.Read',
+    'Label.Read',
+    'Sticky.*',
+  ],
   Leader: [
     '*.Read',
     'Approve.*',
@@ -55,6 +91,9 @@ const ROLE_CAPABILITIES: Record<Role, readonly string[]> = {
     'Teamspace.*',
     'Baseline.*',
     'Worklog.Approve',
+    'Module.*',
+    'Intake.*',
+    'Sticky.*',
   ],
   Admin: ['*'],
   // Guest 仍然只读：看得到讨论，插不上话。要放开是一个产品决定，不是默认值

@@ -42,7 +42,7 @@ pnpm migrate
 applied: 001_foundation.sql, 002_search.sql, 003_project_containment.sql,
 004_agent_runs.sql, 005_connector_calls.sql, 006_lifecycles.sql, 007_sla.sql,
 008_audit_append_only.sql, 009_agent_memory.sql, 010_relation_rules.sql,
-011_ontology_extensions.sql, 012_process_runs.sql
+011_ontology_extensions.sql, 012_process_runs.sql, 013_archive.sql
 ```
 
 再跑一次是**幂等**的，会输出 `already up to date`。
@@ -232,6 +232,7 @@ pnpm check       # 上面全部 + 类型检查 + 分层校验，等同 CI
 | `PROJECTOS_AI_MAX_CLASSIFICATION` | `confidential` | 允许出境的最高数据分级 |
 | `PROJECTOS_MODEL_TIER_LOW/MID/HIGH` | Anthropic 三档 | 形如 `anthropic/claude-opus-5` |
 | `PROJECTOS_SLA_SWEEP_MS` | `60000` | SLA 巡检间隔，`0` 关闭 |
+| `PROJECTOS_ARCHIVE_SWEEP_MS` | `3600000` | 自动归档 / 自动关闭巡检间隔，`0` 关闭。项目没配 `archiveInMonths` / `closeInMonths` 时它什么都不做 |
 | `PROJECTOS_HEALTH_SWEEP_MS` | 24 小时 | 本体一致性巡检间隔，`0` 关闭 |
 | `PROJECTOS_PROCESS_SWEEP_MS` | `60000` | 流程超时巡检间隔，`0` 关闭 |
 | `PROJECTOS_LIFECYCLE_TTL_MS` | `5000` | 状态机定义缓存有效期 |

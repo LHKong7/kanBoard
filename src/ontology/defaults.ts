@@ -28,12 +28,57 @@ const COMMENTABLE: readonly string[] = [
   'Release',
   'Milestone',
   'Sprint',
+  // 模块和意见收集都是要讨论的地方：一条待分诊的意见最需要的
+  // 恰恰是"这个要不要做"的那段对话
+  'Module',
+  'Intake',
 ]
+
+/**
+ * 工作项优先级。Story 与 Task 共用一份定义。
+ *
+ * 五档带一个显式的 `None`，而不是"不填即无优先级"。区别在于
+ * **"还没定"和"定了，不紧急"是两回事**：前者是待办事项（有人得去判断），
+ * 后者是已完成的判断。合成一个空值之后，"有多少条还没定优先级"
+ * 这个问题就再也问不出来了。
+ *
+ * 与 `Requirement.priority`（MoSCoW：Must/Should/Could/Wont）刻意不同。
+ * 那一档回答的是"这个需求要不要做"，这一档回答的是"这件事什么时候做"——
+ * 同一个词、两个问题，强行统一只会让两边都变得说不清。
+ */
+const WORK_ITEM_PRIORITY = {
+  name: 'priority',
+  kind: 'enum',
+  values: ['Urgent', 'High', 'Medium', 'Low', 'None'],
+  description: '优先级。Urgent + High 占比超过 40% 时这个字段就已经失效了',
+} as const
+
+/**
+ * 估点类别到点数的固定映射（project-management-guide §2.5）。
+ *
+ * 类别制式下人选的是 `S`，落库的是 `2`。映射写死在这里而不是让每个项目
+ * 自己配：可配的话，两个项目的 `M` 就不是同一个 `M`，跨项目的速率对比
+ * 立刻失去意义——而那正是工作区级分析最想回答的问题。
+ *
+ * 数值取斐波那契前几项，于是**换制式不用换数据**：
+ * 从类别切到点数的那天，历史速率曲线原样接得上。
+ */
+export const ESTIMATE_CATEGORY_POINTS: Readonly<Record<string, number>> = {
+  XS: 1,
+  S: 2,
+  M: 3,
+  L: 5,
+  XL: 8,
+}
+
+/** 点数制式的可选值（斐波那契）。表单上用它渲染下拉，避免有人填 4 或 7 */
+export const ESTIMATE_POINT_SCALE: readonly number[] = [1, 2, 3, 5, 8, 13]
 
 export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   {
     name: 'Project',
-    version: '1.2.0',
+    // 1.2 → 1.3：新增三个可选属性（估点制式 + 两条自动化配置）
+    version: '1.3.0',
     context: 'Project',
     lifecycle: 'project-default',
     description: '项目：目标、里程碑、预算与风险的聚合根',
@@ -42,6 +87,44 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'name', kind: 'string', required: true },
       { name: 'vision', kind: 'text' },
       { name: 'ownerTeam', kind: 'string' },
+      /**
+       * 估点制式：类别（XS/S/M/L/XL）还是点数（斐波那契）。
+       *
+       * **只影响怎么录入和怎么显示，不影响存的是什么**——两种制式都落到
+       * 同一个数值字段（Story.storyPoint / Task.estimate）。
+       *
+       * 这是个有意的取舍。给两种制式各开一个字段，切换制式那天
+       * 历史数据就断在那里：速率曲线会从切换点起归零，而团队恰恰是
+       * 「跑三四个周期建立基线之后」才切的——那正是最不该丢历史的时刻。
+       * 类别到数值的映射是固定的（见 ESTIMATE_CATEGORY_POINTS），
+       * 所以换制式只是换一副刻度，底下的数一个都没动。
+       */
+      {
+        name: 'estimateSystem',
+        kind: 'enum',
+        values: ['categories', 'points'],
+        description: '估点制式。不填按 points 处理',
+      },
+      /**
+       * 自动归档 / 自动关闭（Plane 的 Automations）。
+       *
+       * 单位是月，取值 1–12，不填就是不开。做成项目级属性而不是全局配置：
+       * 一个支持型团队和一个平台团队对"多久算僵尸需求"的判断差得很远。
+       *
+       * 不开启的后果不是"没有自动化"，是 Backlog 半年后变成垃圾场
+       * （见 project-management-guide 的反模式表）。所以两个字段都带
+       * 建议值写进 description，让人在表单上就看得到。
+       */
+      {
+        name: 'archiveInMonths',
+        kind: 'int',
+        description: '已完成的工作项多少个月无更新后自动归档。建议 1–2，不填不开启',
+      },
+      {
+        name: 'closeInMonths',
+        kind: 'int',
+        description: '未完成的工作项多少个月无活动后自动关闭。建议 3，不填不开启',
+      },
       // 以下由状态机的 entry action 写入（04-ontology：新增可选属性 = minor 版本）
       { name: 'startedAt', kind: 'datetime', derived: true },
       { name: 'completedAt', kind: 'datetime', derived: true },
@@ -68,9 +151,8 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   },
   {
     name: 'Story',
-    // 1.2 → 1.3：新增两个**可选**属性（startDate / dueDate）。
-    // 按 FR-ONT-007 的口径这是 minor，旧数据照常读写
-    version: '1.3.0',
+    // 1.3 → 1.4：新增一个可选属性（priority）。按 FR-ONT-007 的口径是 minor
+    version: '1.4.0',
     context: 'Requirement',
     lifecycle: 'story-default',
     description: '可独立交付的最小需求单元',
@@ -79,6 +161,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'role', kind: 'string', description: '作为 <角色>' },
       { name: 'capability', kind: 'text', description: '我希望 <能力>' },
       { name: 'value', kind: 'text', description: '以便 <价值>' },
+      { ...WORK_ITEM_PRIORITY },
       { name: 'storyPoint', kind: 'int' },
       /**
        * 计划的起止日期（不是状态机写的那两个实际时刻）。
@@ -101,7 +184,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   {
     name: 'Task',
     // 同上：新增可选属性 = minor
-    version: '1.3.0',
+    version: '1.4.0',
     context: 'Execution',
     lifecycle: 'task-default',
     description: '执行单元。assignee 可以是 User 也可以是 Agent',
@@ -109,6 +192,7 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'title', kind: 'string', required: true },
       { name: 'description', kind: 'text' },
       { name: 'assignee', kind: 'string', description: 'user://… 或 agent://…' },
+      { ...WORK_ITEM_PRIORITY },
       { name: 'estimate', kind: 'float' },
       { name: 'blockReason', kind: 'text', description: '进入 Blocked 状态时必填' },
       /**
@@ -285,7 +369,8 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   },
   {
     name: 'Comment',
-    version: '1.0.0',
+    // 1.0 → 1.1：新增一个可选属性（audience）
+    version: '1.1.0',
     context: 'Execution',
     /**
      * **刻意没有 lifecycle。**
@@ -302,7 +387,138 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       '于是它天然受租户隔离与资源级权限约束，能被查询、被审计、被 Agent 当作上下文读到。' +
       '被 @ 到的人由正文解析得出（src/domain/collaboration/mentions.ts），' +
       '不另存一份清单——两份会漂移，而正文是唯一改得动的那份。',
-    attributes: [{ name: 'body', kind: 'richtext', required: true }],
+    attributes: [
+      { name: 'body', kind: 'richtext', required: true },
+      /**
+       * 这条评论说给谁听（project-management-guide §6）。
+       *
+       * 名字是 `audience` 而不是 `visibility`：Resource 头部已经有一个
+       * `visibility`（private / project / workspace / tenant），说的是
+       * **谁能读到这条记录**。这个字段说的是**这段话是对内还是对外**——
+       * 两件事都叫 visibility 的话，"把评论设成 external"到底放宽了
+       * 数据库层的可见性还是只是打了个标记，没人说得清。
+       *
+       * 默认按 internal 处理（不填即内部）：把没标过的历史评论当成对外，
+       * 是这个字段唯一不可挽回的错法。
+       */
+      {
+        name: 'audience',
+        kind: 'enum',
+        values: ['internal', 'external'],
+        description: '对内讨论还是对外回复。不填按 internal 处理',
+      },
+    ],
+  },
+  /**
+   * ── 项目管理骨架 ─────────────────────────────────────
+   *
+   * 对照 docs/0806planeFeatures/project-management-guide.md 的第一节：
+   * **Cycle（时间）与 Module（范围）是两个正交的维度**。
+   * 系统里此前只有 Sprint（时间维度），于是"这个功能做完了吗"
+   * 这个问题无处可问——那正是那份指南列为反模式的第三条。
+   */
+  {
+    name: 'Module',
+    version: '1.0.0',
+    context: 'Project',
+    lifecycle: 'module-default',
+    description:
+      '模块：交付物 / 里程碑式的**范围**维度，与周期（时间维度）正交。' +
+      '一个工作项同时属于「本周期」和「登录模块」才是正确用法——' +
+      '只用一个维度，看板就退化成了普通待办列表。' +
+      '与 Milestone 的区别是它装得下工作项并自带进度，Milestone 只是一个日期上的点。',
+    attributes: [
+      { name: 'name', kind: 'string', required: true },
+      { name: 'description', kind: 'text' },
+      { name: 'lead', kind: 'string', description: '模块负责人 user://…' },
+      { name: 'startDate', kind: 'datetime', description: '计划开始日' },
+      { name: 'targetDate', kind: 'datetime', description: '目标交付日' },
+      { name: 'startedAt', kind: 'datetime', derived: true },
+      { name: 'completedAt', kind: 'datetime', derived: true },
+    ],
+  },
+  {
+    name: 'Label',
+    version: '1.0.0',
+    context: 'Project',
+    /**
+     * **刻意没有 lifecycle**：一个标签没有状态可言。
+     *
+     * 也刻意**不是**工作项与标签之间的一条边。资源头部已经有
+     * `labels: string[]`，筛选、导出、分组全都走它。再引一套关系来表达
+     * "打了哪个标签"，同一件事就有了两个真相，而它们一定会漂移。
+     *
+     * 所以这个类型是**目录**：它给标签名配上颜色和说明，让
+     * "这个标签是什么意思"有一个可查的地方。名字本身仍是那个唯一的键。
+     */
+    description:
+      '标签目录：给标签名配颜色与说明。**不承载"谁打了这个标签"**——' +
+      '那是资源头部的 labels 字段。分组用前缀命名法（type/ area/ flag/），' +
+      '前缀从名字里读出来，不另存一份（见 labelGroupOf）。',
+    attributes: [
+      {
+        name: 'name',
+        kind: 'string',
+        required: true,
+        description: '标签名。建议 `前缀/名字`，如 type/bug、area/frontend',
+      },
+      { name: 'color', kind: 'string', description: '十六进制色值，如 #E76E50' },
+      { name: 'description', kind: 'text', description: '什么时候该用这个标签' },
+    ],
+  },
+  {
+    name: 'Intake',
+    version: '1.0.0',
+    context: 'Project',
+    lifecycle: 'intake-default',
+    description:
+      '意见收集队列里的一条（Plane 的 Intake / 原 Inbox）。' +
+      '外部或内部提上来的东西先进这里等分诊，**不直接变成工作项**——' +
+      '让任何人都能直接建工作项，Backlog 会在两周内失去可信度。' +
+      '接受时必须真的产生一个工作项（见 intake-default 上的守卫），' +
+      '否则"已接受"就只是一句安慰话。',
+    attributes: [
+      { name: 'title', kind: 'string', required: true },
+      { name: 'body', kind: 'richtext', description: '提交内容' },
+      {
+        name: 'submittedBy',
+        kind: 'string',
+        // 分级为 pii：外部提交人的联系方式不该随上下文进模型（ADR-0006）
+        classification: 'pii',
+        description: '谁提的。外部提交时可能是邮箱',
+      },
+      {
+        name: 'source',
+        kind: 'enum',
+        values: ['web', 'email', 'api', 'internal'],
+        description: '从哪个渠道进来的',
+      },
+      {
+        name: 'snoozedUntil',
+        kind: 'datetime',
+        description: '延后到哪天。进入 Snoozed 必填——无限期延后等于没有回复',
+      },
+    ],
+  },
+  {
+    name: 'Sticky',
+    version: '1.0.0',
+    context: 'Knowledge',
+    /**
+     * **刻意没有 lifecycle、没有 assignee、没有 dueDate。**
+     *
+     * 便签就该是一张便签。给它加上状态和负责人之后，它会变成一个
+     * 绕过工作项、绕过守卫、绕过审计的第二套任务系统——
+     * 而那套系统里的东西不进任何统计，团队却以为它们被跟踪着。
+     */
+    description:
+      '工作区级的便签：待办速记、临时链接、本周关注点。' +
+      '**不要拿它当任务系统**——它没有状态、指派人和截止日期，这是有意的。',
+    attributes: [
+      { name: 'body', kind: 'richtext', required: true },
+      { name: 'color', kind: 'string', description: '背景色，十六进制' },
+      { name: 'sortOrder', kind: 'int', description: '手动排序用' },
+    ],
   },
   /**
    * ── 企业级对象 ───────────────────────────────────────
@@ -462,10 +678,13 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
   },
   {
     name: 'Sprint',
-    version: '1.0.0',
+    // 1.0 → 1.1：新增一个 derived 属性（progressSnapshot）
+    version: '1.1.0',
     context: 'Execution',
     lifecycle: 'sprint-default',
-    description: '一次迭代（PRD 03 §5）。Velocity 的分母就是它',
+    description:
+      '一次迭代 / 周期（PRD 03 §5）。Velocity 的分母就是它。' +
+      '**时间维度**，与模块的范围维度正交；一个工作项只能属于一个周期。',
     attributes: [
       { name: 'name', kind: 'string', required: true },
       { name: 'goal', kind: 'text' },
@@ -473,6 +692,22 @@ export const DEFAULT_ENTITY_TYPES: readonly EntityTypeDef[] = [
       { name: 'endAt', kind: 'datetime', required: true },
       { name: 'capacity', kind: 'float', description: '可用点数 / 工时' },
       { name: 'completedPoints', kind: 'float', derived: true, description: '本迭代完成的点数' },
+      /**
+       * 周期关闭时冻结的进度快照。
+       *
+       * 存下来而不是每次现算，因为**回顾要看的是当时的样子**：
+       * 周期关掉之后工作项还会继续被改——被挪走、被重开、被取消——
+       * 现算出来的"上个迭代完成率"会随着这些改动一直变，
+       * 于是回顾会上拿出来的数字和一周后再看时对不上。
+       *
+       * 由 `sprint-default` 进入 `Closed` 时写入（snapshotProgress）。
+       */
+      {
+        name: 'progressSnapshot',
+        kind: 'json',
+        derived: true,
+        description: '关闭那一刻的进度快照，用于回顾。之后再改工作项不会动它',
+      },
     ],
   },
   {
@@ -663,14 +898,106 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
     name: 'plannedIn',
     inverse: 'plans',
     acyclic: true,
-    domain: ['Task'],
+    // Story 也排周期。只让 Task 排的话，一个不拆任务的小需求
+    // 就永远进不了任何迭代，而它照样占着这两周的人力
+    domain: ['Task', 'Story'],
     range: ['Sprint'],
+    /**
+     * 基数 `0..1`：**一个工作项只能在一个周期里**。
+     *
+     * 这是周期与模块之间那处不对称的落点（见指南第一节）：
+     * 一件事只能在一个时间盒里做，但它可以同时服务于多个交付目标。
+     * 加入新周期时旧的那条边会被自动移除，见 ResourceService#enforceExclusiveCycle。
+     */
+    cardinality: '0..1',
   },
   {
     name: 'plans',
     inverse: 'plannedIn',
     domain: ['Sprint'],
-    range: ['Task'],
+    range: ['Task', 'Story'],
+  },
+  /**
+   * 工作项归属模块——**范围**维度。
+   *
+   * 与 `plannedIn` 唯一的结构差别就是基数：这里是 `0..n`。
+   * 一个工作项既可以属于「支付重构」（业务模块），又可以属于
+   * 「Q3 技术债清理」（治理模块），两个模块的进度各自正确统计。
+   */
+  {
+    name: 'inModule',
+    inverse: 'moduleIncludes',
+    acyclic: true,
+    domain: ['Task', 'Story'],
+    range: ['Module'],
+    cardinality: '0..n',
+  },
+  {
+    name: 'moduleIncludes',
+    inverse: 'inModule',
+    domain: ['Module'],
+    range: ['Task', 'Story'],
+  },
+  /**
+   * 重复与相关（Plane 的 duplicate / relates_to）。
+   *
+   * `duplicates` 有方向：A 是 B 的重复，说明该留下的是 B。
+   * 做成有向的才答得出"该关掉哪一个"——无向的话两条都还在，
+   * 而没有人知道该以哪一条为准。
+   */
+  {
+    name: 'duplicates',
+    inverse: 'duplicatedBy',
+    acyclic: true,
+    domain: ['Task', 'Story', 'Requirement', 'Intake'],
+    range: ['Task', 'Story', 'Requirement', 'Intake'],
+  },
+  {
+    name: 'duplicatedBy',
+    inverse: 'duplicates',
+    domain: ['Task', 'Story', 'Requirement', 'Intake'],
+    range: ['Task', 'Story', 'Requirement', 'Intake'],
+  },
+  /**
+   * 泛泛的"有关系"。
+   *
+   * 名字成对而不是自反，是因为注册表禁止自反关系（一条边的两端
+   * 必须分得出来，否则逆关系解析没有确定结果）。语义上两个方向等价，
+   * UI 上都渲染成"相关"。
+   *
+   * 刻意**没有** acyclic：相关本来就可以互相指。
+   */
+  {
+    name: 'relatesTo',
+    inverse: 'relatedFrom',
+    domain: ['Task', 'Story', 'Requirement', 'Decision', 'Knowledge', 'Module'],
+    range: ['Task', 'Story', 'Requirement', 'Decision', 'Knowledge', 'Module'],
+  },
+  {
+    name: 'relatedFrom',
+    inverse: 'relatesTo',
+    domain: ['Task', 'Story', 'Requirement', 'Decision', 'Knowledge', 'Module'],
+    range: ['Task', 'Story', 'Requirement', 'Decision', 'Knowledge', 'Module'],
+  },
+  /**
+   * 一条 Intake 被接受之后变成了哪个工作项。
+   *
+   * `intake-default` 的 Accepted 守卫查的就是这条边：**接受必须落地**。
+   * 没有它，分诊会退化成把队列清空的动作——队列确实空了，
+   * 而提需求的人等来的仍然是没有下文。
+   */
+  {
+    name: 'acceptedInto',
+    inverse: 'acceptedFromIntake',
+    acyclic: true,
+    domain: ['Intake'],
+    range: ['Task', 'Story', 'Requirement'],
+  },
+  {
+    name: 'acceptedFromIntake',
+    inverse: 'acceptedInto',
+    domain: ['Task', 'Story', 'Requirement'],
+    range: ['Intake'],
   },
   {
     name: 'shippedIn',
@@ -705,6 +1032,10 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
       // 漏掉的话，一条风险 / 一个里程碑没法归到任何项目下，
       // 而项目视角的指标全部按 project 收窄
       'Risk', 'Milestone', 'Budget', 'Sprint', 'Release',
+      // 模块、意见收集、标签目录同样是项目级的东西。
+      // 漏掉的话它们没法归到任何项目下，而所有按 project 收窄的
+      // 查询与指标会当它们不存在
+      'Module', 'Intake', 'Label',
     ],
   },
   {
@@ -718,6 +1049,7 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
       // 漏掉的话，一条风险 / 一个里程碑没法归到任何项目下，
       // 而项目视角的指标全部按 project 收窄
       'Risk', 'Milestone', 'Budget', 'Sprint', 'Release',
+      'Module', 'Intake', 'Label',
     ],
     range: ['Project'],
   },
@@ -753,6 +1085,8 @@ export const DEFAULT_RELATION_TYPES: readonly RelationTypeDef[] = [
     name: 'blockedBy',
     acyclic: true,
     inverse: 'blocks',
+    // 甘特图的依赖线认的就是这个标记，不是关系的名字
+    blocking: true,
     domain: ['Task'],
     range: ['Task'],
   },

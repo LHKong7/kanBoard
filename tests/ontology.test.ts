@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { OntologyRegistry } from '../src/ontology/registry.ts'
 import { buildDefaultRegistry } from '../src/ontology/defaults.ts'
 import { MAX_LENGTH_BY_KIND } from '../src/ontology/types.ts'
+import type { EntityTypeDef, RelationTypeDef } from '../src/ontology/types.ts'
 import { ValidationError } from '../src/platform/errors.ts'
 
 describe('OntologyRegistry (FR-ONT-001/002/003)', () => {
@@ -257,5 +258,58 @@ describe('the registry says what it knows when asked for something it does not',
   it('enumerates both catalogues', () => {
     expect(registry.entityTypes().length).toBeGreaterThan(0)
     expect(registry.relationTypes().length).toBeGreaterThan(0)
+  })
+})
+
+
+/**
+ * 依赖关系的标记（`blocking`）。
+ *
+ * 这条来自一次真实的静默回归：甘特图判断"画哪条依赖线"用的是**形状**
+ * 判据（自反 + 有逆关系）。本体里一加 `duplicates`（形状完全相同，
+ * 而且在数组里排得更靠前），依赖线就改成画"重复"关系了——
+ * 图还在、线还在，只是它说的不再是"A 做完 B 才能开始"。
+ */
+describe('依赖关系必须是明确的', () => {
+  const entity = (name: string): EntityTypeDef => ({
+    name,
+    version: '1.0.0',
+    context: 'Execution',
+    attributes: [{ name: 'title', kind: 'string' }],
+  })
+
+  function registryWith(relations: RelationTypeDef[]): OntologyRegistry {
+    const registry = new OntologyRegistry()
+    registry.registerEntity(entity('Thing'))
+    for (const relation of relations) registry.registerRelation(relation)
+    return registry
+  }
+
+  const pair = (name: string, inverse: string, blocking?: boolean): RelationTypeDef[] => [
+    { name, inverse, domain: ['Thing'], range: ['Thing'], ...(blocking === true ? { blocking } : {}) },
+    { name: inverse, inverse: name, domain: ['Thing'], range: ['Thing'] },
+  ]
+
+  it('一个类型上只标一条 blocking 关系时正常', () => {
+    const registry = registryWith([...pair('blockedBy', 'blocks', true), ...pair('duplicates', 'duplicatedBy')])
+    expect(() => registry.seal()).not.toThrow()
+    expect(registry.relationType('blockedBy').blocking).toBe(true)
+    // 形状相同但没标记的那条不是依赖关系
+    expect(registry.relationType('duplicates').blocking).toBeUndefined()
+  })
+
+  it('标了两条会被拒 —— 否则界面又要在运行期挑一条', () => {
+    const registry = registryWith([
+      ...pair('blockedBy', 'blocks', true),
+      ...pair('dependsOn', 'dependedOnBy', true),
+    ])
+    expect(() => registry.seal()).toThrow(/more than one blocking relation/)
+  })
+
+  it('内置本体里，Task 恰好有一条依赖关系', () => {
+    const blocking = buildDefaultRegistry()
+      .relationTypes()
+      .filter((r) => r.blocking === true && r.domain.includes('Task') && r.range.includes('Task'))
+    expect(blocking.map((r) => r.name)).toEqual(['blockedBy'])
   })
 })

@@ -147,4 +147,52 @@ export const api = {
     request<{ items: { name: string; inverse: string; domain: string[]; range: string[] }[] }>(
       '/v1/ontology/relation-types',
     ),
+
+  /**
+   * 可选的分析维度与指标。**从服务端取，前端不抄一份**——
+   * 抄一份的话，加第 17 个维度那天下拉里不会有它，
+   * 而没有任何报错说明为什么。
+   */
+  analyticsDimensions: () =>
+    request<{
+      xAxes: string[]
+      yMetrics: string[]
+      dateAxes: string[]
+      dateGroupings: string[]
+      durations: string[]
+      stateGroups: string[]
+    }>('/v1/analytics/dimensions'),
+
+  analytics: (params: Record<string, string>) =>
+    request<{
+      spec: Record<string, string>
+      keys: string[]
+      groups: string[]
+      rows: Array<Record<string, string | number>>
+      total: number
+    }>(`/v1/analytics?${new URLSearchParams(params)}`),
+
+  burndown: (cycleId: string, unit: 'count' | 'points') =>
+    request<{
+      cycleId: string
+      unit: string
+      total: number
+      completed: number
+      cancelled: number
+      truncated: boolean
+      points: Array<{ day: string; ideal: number; remaining: number | null }>
+    }>(`/v1/cycles/${cycleId}/burndown?unit=${unit}`),
+
+  cycleProgress: (cycleId: string) =>
+    request<{
+      cycleId: string
+      name: string
+      total: number
+      completed: number
+      cancelled: number
+      open: number
+      byGroup: Record<string, number>
+      points: { total: number; completed: number }
+      completionRate: number
+    }>(`/v1/cycles/${cycleId}/progress`),
 }

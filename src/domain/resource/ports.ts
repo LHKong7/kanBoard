@@ -26,6 +26,18 @@ export type ResourceFilter = {
   ids?: readonly string[] | undefined
   includeDeleted?: boolean | undefined
   /**
+   * 归档的要不要。三态，不是布尔：
+   *
+   *   `undefined` / `'active'`  只看没归档的（**默认**）
+   *   `'archived'`              只看归档的（归档区页面）
+   *   `'all'`                   都要（导出、指标）
+   *
+   * 默认排除是有意的：不排除的话，开了自动归档的项目
+   * 半年后打开看板会看到一堆早就不该出现的东西，
+   * 而"归档"这个功能就白做了。
+   */
+  archived?: 'active' | 'archived' | 'all' | undefined
+  /**
    * 全文检索词（FR-RES-016）。
    *
    * 匹配范围是标签与属性的**值**，不含键名——否则搜 "title" 会命中全表。
@@ -136,6 +148,21 @@ export interface ResourceRepository {
     attribute: string,
   ): Promise<{ value: number; counted: number }>
   countGrouped(filter: ResourceFilter, groupBy: GroupableField): Promise<GroupCount[]>
+  /**
+   * 只改归档标记，**不动版本号**。
+   *
+   * 单开一个方法而不是走 `update`：归档和编辑改的不是同一件事，
+   * 让归档消耗掉乐观锁的版本，会使一个正在编辑这条工作项的人
+   * 在保存时收到 409——而他改的内容和归档毫无冲突。
+   *
+   * 返回 false 表示对象不在（已删或跨租户）。
+   */
+  setArchived(
+    id: string,
+    archivedAt: Date | null,
+    archivedBy: string | null,
+    updatedAt: Date,
+  ): Promise<boolean>
   appendHistory(entry: HistoryEntry): Promise<void>
   history(resourceId: string, page: Page): Promise<PageResult<HistoryEntry>>
 }

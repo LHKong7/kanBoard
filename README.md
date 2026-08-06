@@ -64,14 +64,18 @@ Idea → Objective → Requirement → Architecture → Implementation
 | 面 | 内容 |
 | --- | --- |
 | 看法 | 看板 / 列表 / 表格 / 日历 / **甘特（带依赖线）**，筛选条件进 URL 可分享 |
-| 协作 | 评论 + @提及（提及经自动化规则发通知） |
+| 两个维度 | **周期**（时间，互斥）× **模块**（范围，多对多），正交且由本体的基数声明强制 |
+| 分诊 | **意见收集队列**：接受必须真的产生工作项，延后必须写明到哪天 |
+| 协作 | 评论（**分对内 / 对外**）+ @提及（提及经自动化规则发通知） |
 | 数据 | 导出 CSV / JSON，Jira 三阶段迁移，GitHub / Jira / MCP / Browser 连接器 |
 | 企业级 | 团队空间、跨项目举措、模板、工时（含审批）、保存的视图、基线 |
 | 智能 | Agent 运行时（身份 / 出处 / 预算 / 影响面 / 协作模式 / 可回放轨迹），底座 pi |
-| 洞察 | 30 个指标，含 Agent 成本、产出采纳率、Human vs Agent 占比 |
+| 洞察 | 30 个定好口径的指标 + **16 维 × 9 指标的自由组合分析**、**燃尽图**、七种图表原语 |
+| 治理 | **归档**（与状态正交）+ 自动归档 / 自动关闭巡检 |
 
 **还没有的**（如实列）：真实认证（当前身份由请求头承载，**不能给真人用**）、
-附件、实时协同编辑、富文本编辑器、国际化、邮件通知、对外公开分享。
+附件、实时协同编辑、富文本编辑器、国际化、邮件通知、对外公开分享、
+**Webhook 与 API Token**。
 逐项见 [research/plane-vs-projectos.md](docs/research/plane-vs-projectos.md)。
 
 ## 状态
@@ -83,5 +87,5 @@ Idea → Objective → Requirement → Architecture → Implementation
 | 技术栈 | TypeScript / Node 22 · Fastify · Zod · PostgreSQL 16（[ADR-0007](docs/adr/0007-typescript-server-stack.md)） |
 | 前端 | **React**（`web/`，企业版 `/app`）；看板一套仍是原生 JS，逐步迁移 |
 | 模型底座 | [pi](https://github.com/earendil-works/pi) 接多供应商推理；Agent 语义留在本仓（[ADR-0013](docs/adr/0013-pi-as-model-substrate.md)） |
-| 测试 | 984 项 vitest + 95 项真实浏览器 UI 测试 |
+| 测试 | 1041 项 vitest + 109 项真实浏览器 UI 测试 |
 | 进度 | 见 [M1 状态](docs/m1-status.md) |

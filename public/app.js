@@ -917,14 +917,23 @@ async function drawDependencies(rows, rowIndex) {
  * 都含当前类型）且**有逆关系**的边。自反是关键判据——跨类型的边
  * （比如 partOf）连的不是同一层的两根条，画出来只会是一团乱线。
  */
+/**
+ * 甘特图上画哪条关系的线。
+ *
+ * 认的是本体上的 `blocking` 标记，**不是关系的名字，也不是形状**。
+ *
+ * 这里此前的判据是「自反且有逆关系」——形状对了，含义没管。
+ * 本体里一加上 `duplicates`（同样自反、同样有逆关系，而且排得更靠前），
+ * 依赖线就静默地改成画"重复"关系了：图还在，线还在，
+ * 只是它说的不再是"A 做完 B 才能开始"。tests/ui/timeline.test.ts
+ * 那条用例抓到了这次回归。
+ *
+ * 教训是：**按形状去猜语义，形状迟早会撞车。** 语义要写在本体里。
+ */
 function dependencyRelation(typeName) {
-  const candidates = state.relationTypes.filter(
-    (r) =>
-      (r.domain ?? []).includes(typeName) &&
-      (r.range ?? []).includes(typeName) &&
-      typeof r.inverse === 'string',
-  )
-  return candidates[0]?.name
+  return state.relationTypes.find(
+    (r) => r.blocking === true && (r.domain ?? []).includes(typeName) && (r.range ?? []).includes(typeName),
+  )?.name
 }
 
 // ── 列表 / 表格 ─────────────────────────────────────

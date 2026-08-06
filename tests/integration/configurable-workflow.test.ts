@@ -70,7 +70,10 @@ const SIMPLIFIED = {
   id: 'task-default',
   entityType: 'Task',
   initial: 'Todo',
-  states: [{ name: 'Todo' }, { name: 'Shipped', terminal: true }],
+  states: [
+    { name: 'Todo', group: 'Unstarted' },
+    { name: 'Shipped', group: 'Completed', terminal: true },
+  ],
   transitions: [{ from: ['Todo'], to: 'Shipped' }],
 }
 
@@ -169,7 +172,7 @@ describe('changing a lifecycle is a privileged act', () => {
   it('records who changed it and bumps the revision', async () => {
     const first = await putLifecycle(SIMPLIFIED)
     expect(first.json().revision).toBe(1)
-    const second = await putLifecycle({ ...SIMPLIFIED, states: [...SIMPLIFIED.states, { name: 'Held' }] })
+    const second = await putLifecycle({ ...SIMPLIFIED, states: [...SIMPLIFIED.states, { name: 'Held', group: 'Started' }] })
     expect(second.json().revision).toBe(2)
 
     // 必须用 queryAsTenant：应用连接受 FORCE RLS 约束，

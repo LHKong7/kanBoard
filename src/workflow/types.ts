@@ -42,8 +42,62 @@ export type TransitionAction =
   | { kind: 'stampNow'; path: string }
   | { kind: 'clearAttribute'; path: string }
 
+/**
+ * 状态组：状态在生命周期上的**位置**，与它叫什么名字无关。
+ *
+ * 六个组的存在理由是：燃尽图、进度条、完成率、"还剩多少没做"——
+ * 这些统计都需要回答"这个状态算不算做完了"，而状态名回答不了这个问题。
+ * 每台状态机的状态名都不一样（Task 叫 Doing，Story 叫 InProgress，
+ * Release 叫 Frozen），把它们逐个枚举进指标代码里，等于让**每加一个状态
+ * 就得去改一遍所有指标**——而漏掉的那一处不会报错，只会让某类对象
+ * 从统计里静静消失。
+ *
+ * 分组是**建模决定**，所以它写在状态机定义里，不写在指标那一侧：
+ * 定义状态的人知道这个状态意味着什么，读指标的人不知道。
+ *
+ * | 组 | 语义 |
+ * | --- | --- |
+ * | `Triage` | 待分诊：还没确认要不要做 |
+ * | `Backlog` | 已确认要做，未排期 |
+ * | `Unstarted` | 已排期，未开工 |
+ * | `Started` | 进行中（含阻塞、评审、等人——**它们都还没做完**） |
+ * | `Completed` | 做完了 |
+ * | `Cancelled` | 不做了（含被取代、被拒、失败） |
+ */
+export type StateGroup = 'Triage' | 'Backlog' | 'Unstarted' | 'Started' | 'Completed' | 'Cancelled'
+
+export const STATE_GROUPS: readonly StateGroup[] = [
+  'Triage',
+  'Backlog',
+  'Unstarted',
+  'Started',
+  'Completed',
+  'Cancelled',
+]
+
+/**
+ * 算"已经不在流转中"的两个组。
+ *
+ * 燃尽图的分子、完成率的分母、WIP 的排除项都用它，
+ * 因此这个判断只写一处——散成 `g === 'Completed' || g === 'Cancelled'`
+ * 的话，总有一处只写了前一半，表现是取消掉的工作项永远烧不掉。
+ */
+export const CLOSED_STATE_GROUPS: readonly StateGroup[] = ['Completed', 'Cancelled']
+
+export function isClosedGroup(group: StateGroup): boolean {
+  return CLOSED_STATE_GROUPS.includes(group)
+}
+
 export type StateDef = {
   name: string
+  /**
+   * 这个状态归哪个组。**必填**。
+   *
+   * 做成必填而不是"不填就猜一个"，是因为猜错不会报错——
+   * 它只会让燃尽图少烧掉一批工作项，而看图的人不会知道图是错的。
+   * 让定义状态的人当场回答一次，比让读指标的人事后怀疑一辈子便宜。
+   */
+  group: StateGroup
   /** 进入该状态必须满足的条件；不满足则迁移被拒并说明缺什么 */
   requires?: readonly Guard[]
   /** 进入时执行的赋值 */

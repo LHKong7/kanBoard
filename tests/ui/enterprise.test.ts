@@ -89,10 +89,16 @@ async function open(screen: string, roles = 'Admin'): Promise<void> {
 }
 
 describe('React 企业版跑起来了', () => {
-  it('页面挂载，六屏都在', async () => {
+  it('十二屏都在，其中四屏没有一行专属代码', async () => {
     await page.goto(`${baseUrl}/app`)
     await page.waitForSelector('.type-tab')
     assert.deepEqual(await page.locator('.type-tab').allTextContents(), [
+      // 前六屏来自 project-management-guide。分析与周期各有专属组件
+      // （图表答得了表格答不了的问题），而**模块 / 意见收集 / 标签目录 /
+      // 便签四屏没有一行专属代码**——它们走同一个 ObjectScreen，
+      // 界面由本体渲染出来。这条断言盯的就是那个性质
+      '分析', '周期', '模块', '意见收集', '标签目录', '便签',
+      // 后六屏对照 Plane 付费档
       '举措', '团队空间', '工时', '模板', '保存的视图', '基线',
     ])
   })

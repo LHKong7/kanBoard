@@ -244,6 +244,8 @@ export class ResourceService {
       },
       visibility: 'workspace',
       deletedAt: null,
+      archivedAt: null,
+      archivedBy: null,
     }
     // 交给缓冲，不直接落库：马上要抛 428，事务会回滚，
     // 写在这个事务里的挂起单会跟着消失——于是"系统说要审批，
@@ -325,6 +327,8 @@ export class ResourceService {
       attributes,
       visibility,
       deletedAt: null,
+      archivedAt: null,
+      archivedBy: null,
     }
 
     await this.#deps.resources.insert(resource)
@@ -860,6 +864,99 @@ export class ResourceService {
   }
 
   /**
+   * 归档 / 取消归档。
+   *
+   * **不走 `update`**，因为归档不是一次属性修改：
+   *
+   * 1. 它不该消耗乐观锁的版本号。归档一条别人正在编辑的工作项时，
+   *    对方的保存不该因此冲突——两个人改的根本不是同一件事。
+   * 2. 它不该被 `status` 的守卫拦住。一个卡在 Blocked 的任务
+   *    当然可以被归档，而它的状态机不允许它动。
+   * 3. 它要能对**终态**的对象生效，而那正是归档最主要的用途。
+   *
+   * 权限走**单独的 `<Type>.Archive`**，不是 `<Type>.Update`。
+   *
+   * 对人来说两者几乎总是一起给（角色上的 `Task.*` 自然包含它），
+   * 所以这一层对人是透明的。它存在是为了**自动归档巡检**：
+   * 那条路径以 `system://internal` 身份跑，而那个身份的权限刻意很窄
+   * （见 `SYSTEM_SUBJECT`）。要让它能归档任意类型，唯一的选择是
+   * 给它 `*.Update` —— 那等于让自动化能改系统里的任何字段。
+   *
+   * 归档是可逆且不改状态的，`*.Archive` 因此是一条**够窄**的授权；
+   * `*.Update` 不是。这和工时审批单开 `Worklog.Approve` 是同一个道理：
+   * 能力的粒度要跟着"需要单独授权的那件事"走。
+   */
+  async setArchived(caller: Caller, id: string, archived: boolean): Promise<Resource> {
+    const resource = await this.#requireLive(id)
+    await this.#authorize(
+      caller,
+      `${resource.type}.Archive`,
+      {
+        tenant: resource.tenant,
+        workspace: resource.workspace,
+        project: resource.project ?? undefined,
+        id: resource.id,
+        type: resource.type,
+      },
+      resource.owner,
+      resource.type,
+    )
+
+    // 已经是这个状态就直接返回，不写一条什么都没改的历史。
+    // 自动归档巡检会反复跑到同一批对象上，每轮都写一条的话，
+    // 变更历史会被这些无内容的条目淹掉
+    if ((resource.archivedAt !== null) === archived) return resource
+
+    const now = this.#deps.clock.now()
+    const next: Resource = {
+      ...resource,
+      archivedAt: archived ? now : null,
+      archivedBy: archived ? caller.subject.principal : null,
+      updatedAt: now,
+    }
+
+    const ok = await this.#deps.resources.setArchived(id, next.archivedAt, next.archivedBy, now)
+    if (!ok) throw new NotFoundError(id)
+
+    await this.#deps.resources.appendHistory({
+      resourceId: id,
+      // 版本号不动，所以历史沿用当前版本。归档是发生在这个版本上的一件事，
+      // 不是一个新版本
+      version: resource.version,
+      changedBy: caller.subject.principal,
+      onBehalfOf: caller.delegator?.principal ?? null,
+      changedAt: now,
+      runRef: caller.runId ?? null,
+      changes: [
+        { path: 'archivedAt', from: resource.archivedAt, to: next.archivedAt },
+      ],
+      reason: archived ? 'archived' : 'unarchived',
+      traceId: caller.traceId ?? null,
+    })
+
+    return next
+  }
+
+  /**
+   * 按一个列表过滤条件做一次读授权，**不取数**。
+   *
+   * 存在的理由是分析走的是另一个仓储端口（`AnalyticsRepository`），
+   * 拿不到这里的私有 `#authorize`。抽出这一个方法，而不是让分析层
+   * 自己拼一次 PDP 调用：授权只有一个收口，多一处就迟早有一处漏判，
+   * 而漏判的表现是"看不到某个项目的人，能从它的图上把信息推出来"。
+   */
+  async authorizeQuery(caller: Caller, filter: ResourceFilter): Promise<void> {
+    const type = filter.type
+    await this.#authorize(
+      caller,
+      type === undefined ? 'Resource.Read' : `${type}.Read`,
+      { tenant: caller.subject.tenant, workspace: filter.workspace, project: filter.project, type },
+      undefined,
+      type,
+    )
+  }
+
+  /**
    * 求和 / 求平均。**和 `query` 用同一次授权**——
    * 少了这一步，指标就成了一条绕过权限的旁路：
    * 看不到某个项目的人，照样能从它的成本总额里推出信息。
@@ -998,6 +1095,12 @@ export class ResourceService {
       confirmed: isProposal(origin) ? null : true,
     }
 
+    // 单值关系：新的一条挤掉旧的。周期互斥就落在这里。
+    //
+    // 放在插入**之前**：先删后插，中途不存在"两个周期都挂着"的瞬间。
+    // 反过来的话，并发读到的会是一个违反了本体声明的状态
+    await this.#displaceSingleValued(caller, args.type, from.id, to.id)
+
     // 返回的是**库里那一条**。这条边已经存在时，把刚构造的对象原样返回
     // 等于给调用方一个不存在的 id（docs/dogfooding-log.md #8）
     const { relation: persisted, created } = await this.#deps.relations.insert(relation)
@@ -1018,6 +1121,84 @@ export class ResourceService {
     }
 
     return persisted
+  }
+
+  /**
+   * 单值关系：建立新边时把同一端上的旧边挤掉。
+   *
+   * 这是**周期与模块那处不对称**的落点（project-management-guide 第一节）：
+   * 一个工作项只能在一个周期里（`plannedIn` 声明 `0..1`），
+   * 却可以同时属于多个模块（`inModule` 声明 `0..n`）。
+   * 一件事只能在一个时间盒里做，但它可以同时服务于多个交付目标。
+   *
+   * 三个决定值得写下来：
+   *
+   * 1. **判据来自本体，不是关系名。** 这里没有一处 `'plannedIn'` 字面量——
+   *    读的是 `cardinality`。写死名字的话，下一个单值关系加进来时
+   *    不会有任何报错，只会安静地允许一个工作项挂在两个地方。
+   *
+   * 2. **挤掉而不是报错。** 报错的话，改期就变成"先删旧的再加新的"两步，
+   *    而中间那一步失败时工作项会掉出所有周期。指南里说的
+   *    「加入新周期会自动从旧周期移出」正是这个行为。
+   *
+   * 3. **两个存储方向都要看。** 同一件事既可以存成 Task ─plannedIn→ Sprint，
+   *    也可以存成 Sprint ─plans→ Task。只清前者的话，从周期那一侧
+   *    拖工作项进来就绕过了互斥——而这恰恰是界面上最常见的操作方向。
+   */
+  async #displaceSingleValued(
+    caller: Caller,
+    type: string,
+    fromId: string,
+    toId: string,
+  ): Promise<void> {
+    const def = this.#deps.registry.relationType(type)
+    const inverse = this.#deps.registry.relationType(def.inverse)
+
+    // 受约束的是哪一端：约束声明在哪个方向上，就限制那个方向的起点。
+    // `plannedIn` 上的 0..1 约束的是工作项那一端，即使这次存的是 `plans`
+    let owner: string
+    let canonicalType: string
+    if (isSingleValued(def.cardinality)) {
+      owner = fromId
+      canonicalType = type
+    } else if (isSingleValued(inverse.cardinality)) {
+      owner = toId
+      canonicalType = def.inverse
+    } else {
+      return
+    }
+
+    // 另一端是谁：正向存时是 toId，反向存时是 fromId
+    const keep = owner === fromId ? toId : fromId
+
+    // 走 relationsOf 而不是直接查仓储：它已经把逆关系折算成同一个方向，
+    // 两种存法在这里看起来是一样的
+    const existing = await this.relationsOf(caller, owner, 'out', canonicalType)
+    for (const edge of existing) {
+      if (edge.toId === keep) continue
+
+      // 事件里报**存储方向**，不是刚才折算出来的方向。
+      // `relationsOf` 为了让两种存法看起来一致会把逆向边翻过来，
+      // 那个翻转是给调用方看的；下游按 fromId / toId 做联动的消费者
+      // 需要的是库里真实的那一条
+      const stored = await this.#deps.relations.findById(edge.id)
+      if (stored === null) continue
+
+      await this.#deps.relations.remove(stored.id)
+      await this.#emit(
+        caller,
+        relationRemoved({
+          tenant: stored.tenant,
+          relationId: stored.id,
+          relationType: stored.type,
+          fromId: stored.fromId,
+          toId: stored.toId,
+          removedBy: caller.subject.principal,
+          occurredAt: this.#deps.clock.now(),
+          traceId: caller.traceId ?? null,
+        }),
+      )
+    }
   }
 
   /**
@@ -1693,6 +1874,16 @@ function textOf(r: Resource): string {
 const MAX_CYCLE_DEPTH = 10
 
 /** 把一条边翻转成请求方向的样子，使"正反向查询等价"在返回值上字面成立 */
+/**
+ * 这个基数是不是"最多一个"。
+ *
+ * `1..1` 与 `0..1` 都算：两者的差别是**能不能没有**，
+ * 而这里问的是**能不能有两个**。必填与否由别处管。
+ */
+function isSingleValued(cardinality: string | undefined): boolean {
+  return cardinality === '0..1' || cardinality === '1..1'
+}
+
 function flipRelation(relation: RelationInstance, asType: string): RelationInstance {
   return { ...relation, type: asType, fromId: relation.toId, toId: relation.fromId }
 }

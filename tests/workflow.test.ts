@@ -3,13 +3,26 @@ import {
   applyActions,
   assertValidInitialStatus,
   availableTransitions,
+  groupOf,
   resolveTransition,
   WorkflowRegistry,
 } from '../src/workflow/engine.ts'
-import { buildDefaultWorkflowRegistry, TASK_LIFECYCLE } from '../src/workflow/defaults.ts'
+import {
+  buildDefaultWorkflowRegistry,
+  DEFAULT_LIFECYCLES,
+  TASK_LIFECYCLE,
+} from '../src/workflow/defaults.ts'
 import { describe as describeGuard, evaluateGuard } from '../src/workflow/guards.ts'
+import { STATE_GROUPS } from '../src/workflow/types.ts'
 import { TransitionError } from '../src/platform/errors.ts'
-import type { Guard, GuardContext, Lifecycle, RelatedRef, TransitionDef } from '../src/workflow/types.ts'
+import type {
+  Guard,
+  GuardContext,
+  Lifecycle,
+  RelatedRef,
+  StateDef,
+  TransitionDef,
+} from '../src/workflow/types.ts'
 
 function ctx(overrides: Partial<GuardContext> = {}): GuardContext {
   return {
@@ -188,7 +201,7 @@ describe('lifecycle registration rejects self-contradictory definitions', () => 
         id: 'x',
         entityType: 'X',
         initial: 'Nowhere',
-        states: [{ name: 'Start' }],
+        states: [{ name: 'Start', group: 'Unstarted' }],
         transitions: [],
       }),
     ).toThrow(/initial state "Nowhere" is not declared/)
@@ -201,7 +214,7 @@ describe('lifecycle registration rejects self-contradictory definitions', () => 
         id: 'x',
         entityType: 'X',
         initial: 'A',
-        states: [{ name: 'A' }],
+        states: [{ name: 'A', group: 'Unstarted' }],
         transitions: [{ from: ['A'], to: 'B' }],
       }),
     ).toThrow(/transition to unknown state "B"/)
@@ -215,7 +228,10 @@ describe('lifecycle registration rejects self-contradictory definitions', () => 
         id: 'x',
         entityType: 'X',
         initial: 'A',
-        states: [{ name: 'A' }, { name: 'A' }],
+        states: [
+          { name: 'A', group: 'Unstarted' },
+          { name: 'A', group: 'Unstarted' },
+        ],
         transitions: [],
       }),
     ).toThrow(/duplicate states/)
@@ -228,7 +244,7 @@ describe('lifecycle registration rejects self-contradictory definitions', () => 
         id: 'x',
         entityType: 'X',
         initial: 'A',
-        states: [{ name: 'A' }],
+        states: [{ name: 'A', group: 'Unstarted' }],
         transitions: [{ from: ['Nowhere'], to: 'A' }],
       }),
     ).toThrow(/transition from unknown state "Nowhere"/)
@@ -237,15 +253,88 @@ describe('lifecycle registration rejects self-contradictory definitions', () => 
   it('refuses to register the same lifecycle id twice', () => {
     // 第二次注册静默覆盖的话，"我改了流程但线上跑的是另一份"
     const registry = new WorkflowRegistry()
-    const lifecycle = {
+    const lifecycle: Lifecycle = {
       id: 'dup',
       entityType: 'X',
       initial: 'A',
-      states: [{ name: 'A' }],
+      states: [{ name: 'A', group: 'Unstarted' }],
       transitions: [],
     }
     registry.register(lifecycle)
     expect(() => registry.register(lifecycle)).toThrow(/already registered/)
+  })
+
+  /**
+   * 状态组（project-management-guide §2.2）。
+   *
+   * 指南把「自定义状态归错状态组」列为反模式，后果是燃尽图、进度条、
+   * 所有统计一起失真。能机械查出来的只有一条，这里锁住它。
+   */
+  describe('状态组', () => {
+    const lifecycle = (states: StateDef[]): Lifecycle => ({
+      id: 'x',
+      entityType: 'X',
+      initial: states[0]?.name ?? 'A',
+      states,
+      transitions: [],
+    })
+
+    it('终态归进 Started 组会被拒 —— 否则燃尽图永远烧不到零', () => {
+      expect(() =>
+        new WorkflowRegistry().register(
+          lifecycle([
+            { name: 'A', group: 'Unstarted' },
+            { name: 'Done', group: 'Started', terminal: true },
+          ]),
+        ),
+      ).toThrow(/terminal but grouped as "Started"/)
+    })
+
+    it('Completed 组的非终态是合法的 —— Decision.Accepted 就是这种', () => {
+      // 做完了，但还可能被后来的决策取代。反向检查会把这类建模判成错的
+      expect(() =>
+        new WorkflowRegistry().register(
+          lifecycle([
+            { name: 'A', group: 'Unstarted' },
+            { name: 'Accepted', group: 'Completed' },
+          ]),
+        ),
+      ).not.toThrow()
+    })
+
+    it('初始状态不能是关闭态 —— 一出生就"已完成"会让完成率永远好看', () => {
+      expect(() =>
+        new WorkflowRegistry().register(
+          lifecycle([{ name: 'Done', group: 'Completed', terminal: true }]),
+        ),
+      ).toThrow(/cannot begin life closed/)
+    })
+
+    it('组名写错时列出全部可选值，而不是只说一句"不合法"', () => {
+      expect(() =>
+        new WorkflowRegistry().register(
+          lifecycle([{ name: 'A', group: 'InProgress' as unknown as StateDef['group'] }]),
+        ),
+      ).toThrow(/Triage \/ Backlog \/ Unstarted \/ Started \/ Completed \/ Cancelled/)
+    })
+
+    it('groupOf 认识状态，遇到改过状态机之后的旧数据返回 null 而不是抛', () => {
+      const machine = lifecycle([
+        { name: 'A', group: 'Unstarted' },
+        { name: 'Done', group: 'Completed', terminal: true },
+      ])
+      expect(groupOf(machine, 'Done')).toBe('Completed')
+      // 为一条历史遗留的状态名让整张报表打不开，不划算
+      expect(groupOf(machine, 'GoneForever')).toBeNull()
+    })
+
+    it('内置的 22 台状态机每个状态都标了组', () => {
+      for (const machine of DEFAULT_LIFECYCLES) {
+        for (const state of machine.states) {
+          expect(STATE_GROUPS, `${machine.id}.${state.name}`).toContain(state.group)
+        }
+      }
+    })
   })
 
   it('rejects an outgoing transition from a terminal state', () => {
@@ -257,7 +346,10 @@ describe('lifecycle registration rejects self-contradictory definitions', () => 
         id: 'x',
         entityType: 'X',
         initial: 'A',
-        states: [{ name: 'A' }, { name: 'Done', terminal: true }],
+        states: [
+          { name: 'A', group: 'Unstarted' },
+          { name: 'Done', group: 'Completed', terminal: true },
+        ],
         transitions: [
           { from: ['A'], to: 'Done' },
           { from: ['Done'], to: 'A' },
@@ -279,7 +371,11 @@ describe('lifecycle registration rejects self-contradictory definitions', () => 
       id: 'x',
       entityType: 'X',
       initial: 'A',
-      states: [{ name: 'A' }, { name: 'Done', terminal: true }, { name: 'Dropped', terminal: true }],
+      states: [
+        { name: 'A', group: 'Unstarted' },
+        { name: 'Done', group: 'Completed', terminal: true },
+        { name: 'Dropped', group: 'Cancelled', terminal: true },
+      ],
       transitions: [{ from: ['A'], to: 'Done' }, ...transitions],
     })
 

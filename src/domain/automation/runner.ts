@@ -4,6 +4,10 @@ import type { AutomationAction, AutomationRule } from '../../workflow/automation
 import type { DomainEvent } from '../events.ts'
 import type { Caller, ResourceService } from '../resource/service.ts'
 import type { SubjectProfile } from '../../identity/types.ts'
+import type { WorkflowRegistry } from '../../workflow/engine.ts'
+import type { Clock } from '../../platform/clock.ts'
+import { systemClock } from '../../platform/clock.ts'
+import { AnalyticsService } from '../analytics/service.ts'
 
 /**
  * 自动化执行器。
@@ -42,6 +46,19 @@ export const SYSTEM_SUBJECT: SubjectProfile = {
     // assign 只针对工作项。需求归谁是人的判断，不该由规则改写
     'Task.Update',
     'Story.Update',
+    // snapshotCycleProgress 要把快照写回周期。窄到只有 Sprint：
+    // 自动化能改的东西每多一类，都该是一次明确的决定
+    'Sprint.Update',
+    /**
+     * 自动归档（project-management-guide §2.6）。
+     *
+     * 这一条是 `*` 开头的，和上面几条的窄口径看起来矛盾，所以说明一下：
+     * 归档**可逆、不改状态、不改任何字段**，它唯一的效果是让对象
+     * 从默认列表里消失。给 `*.Archive` 的风险上界，是"某一批对象
+     * 需要有人去取消归档"；给 `*.Update` 的风险上界是"任何字段
+     * 被任何规则改成任何值"。两者不在一个量级。
+     */
+    '*.Archive',
   ],
 }
 
@@ -89,6 +106,16 @@ export type RunnerDeps = {
   rules: readonly AutomationRule[]
   /** 触发链深度上限（W3）。默认 10。 */
   maxChainDepth?: number
+  /**
+   * 状态机注册表。`snapshotCycleProgress` 需要它来判断
+   * 一个工作项算不算完成——**同一份状态组映射**，
+   * 和燃尽图、分析图用的是一个，因此三处数字不可能对不上。
+   *
+   * 不给就是这条路径上不跑那个动作，而且会**明说**跳过了，
+   * 不是安静地什么都不做。
+   */
+  workflows?: WorkflowRegistry
+  clock?: Clock
 }
 
 export class AutomationRunner {
@@ -176,6 +203,45 @@ export class AutomationRunner {
           action: action.kind,
           status: 'applied',
           detail: `${subject.id} → ${action.to}`,
+        }
+      }
+
+      case 'snapshotCycleProgress': {
+        if (this.#deps.workflows === undefined) {
+          // 说出来。装不了这个动作时安静跳过的话，
+          // 表现是"回顾数据有时有、有时没有"，而没人查得到为什么
+          return {
+            ruleId: rule.id,
+            action: action.kind,
+            status: 'skipped',
+            detail: 'no workflow registry wired into the automation runner',
+          }
+        }
+        const analytics = new AnalyticsService({
+          resources: this.#deps.service,
+          // 这个动作只用到 ResourceService 与状态机，用不到分析仓储。
+          // 传一个会炸的桩比传一个假装能用的空实现好：
+          // 哪天有人在这里调了 chart()，应当当场知道
+          analytics: {
+            chart: () => {
+              throw new DomainError('internal', 'automation does not run chart queries', 500)
+            },
+          },
+          workflows: this.#deps.workflows,
+          clock: this.#deps.clock ?? systemClock,
+        })
+        const progress = await analytics.progressOf(caller, event.resourceId)
+        const cycle = await this.#deps.service.get(caller, event.resourceId)
+        await this.#deps.service.update(caller, cycle.id, {
+          expectedVersion: cycle.version,
+          attributes: { ...cycle.attributes, progressSnapshot: progress },
+          reason: `automation: ${rule.id}`,
+        })
+        return {
+          ruleId: rule.id,
+          action: action.kind,
+          status: 'applied',
+          detail: `${cycle.id}: ${progress.completed}/${progress.total} done`,
         }
       }
 

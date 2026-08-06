@@ -131,6 +131,14 @@ describe('本体可视化浏览器（FR-ONT-012）', () => {
     const lonely = await create('Task', { title: '孤零零' })
     await page.goto(`${baseUrl}/?view=graph&start=${lonely}&depth=2`)
     await page.waitForSelector('.graph-canvas')
+    // 等"展开中…"过去再断言。`.graph-canvas` 一挂上就有内容，
+    // 但那时展开请求还没回来——本体里关系类型一多，这条用例
+    // 就会偶发地读到加载态，而失败信息看起来像是功能坏了
+    await page.waitForFunction(
+      () => document.querySelector('.graph-canvas')?.textContent?.includes('展开中') === false,
+      undefined,
+      { timeout: 10_000 },
+    )
     const text = await page.locator('.graph-canvas').innerText()
     assert.match(text, /没有可展开的关系/)
   })
@@ -261,6 +269,13 @@ describe('带出处的问答（FR-ONT-011 / FR-RES-009）', () => {
   it('答不出来就说答不出来，不给一段没有出处的话', async () => {
     await page.goto(`${baseUrl}/?view=ask&ask=${encodeURIComponent('quarterly withholding schedule')}`)
     await page.waitForSelector('.ask-results', { timeout: 15_000 })
+    // 同上：容器一挂上就有内容，那时检索还没回来。
+    // 直接读会拿到"检索中…"，而失败信息看起来像是功能坏了
+    await page.waitForFunction(
+      () => document.querySelector('.ask-results')?.textContent?.includes('检索中') === false,
+      undefined,
+      { timeout: 15_000 },
+    )
     const text = await page.locator('.ask-results').innerText()
     assert.match(text, /答不出来/)
     assert.equal(await page.locator('.ask-passage').count(), 0)

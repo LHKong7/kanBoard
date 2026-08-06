@@ -58,6 +58,21 @@ const EXPECTED = [
   'GET /health',
   'GET /index.html',
   'GET /style.css',
+  /**
+   * 自定义分析（16 维 × 9 指标）与周期的两种看法。
+   *
+   * 都是 GET、都只读，且都走 `ResourceService` 的同一次读授权——
+   * 分析不是一条绕过权限的旁路：看不到某个项目的人，
+   * 不能从它的图上把信息推出来。
+   *
+   * `/v1/cycles/:id/...` 挂在 cycles 而不是 resources 下，
+   * 是因为燃尽与进度是**只有周期才有**的看法；周期本身的增删改查
+   * 仍然走统一的 `/v1/resources`，没有第二条写入路径。
+   */
+  'GET /v1/analytics',
+  'GET /v1/analytics/dimensions',
+  'GET /v1/cycles/:id/burndown',
+  'GET /v1/cycles/:id/progress',
   'GET /v1/metrics',
   'GET /v1/metrics/:id',
   'GET /v1/metrics/:id/items',
@@ -84,6 +99,14 @@ const EXPECTED = [
   // 子资源形式与 `/v1/relations/:id/confirmation` 一致：
   // 都是"一次人的决定带来一个后果"
   'POST /v1/resources/:id/acceptance',
+  /**
+   * 归档 / 取消归档。
+   *
+   * 独立的一对而不是 PATCH 上的一个字段：归档不消耗乐观锁的版本、
+   * 不受状态守卫约束、对终态对象照样生效。这三条差异塞进 PATCH
+   * 就成了三个特例，而特例迟早被别的调用方踩到。
+   */
+  'POST /v1/resources/:id/archive',
   'POST /v1/resources/:id/relations',
   'POST /v1/resources/:id/transitions',
   'POST /v1/resources:action',
@@ -101,6 +124,7 @@ const EXPECTED = [
   'DELETE /v1/ontology/relation-rules/:id',
   'DELETE /v1/relations/:id',
   'DELETE /v1/resources/:id',
+  'DELETE /v1/resources/:id/archive',
   'PATCH /v1/resources/:id',
 ]
 

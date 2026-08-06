@@ -100,6 +100,19 @@ export type RelationTypeDef = {
   domain: readonly string[]
   range: readonly string[]
   cardinality?: Cardinality
+  /**
+   * 这条关系表示**依赖**：起点要等终点做完才能开始。
+   *
+   * 甘特图上的连线画的就是它。做成本体上的一个标记，而不是让界面
+   * 去猜，是因为猜法都很脆：此前甘特图用的判据是「自反且有逆关系」，
+   * 而本体里一加上 `duplicates`（同样自反、同样有逆关系），
+   * 依赖线就**静默地改成画重复关系了**——图还在，线还在，
+   * 只是它说的不再是原来那件事。这个回归是被浏览器用例抓到的。
+   *
+   * 一个类型上最多标一条。标了两条时界面取第一条，
+   * 而那又变回了猜——所以注册时会拒绝。
+   */
+  blocking?: boolean
   description?: string
 }
 

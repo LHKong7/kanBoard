@@ -105,6 +105,31 @@ export class OntologyRegistry {
         )
       }
     }
+
+    /**
+     * 一个类型上最多一条依赖关系。
+     *
+     * 有两条时，甘特图只能画其中一条，而"画哪条"就又变成了猜——
+     * 那正是 `blocking` 这个标记要消灭的东西。在注册时拒掉，
+     * 而不是让界面在运行期悄悄选一条。
+     */
+    const blockingByType = new Map<string, string[]>()
+    for (const rel of this.#relations.values()) {
+      if (rel.blocking !== true) continue
+      for (const type of rel.domain) {
+        if (!rel.range.includes(type)) continue
+        const list = blockingByType.get(type) ?? []
+        list.push(rel.name)
+        blockingByType.set(type, list)
+      }
+    }
+    for (const [type, names] of blockingByType) {
+      if (names.length > 1) {
+        throw new Error(
+          `entity type "${type}" has more than one blocking relation (${names.sort().join(', ')}); a dependency edge must be unambiguous`,
+        )
+      }
+    }
   }
 
   entityType(name: string): EntityTypeDef {

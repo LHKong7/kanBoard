@@ -4,6 +4,8 @@ import type { EntityTypeDef } from './api.ts'
 import { ObjectScreen } from './screens/ObjectScreen.tsx'
 import { Worklogs } from './screens/Worklogs.tsx'
 import { Templates } from './screens/Templates.tsx'
+import { Analytics } from './screens/Analytics.tsx'
+import { Cycles } from './screens/Cycles.tsx'
 
 /**
  * 企业版界面（React）。
@@ -16,7 +18,54 @@ import { Templates } from './screens/Templates.tsx'
 
 type Screen = { key: string; label: string; type: string; note: string }
 
+/**
+ * 屏幕清单。
+ *
+ * 这里值得看一眼的是**模块、意见收集、标签、便签四屏是白拿的**：
+ * 它们没有专属组件，走的是同一个 `ObjectScreen`，而那个组件
+ * 按本体渲染表格与表单。四类新对象加进本体的那一刻，
+ * 界面就有了——这正是把本体做成元模型想换的东西。
+ *
+ * 真正需要专属界面的只有三屏：工时（有审批动作）、模板（有套用动作）、
+ * 周期与分析（有表格答不了的可视化）。
+ */
 const SCREENS: Screen[] = [
+  {
+    key: 'analytics',
+    label: '分析',
+    type: '__analytics__',
+    note: '16 种维度 × 9 种指标自由组合。上面那排是指南里列的高价值问题，点一下就是一张图。',
+  },
+  {
+    key: 'cycle',
+    label: '周期',
+    type: 'Sprint',
+    note: '时间维度：这两周做什么。燃尽图看的是"照这个速度做不做得完"。',
+  },
+  {
+    key: 'module',
+    label: '模块',
+    type: 'Module',
+    note: '范围维度：这个功能做完了吗。和周期正交——一个工作项该同时属于两者。',
+  },
+  {
+    key: 'intake',
+    label: '意见收集',
+    type: 'Intake',
+    note: '分诊队列。每天清空——积压的分诊比积压的 Backlog 更有害，提需求的人得不到反馈。',
+  },
+  {
+    key: 'label',
+    label: '标签目录',
+    type: 'Label',
+    note: '用前缀命名法（type/ area/ flag/）。标签只用于横切关注点，能用状态、模块、周期表达的就别做成标签。',
+  },
+  {
+    key: 'sticky',
+    label: '便签',
+    type: 'Sticky',
+    note: '临时笔记板。没有状态、指派人和截止日期——这是有意的，它不是任务系统。',
+  },
   {
     key: 'initiative',
     label: '举措',
@@ -112,6 +161,12 @@ export function App() {
           </div>
         )}
         {failed === null && types === null && <div className="board-empty">加载本体…</div>}
+        {active.type === '__analytics__' && types !== null && (
+          <>
+            <p className="screen-note">{active.note}</p>
+            <Analytics types={types.filter((t) => t.lifecycle !== undefined).map((t) => t.name)} />
+          </>
+        )}
         {def !== undefined && (
           <>
             <p className="screen-note">{active.note}</p>
@@ -119,12 +174,14 @@ export function App() {
               <Worklogs def={def} />
             ) : active.type === 'Template' ? (
               <Templates def={def} allTypes={types ?? []} />
+            ) : active.type === 'Sprint' ? (
+              <Cycles />
             ) : (
               <ObjectScreen def={def} />
             )}
           </>
         )}
-        {types !== null && def === undefined && failed === null && (
+        {types !== null && def === undefined && failed === null && active.type !== '__analytics__' && (
           <div className="board-empty">
             <h3>本体里没有 {active.type}</h3>
             <p>这一屏依赖的类型没有注册，界面不猜它长什么样。</p>

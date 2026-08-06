@@ -32,6 +32,8 @@ import {
   metricScopeSchema,
   metricBreakdownSchema,
   automationRateSchema,
+  analyticsQuerySchema,
+  burndownQuerySchema,
   askSchema,
   confirmRelationSchema,
   healthParamsSchema,
@@ -48,6 +50,17 @@ import {
   updateResourceSchema,
 } from './schemas.ts'
 import { DashboardService } from '../domain/dashboard/service.ts'
+import { AnalyticsService } from '../domain/analytics/service.ts'
+import { PgAnalyticsRepository } from '../infrastructure/analytics-repository.pg.ts'
+import {
+  CHART_X_AXES,
+  CHART_Y_METRICS,
+  DATE_GROUPINGS,
+  DATE_X_AXES,
+  DURATIONS,
+} from '../domain/analytics/spec.ts'
+import type { ChartXAxis, ChartYMetric, DateGrouping, Duration } from '../domain/analytics/spec.ts'
+import { STATE_GROUPS } from '../workflow/types.ts'
 import { PgLifecycleStore } from '../infrastructure/lifecycle-store.pg.ts'
 import type { ReloadingWorkflowRegistry } from '../infrastructure/lifecycle-store.pg.ts'
 import { EXPORT_LIMIT, exportResources } from './export.ts'
@@ -161,9 +174,19 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   })
 
   /** 在租户事务中构造服务并执行——每个请求一个事务，租户上下文随事务结束自动回收 */
+  /**
+   * 事务内的额外把手。
+   *
+   * 大多数端点只需要 `service`，所以它仍是第一个参数。分析这类
+   * 需要另一个仓储（`PgAnalyticsRepository`）的端点要拿到同一个 `trx`——
+   * 另开一个事务的话，它读到的会是另一个时刻的数据，
+   * 而"图和明细对不上"正是这一类接口最难查的故障。
+   */
+  type TenantContext = { trx: Db; workflows: WorkflowRegistry }
+
   async function inTenant<T>(
     request: FastifyRequest,
-    fn: (service: ResourceService, caller: Caller) => Promise<T>,
+    fn: (service: ResourceService, caller: Caller, ctx: TenantContext) => Promise<T>,
   ): Promise<T> {
     const caller = callers.get(request)
     if (caller === undefined) {
@@ -193,7 +216,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
           // HTTP 是人和 Agent 写东西的路径，规则就该在这里生效
           relationRules: true,
         })
-        return fn(service, caller)
+        return fn(service, caller, { trx, workflows: activeWorkflows })
       })
     } finally {
       // 独立事务落盘：业务事务回滚时（尤其是授权被拒），
@@ -681,6 +704,30 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   })
 
   // ── 生命周期 ─────────────────────────────────────────────
+  /**
+   * 归档 / 取消归档。
+   *
+   * 独立端点而不是 `PATCH` 的一个字段：归档不是一次属性修改
+   * （不消耗乐观锁的版本、不受状态守卫约束、对终态对象照样生效）。
+   * 混进 PATCH 里的话，这三条差异要在请求体里用一个特例说明，
+   * 而特例迟早会被别的调用方踩到。
+   */
+  app.post('/v1/resources/:id/archive', async (request, reply) => {
+    const id = resourceIdSchema.parse((request.params as { id: string }).id)
+    const resource = await inTenant(request, (service, caller) =>
+      service.setArchived(caller, id, true),
+    )
+    return reply.status(200).send(toWire(resource))
+  })
+
+  app.delete('/v1/resources/:id/archive', async (request, reply) => {
+    const id = resourceIdSchema.parse((request.params as { id: string }).id)
+    const resource = await inTenant(request, (service, caller) =>
+      service.setArchived(caller, id, false),
+    )
+    return reply.status(200).send(toWire(resource))
+  })
+
   app.get('/v1/resources/:id/transitions', async (request) => {
     const id = resourceIdSchema.parse((request.params as { id: string }).id)
     const items = await inTenant(request, (service, caller) => service.transitionsOf(caller, id))
@@ -818,6 +865,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
           text: q.text,
           ids: q.ids,
           includeDeleted: q.includeDeleted === 'true',
+          archived: q.archived,
         },
         { size: q.size ?? 50, cursor: q.cursor },
       ),
@@ -876,6 +924,89 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         acceptedAt: i.acceptedAt.toISOString(),
       })),
     }
+  })
+
+  /**
+   * 自定义分析（16 维 × 9 指标 × 二次分组）。
+   *
+   * 和 `/v1/metrics` 的分工：那边是**定好口径的 30 个指标**，
+   * 这边是**自由组合**。两者都要有——定好的指标保证大家看的是同一个数，
+   * 自由组合保证没预料到的问题也问得出来。混成一个的话，
+   * 前者会因为"可配"而失去统一口径，后者会因为要预先定义而失去自由。
+   */
+  app.get('/v1/analytics', async (request) => {
+    const q = analyticsQuerySchema.parse(request.query ?? {})
+    return inTenant(request, async (service, caller, ctx) => {
+      const analytics = new AnalyticsService({
+        resources: service,
+        analytics: new PgAnalyticsRepository(ctx.trx, caller.subject.tenant),
+        workflows: ctx.workflows,
+        clock,
+      })
+      const series = await analytics.chart(
+        caller,
+        {
+          type: q.type,
+          project: q.project,
+          workspace: q.workspace,
+          owner: q.owner,
+        },
+        {
+          xAxis: q.x_axis as ChartXAxis,
+          yMetric: q.y_metric as ChartYMetric,
+          groupBy: q.group_by as ChartXAxis | undefined,
+          dateGrouping: q.date_grouping as DateGrouping | undefined,
+          duration: q.duration as Duration | undefined,
+        },
+      )
+      // 规格原样回传：一张图的地址粘给别人之后，对方拿到的
+      // 必须是同一份口径，而不是"默认值恰好一样"
+      return { spec: q, ...series }
+    })
+  })
+
+  /** 可选的维度与指标目录。界面上的两个下拉直接用它渲染，不在前端抄一份 */
+  app.get('/v1/analytics/dimensions', async (request) => {
+    void requireCaller(request)
+    return {
+      xAxes: CHART_X_AXES,
+      yMetrics: CHART_Y_METRICS,
+      dateAxes: DATE_X_AXES,
+      dateGroupings: DATE_GROUPINGS,
+      durations: DURATIONS,
+      stateGroups: STATE_GROUPS,
+    }
+  })
+
+  /**
+   * 周期燃尽图。
+   *
+   * 路径挂在 `/v1/cycles/:id` 而不是 `/v1/resources/:id`：周期本身
+   * 是普通 Resource（CRUD 走统一接口），但燃尽是**只有周期才有**的一种看法。
+   */
+  app.get('/v1/cycles/:id/burndown', async (request) => {
+    const id = resourceIdSchema.parse((request.params as { id: string }).id)
+    const q = burndownQuerySchema.parse(request.query ?? {})
+    return inTenant(request, async (service, caller, ctx) =>
+      new AnalyticsService({
+        resources: service,
+        analytics: new PgAnalyticsRepository(ctx.trx, caller.subject.tenant),
+        workflows: ctx.workflows,
+        clock,
+      }).burndownOf(caller, id, q.unit ?? 'count'),
+    )
+  })
+
+  app.get('/v1/cycles/:id/progress', async (request) => {
+    const id = resourceIdSchema.parse((request.params as { id: string }).id)
+    return inTenant(request, async (service, caller, ctx) =>
+      new AnalyticsService({
+        resources: service,
+        analytics: new PgAnalyticsRepository(ctx.trx, caller.subject.tenant),
+        workflows: ctx.workflows,
+        clock,
+      }).progressOf(caller, id),
+    )
   })
 
   app.get('/v1/metrics/:id', async (request) => {

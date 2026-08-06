@@ -77,6 +77,8 @@ const RESOURCE_COLUMNS = [
   'attributes',
   'visibility',
   'deleted_at',
+  'archived_at',
+  'archived_by',
 ] as const
 
 const GROUP_COLUMNS: Record<GroupableField, 'status' | 'type' | 'owner' | 'project'> = {
@@ -104,6 +106,8 @@ type ResourceRow = {
   attributes: Record<string, unknown>
   visibility: string
   deleted_at: Date | null
+  archived_at: Date | null
+  archived_by: string | null
 }
 
 function toResource(row: ResourceRow): Resource {
@@ -125,6 +129,8 @@ function toResource(row: ResourceRow): Resource {
     attributes: row.attributes,
     visibility: row.visibility as Visibility,
     deletedAt: row.deleted_at,
+    archivedAt: row.archived_at,
+    archivedBy: row.archived_by,
   }
 }
 
@@ -165,8 +171,32 @@ export class PgResourceRepository implements ResourceRepository {
         attributes: JSON.stringify(resource.attributes),
         visibility: resource.visibility,
         deleted_at: resource.deletedAt,
+        archived_at: resource.archivedAt,
+        archived_by: resource.archivedBy,
       })
       .execute()
+  }
+
+  /**
+   * 只改归档标记。`version` 有意不动——见端口上的说明。
+   *
+   * `updated_at` 要动：自动归档巡检按它挑陈旧对象，不动的话
+   * 一条刚归档的记录在下一轮里仍然"陈旧"，会被反复处理。
+   */
+  async setArchived(
+    id: string,
+    archivedAt: Date | null,
+    archivedBy: string | null,
+    updatedAt: Date,
+  ): Promise<boolean> {
+    const result = await this.#db
+      .updateTable('resources')
+      .set({ archived_at: archivedAt, archived_by: archivedBy, updated_at: updatedAt })
+      .where('tenant', '=', this.#tenant)
+      .where('id', '=', id)
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst()
+    return Number(result.numUpdatedRows ?? 0) > 0
   }
 
   async findById(id: string): Promise<Resource | null> {
@@ -197,6 +227,8 @@ export class PgResourceRepository implements ResourceRepository {
         updated_at: resource.updatedAt,
         version: resource.version,
         deleted_at: resource.deletedAt,
+        archived_at: resource.archivedAt,
+        archived_by: resource.archivedBy,
         // 只在状态真的变了时重置计时，而且**在 SQL 里判**。
         //
         // 交给调用方去判断"这次改了状态吗"，迟早会有一条写路径忘记，
@@ -257,6 +289,10 @@ export class PgResourceRepository implements ResourceRepository {
     if (filter.includeDeleted !== true) {
       b = b.where('deleted_at', 'is', null)
     }
+    // 默认只看没归档的。`all` 才是"两种都要"，`archived` 是归档区页面用的
+    const archived = filter.archived ?? 'active'
+    if (archived === 'active') b = b.where('archived_at', 'is', null)
+    else if (archived === 'archived') b = b.where('archived_at', 'is not', null)
     return b as Q
     /* eslint-enable @typescript-eslint/no-explicit-any */
   }

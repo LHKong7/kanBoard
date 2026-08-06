@@ -1,4 +1,11 @@
 import { z } from 'zod'
+import { STATE_GROUPS } from '../workflow/types.ts'
+import {
+  CHART_X_AXES,
+  CHART_Y_METRICS,
+  DATE_GROUPINGS,
+  DURATIONS,
+} from '../domain/analytics/spec.ts'
 
 /**
  * HTTP 边界的运行期校验（FR-ARCH-010）。
@@ -131,6 +138,12 @@ export const queryParamsSchema = z
     // 查询串里的一切都是字符串。写成枚举而不是 z.coerce.boolean()：
     // 后者会把 "false" 也当成真，那正是"看起来成功的错误答案"
     includeDeleted: z.enum(['true', 'false']).optional(),
+    /**
+     * 归档的要不要。三态而不是布尔——见 `ResourceFilter.archived`。
+     * 不传即 `active`：列表默认不显示归档的东西，
+     * 否则开了自动归档的项目半年后打开还是一片狼藉。
+     */
+    archived: z.enum(['active', 'archived', 'all']).optional(),
     size: z.coerce.number().int().min(1).max(200).optional(),
     cursor: z.string().max(64).optional(),
   })
@@ -375,6 +388,38 @@ export const metricBreakdownSchema = metricScopeSchema.extend({
  * 由 `WorkflowRegistry.register` 在写入时判——那份规则只有一处实现，
  * 在这里重写一遍必然漂移。
  */
+/**
+ * 自定义分析的查询串（16 × 9 × 二次分组）。
+ *
+ * 走 GET + query 而不是 POST + body，是为了让**一张图的地址可以粘给别人**。
+ * 这和看板筛选条件进 URL 是同一个决定：一个说不出自己是怎么来的数字，
+ * 没有人能验证它。
+ *
+ * 取值集合直接从领域层的常量来，不在这里重抄一遍——
+ * 抄一遍的话，加第 17 个维度那天，两边会有一边忘了改。
+ */
+export const analyticsQuerySchema = z
+  .object({
+    x_axis: z.enum(CHART_X_AXES as unknown as [string, ...string[]]),
+    y_metric: z.enum(CHART_Y_METRICS as unknown as [string, ...string[]]),
+    group_by: z.enum(CHART_X_AXES as unknown as [string, ...string[]]).optional(),
+    date_grouping: z.enum(DATE_GROUPINGS as unknown as [string, ...string[]]).optional(),
+    duration: z.enum(DURATIONS as unknown as [string, ...string[]]).optional(),
+    type: z.string().min(1).max(64).optional(),
+    project: resourceIdSchema.optional(),
+    workspace: z.string().min(1).max(64).optional(),
+    owner: z.string().max(160).optional(),
+  })
+  .strict()
+
+export const burndownQuerySchema = z
+  .object({
+    // 按条数还是按点数烧。两者都要有：还没开始估点的团队只能看条数，
+    // 而估过点的团队看条数会把一个 13 点的和一个 1 点的当成一样重
+    unit: z.enum(['count', 'points']).optional(),
+  })
+  .strict()
+
 export const lifecycleSchema = z
   .object({
     id: z.string().min(1).max(64).regex(/^[a-z][a-z0-9-]*$/),
@@ -385,6 +430,14 @@ export const lifecycleSchema = z
         z
           .object({
             name: z.string().min(1).max(64),
+            /**
+             * 状态组。**必填**，且这里就把取值挡住。
+             *
+             * 让它可选、在引擎里再报错的话，错误信息会变成一句
+             * "group is required"，而调用方看不到有哪几个组可选。
+             * Zod 的 enum 报错自带全部取值，这比什么都省事。
+             */
+            group: z.enum(STATE_GROUPS as unknown as [string, ...string[]]),
             terminal: z.boolean().optional(),
             requires: z.array(z.record(z.unknown())).max(20).optional(),
             entryActions: z.array(z.record(z.unknown())).max(20).optional(),

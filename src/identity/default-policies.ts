@@ -59,6 +59,16 @@ export function defaultPolicies(tenant: string): Policy[] {
     { id: 'pol-member-baseline', effect: 'Allow', subject: '*', action: 'Baseline.*', scope: { kind: 'tenant', tenant } },
     { id: 'pol-member-worklog', effect: 'Allow', subject: '*', action: 'Worklog.*', scope: { kind: 'tenant', tenant } },
     /**
+     * 项目管理骨架：模块、意见收集、标签目录、便签。
+     *
+     * 同样是"租户允不允许"这一道，**谁**能做由能力那一道决定
+     * （Guest 的能力集是 `*.Read`，所以它看得到分诊队列但分不了诊）。
+     */
+    { id: 'pol-member-module', effect: 'Allow', subject: '*', action: 'Module.*', scope: { kind: 'tenant', tenant } },
+    { id: 'pol-member-intake', effect: 'Allow', subject: '*', action: 'Intake.*', scope: { kind: 'tenant', tenant } },
+    { id: 'pol-member-label', effect: 'Allow', subject: '*', action: 'Label.*', scope: { kind: 'tenant', tenant } },
+    { id: 'pol-member-sticky', effect: 'Allow', subject: '*', action: 'Sticky.*', scope: { kind: 'tenant', tenant } },
+    /**
      * **不能批准自己报的工时。**
      *
      * 和"Agent 不能批准自己的产出"是同一条思路：一个既能报又能批的人，
@@ -165,6 +175,29 @@ export function defaultPolicies(tenant: string): Policy[] {
       action: 'Notification.Create',
       scope: { kind: 'tenant', tenant },
       description: 'notify 动作。站内通知，写坏了的代价是噪音而不是损坏',
+    },
+    {
+      /**
+       * 周期关闭时把进度冻进 `progressSnapshot`。
+       *
+       * 和上面那条 `AgentRun.Update` 同样窄：给的是 `Sprint.Update`
+       * 而不是 `*.Update`。写得越窄，将来审计里出现别的 Update
+       * 时才知道那不正常。
+       */
+      id: 'pol-system-archive',
+      effect: 'Allow',
+      subject: 'system://internal',
+      action: '*.Archive',
+      scope: { kind: 'tenant', tenant },
+      description: '自动归档巡检。归档可逆且不改状态，所以这条比 *.Update 窄得多',
+    },
+    {
+      id: 'pol-system-snapshot-cycle',
+      effect: 'Allow',
+      subject: 'system://internal',
+      action: 'Sprint.Update',
+      scope: { kind: 'tenant', tenant },
+      description: '周期关闭时冻结进度快照',
     },
     {
       id: 'pol-system-automation-create-task',

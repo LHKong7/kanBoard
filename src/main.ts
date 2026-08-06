@@ -4,6 +4,8 @@ import { ReloadingWorkflowRegistry } from './infrastructure/lifecycle-store.pg.t
 import { DEFAULT_AUTOMATION_RULES } from './workflow/automation.ts'
 import { OutboxPoller } from './infrastructure/poller.ts'
 import { SlaSweeper } from './infrastructure/sla-sweeper.pg.ts'
+import { ArchiveSweeper } from './infrastructure/archive-sweeper.pg.ts'
+import { archiveActions } from './infrastructure/archive-actions.ts'
 import { slaNotifier } from './infrastructure/sla-notifier.ts'
 import { summarise, sweepOntologyHealth } from './infrastructure/ontology-health.pg.ts'
 import { sweepOverdueRuns } from './infrastructure/process-sweeper.ts'
@@ -112,6 +114,27 @@ const sweeper =
         onBreach: slaNotifier({ pool, registry, workflows, policies }),
       })
 let sweepTimer: NodeJS.Timeout | null = null
+
+/**
+ * 自动归档 / 自动关闭巡检（project-management-guide §2.6）。
+ *
+ * 默认一小时一次。这两条规则的时间尺度是**月**，分钟级地扫一遍
+ * 只是把库占住，而结论一小时内不会变。
+ *
+ * 它对没配 `archiveInMonths` / `closeInMonths` 的项目**什么都不做**，
+ * 所以默认开着是安全的：不配置就等于没开启这个功能。
+ */
+const archiveIntervalMs = Number(process.env['PROJECTOS_ARCHIVE_SWEEP_MS'] ?? 60 * 60 * 1000)
+const archiveSweeper =
+  role === 'api' || archiveIntervalMs <= 0
+    ? null
+    : new ArchiveSweeper({
+        pool,
+        tenants: [tenant],
+        workflows,
+        ...archiveActions({ pool, registry, workflows, policies }),
+      })
+let archiveTimer: NodeJS.Timeout | null = null
 
 /**
  * 本体一致性巡检（FR-ONT-010 验收标准：**每日报告**）。
@@ -255,6 +278,7 @@ function readMaxClassification(raw: string | undefined): DataClassification {
 const shutdown = async (signal: string): Promise<void> => {
   console.log(`${signal} received, shutting down`)
   poller?.stop()
+  if (archiveTimer !== null) clearInterval(archiveTimer)
   runner?.stop()
   if (sweepTimer !== null) clearInterval(sweepTimer)
   if (healthTimer !== null) clearInterval(healthTimer)
@@ -292,6 +316,28 @@ if (sweeper !== null) {
   sweepTimer.unref()
 } else if (role !== 'api') {
   console.log('sla sweeper disabled (PROJECTOS_SLA_SWEEP_MS=0)')
+}
+
+if (archiveSweeper !== null) {
+  console.log(`archive sweeper started (every ${Math.round(archiveIntervalMs / 60_000)}m)`)
+  archiveTimer = setInterval(() => {
+    void archiveSweeper
+      .sweepOnce()
+      .then((outcomes) => {
+        for (const outcome of outcomes) {
+          // 归了几条、关了几条、几条没动成——三个数都说出来。
+          // 只报成功数的话，"我开了自动关闭但 Backlog 没变小"查不出原因
+          console.log(
+            `[archive] ${outcome.projectId}: archived=${outcome.archived.length} closed=${outcome.closed.length} skipped=${outcome.skipped.length}`,
+          )
+          for (const skip of outcome.skipped) console.warn(`[archive] skipped ${skip.id}: ${skip.reason}`)
+        }
+      })
+      .catch((error: unknown) => console.error('[archive] sweep failed:', error))
+  }, archiveIntervalMs)
+  archiveTimer.unref()
+} else if (role !== 'api') {
+  console.log('archive sweeper disabled (PROJECTOS_ARCHIVE_SWEEP_MS=0)')
 }
 
 if (role !== 'api' && healthIntervalMs > 0) {

@@ -69,6 +69,18 @@ export type AutomationAction =
       goal: string
       mode: 'Suggest' | 'Draft' | 'ExecuteWithReview' | 'Autonomous'
     }
+  /**
+   * 把周期当前的进度**冻**进 `progressSnapshot`。
+   *
+   * 只有一个参数都没有，因为它没有可配的地方：冻的就是"此刻的进度"。
+   *
+   * 为什么必须是一个动作而不是读的时候现算：周期关掉之后，
+   * 里面的工作项还会继续被改——被挪走、被重开、被取消。
+   * 现算出来的"上个迭代完成率"会随着这些改动一直变，
+   * 于是回顾会上拿出来的数字和一周后再看时对不上，
+   * 而没有人说得清哪一个是对的。
+   */
+  | { kind: 'snapshotCycleProgress' }
   /** 发一条站内通知。IM / 邮件属于 Connector 层 */
   | {
       kind: 'notify'
@@ -129,6 +141,16 @@ export type AutomationRule = {
  * 多到看不懂时，用户就不再信任系统的任何自动行为了。
  */
 export const DEFAULT_AUTOMATION_RULES: readonly AutomationRule[] = [
+  {
+    id: 'freeze-cycle-progress-on-close',
+    owningContext: 'Execution',
+    description: '周期关闭时把进度冻进 progressSnapshot，供回顾使用',
+    // 绑的是内置状态机里那个终态的名字。改过状态机的租户要自己把这条改掉——
+    // 让它去猜"哪个状态算关闭"的话，猜错时表现是快照没生成，
+    // 而那要到几周后有人翻回顾数据时才会被发现
+    when: { event: 'ResourceStatusChanged', resourceType: 'Sprint', toStatus: 'Closed' },
+    then: [{ kind: 'snapshotCycleProgress' }],
+  },
   {
     id: 'notify-mentioned-on-comment',
     owningContext: 'Execution',

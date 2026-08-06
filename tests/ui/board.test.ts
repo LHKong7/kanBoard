@@ -141,7 +141,7 @@ describe('新建表单由本体生成', () => {
       .evaluateAll((nodes) => nodes.map((n) => (n as HTMLElement).dataset['name']))
 
     assert.deepEqual(names, [
-      'title', 'description', 'assignee', 'estimate', 'blockReason', 'startDate', 'dueDate',
+      'title', 'description', 'assignee', 'priority', 'estimate', 'blockReason', 'startDate', 'dueDate',
     ])
     // 计划日期是**人许下的承诺**，所以要能填；状态机写入的实际时刻标了
     // derived，不该让人填。两者在本体里是分开的，表单也就分得开

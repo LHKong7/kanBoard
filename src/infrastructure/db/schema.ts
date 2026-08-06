@@ -26,6 +26,13 @@ export type ResourcesTable = {
   visibility: string
   deleted_at: Date | null
   /**
+   * 归档时刻（013_archive.sql）。**与 status 正交**：
+   * 一个归档掉的 Done 任务仍然是 Done，指标照常算它，
+   * 只是日常列表默认不显示。
+   */
+  archived_at: Date | null
+  archived_by: string | null
+  /**
    * 生成列（002_search.sql）：标签 + 属性值拼成的可检索文本。
    * `never` 表示插入与更新都不接受它——写它是错误，由数据库负责维护。
    */

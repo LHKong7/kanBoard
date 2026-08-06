@@ -24,6 +24,9 @@ export type Resource = {
   attributes: Record<string, unknown>
   visibility: Visibility
   deletedAt: Date | null
+  /** 归档时刻。与 status 正交——归档不是流程的一步 */
+  archivedAt: Date | null
+  archivedBy: string | null
 }
 
 export type Visibility = 'private' | 'project' | 'workspace' | 'tenant'

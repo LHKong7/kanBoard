@@ -125,7 +125,13 @@ export class OutboxPoller {
           audit,
           clock,
         })
-        const runner = new AutomationRunner({ service, rules: this.#deps.rules })
+        const runner = new AutomationRunner({
+          service,
+          rules: this.#deps.rules,
+          // 周期关闭时冻结进度快照要用它判断"哪些算完成"
+          workflows: this.#deps.workflows,
+          clock,
+        })
         return runner.handle(event, depth)
       })
       await this.#reportDeclines(event, outcomes, audit, clock)

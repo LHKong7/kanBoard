@@ -1,9 +1,11 @@
 import { TransitionError, ValidationError } from '../platform/errors.ts'
 import { describe, evaluateGuard } from './guards.ts'
+import { isClosedGroup, STATE_GROUPS } from './types.ts'
 import type {
   GuardContext,
   Lifecycle,
   StateDef,
+  StateGroup,
   TransitionAction,
   TransitionDef,
 } from './types.ts'
@@ -213,6 +215,22 @@ export function applyActions(
   return next
 }
 
+/**
+ * 一个状态属于哪个组。
+ *
+ * 状态不存在时返回 null 而不是抛错：调用方多半是指标或 UI，
+ * 它们手上的状态名可能来自一条**改过状态机之后**的旧数据。
+ * 为一条历史遗留的状态名让整张报表打不开，不划算。
+ */
+export function groupOf(lifecycle: Lifecycle, status: string): StateGroup | null {
+  return lifecycle.states.find((s) => s.name === status)?.group ?? null
+}
+
+/** 某个组下的全部状态名。看板分列、按组筛选都用它 */
+export function statesInGroup(lifecycle: Lifecycle, group: StateGroup): string[] {
+  return lifecycle.states.filter((s) => s.group === group).map((s) => s.name)
+}
+
 function validateLifecycle(lifecycle: Lifecycle): void {
   const names = new Set(lifecycle.states.map((s) => s.name))
   if (names.size !== lifecycle.states.length) {
@@ -220,6 +238,34 @@ function validateLifecycle(lifecycle: Lifecycle): void {
   }
   if (!names.has(lifecycle.initial)) {
     throw new Error(`lifecycle "${lifecycle.id}" initial state "${lifecycle.initial}" is not declared`)
+  }
+
+  for (const state of lifecycle.states) {
+    if (!STATE_GROUPS.includes(state.group)) {
+      throw new Error(
+        `lifecycle "${lifecycle.id}": state "${state.name}" has no valid group (got ${JSON.stringify(state.group)}); one of ${STATE_GROUPS.join(' / ')} is required`,
+      )
+    }
+    // 终态必须落在 Completed 或 Cancelled。
+    //
+    // 这条是分组机制唯一能机械检查出来的错误，也正是危害最大的那个：
+    // 一个终态被归进 Started 组，燃尽图就永远烧不到零，
+    // 而图本身看不出任何异常——它只是显示"还有 7 件事没做完"。
+    // 反过来（非终态归进 Completed）在 Decision.Accepted 这类
+    // "做完了但还可能被取代"的建模里是合法的，所以只单向检查
+    if (state.terminal === true && !isClosedGroup(state.group)) {
+      throw new Error(
+        `lifecycle "${lifecycle.id}": state "${state.name}" is terminal but grouped as "${state.group}"; terminal states must be grouped Completed or Cancelled or every burn-down built on this lifecycle will never reach zero`,
+      )
+    }
+  }
+
+  const initialState = lifecycle.states.find((s) => s.name === lifecycle.initial)
+  if (initialState !== undefined && isClosedGroup(initialState.group)) {
+    // 一出生就"已完成"的对象会让完成率永远好看
+    throw new Error(
+      `lifecycle "${lifecycle.id}": initial state "${lifecycle.initial}" is grouped "${initialState.group}"; objects cannot begin life closed`,
+    )
   }
   for (const transition of lifecycle.transitions) {
     for (const from of transition.from) {
